@@ -1,0 +1,31 @@
+import type { CandlestickData } from "lightweight-charts";
+
+export type Status = "idle" | "connected" | "closed" | "error";
+
+export interface Meta {
+  startTs: number;
+  endTs: number;
+  priceScale: number;
+  volumeScale: number;
+  timeframeMs: number;
+  sparse: boolean;
+  records: number;
+  anchorIndex: number;
+}
+
+export interface Prefs {
+  collector: string;
+  exchange: string;
+  symbol: string;
+  start: string;
+}
+
+export type Candle = CandlestickData & {
+  buyVol: number;
+  sellVol: number;
+  buyCount: number;
+  sellCount: number;
+  liqBuy: number;
+  liqSell: number;
+  index: number;
+};
