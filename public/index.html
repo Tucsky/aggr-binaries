@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AGGR Candles Viewer</title>
+    <style>
+      body {
+        margin: 0;
+        background: #0d1117;
+        color: #e6edf3;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      #app {
+        position: relative;
+        height: 98vh;
+      }
+      #status {
+        position: absolute;
+        right: 4px;
+        top: 4px;
+      }
+      #status.idle {
+        color: #6a737d;
+      }
+      #status.idle::before {
+        content: "⏳ ";
+      }
+      #status.connected {
+        color: #28a745;
+      }
+      #status.connected::before {
+        content: "✅ ";
+      }
+      #status.closed, #status.error {
+        color: #d73a49;
+      }
+      #status.closed::before, #status.error::before {
+        content: "❌ ";
+      }
+      #controls {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        padding: 8px 12px;
+        background: #161b22e6;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        font-size: 10px;
+        align-items: start;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        z-index: 10;
+      }
+      #chart {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+      }
+      input {
+        background: #0d1117;
+        border: 1px solid #30363d;
+        color: #e6edf3;
+        padding: 4px 6px;
+        font-size: 10px;
+      }
+      button {
+        background: #238636;
+        color: #fff;
+        border: none;
+        padding: 6px 10px;
+        cursor: pointer;
+      }
+    </style>
+    <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+  </head>
+  <body>
+    <div id="app">
+      <div id="controls">
+        <label>Collector <input id="collector" value="PI" size="6" /></label>
+        <label>Exchange <input id="exchange" value="BITFINEX" size="10" /></label>
+        <label>Symbol <input id="symbol" value="BTCUSD" size="10" /></label>
+        <label>Start (UTC) <input id="start" type="datetime-local" /></label>
+        <button id="connect">Connect</button>
+        <span id="status" class="idle">idle</span>
+      </div>
+      <div id="chart"></div>
+    </div>
+    <script type="module">
+      const chartEl = document.getElementById("chart");
+      const chart = LightweightCharts.createChart(chartEl, {
+        layout: { background: { color: "#0d1117" }, textColor: "#e6edf3" },
+        grid: { vertLines: { color: "#161b22" }, horzLines: { color: "#161b22" } },
+        timeScale: {
+          rightOffset: 1,
+          barSpacing: 6,
+          fixLeftEdge: false,
+          timeVisible: true,
+          secondsVisible: false,
+        },
+        priceScale: {
+          mode: LightweightCharts.PriceScaleMode.Logarithmic,
+        },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+      });
+      const series = chart.addCandlestickSeries({ upColor: "#16a34a", downColor: "#ef4444", wickUpColor: "#16a34a", wickDownColor: "#ef4444" });
+      // datetime-local input:
+      document.getElementById('start').valueAsNumber = new Date();
+      let ws = null;
+      let meta = null;
+      const cache = new Map(); // key: minute ts -> candle
+      let lastRequested = { from: 0, to: 0 };
+      let loadedRange = { min: null, max: null };
+      let suppressRangeEvent = false;
+      const TIMEFRAME = 1000 * 60
+
+      function setStatus(msg) {
+        document.getElementById("status").textContent = msg;
+        document.getElementById("status").classList.add(msg)
+
+        switch (msg) {
+          case "idle":
+            document.getElementById("connect").innerText = "Reconnect";
+            break;
+          case "connected":
+            document.getElementById("connect").innerText = "Disconnect";
+            break;
+          case "closed":
+            document.getElementById("connect").innerText = "Reconnect";
+            break;
+          case "error":
+            document.getElementById("connect").innerText = "Reconnect";
+            break;
+        }
+      }
+
+      function connect() {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.close();
+          ws.onclose()
+          loadedRange = { min: null, max: null };
+          lastRequested = { from: 0, to: 0 };
+          cache.clear();
+          series.setData([]);
+          return;
+        } 
+
+        const collector = document.getElementById("collector").value.trim().toUpperCase();
+        const exchange = document.getElementById("exchange").value.trim().toUpperCase();
+        const symbol = document.getElementById("symbol").value.trim();
+        const startStr = document.getElementById("start").value;
+        const startMs = startStr ? Date.parse(startStr) : null;
+        if (!collector || !exchange || !symbol) return;
+        if (ws) ws.close();
+        cache.clear();
+        meta = null;
+        series.setData([]);
+        loadedRange = { min: null, max: null };
+        lastRequested = { from: 0, to: 0 };
+
+        const url = `ws://localhost:${location.port || 3000}/ws?collector=${collector}&exchange=${exchange}&symbol=${symbol}`;
+        ws = new WebSocket(url);
+        ws.onopen = () => setStatus("connected");
+        ws.onclose = () => setStatus("closed");
+        ws.onerror = () => setStatus("error");
+        ws.onmessage = (ev) => {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === "meta") {
+            meta = msg;
+            console.log("[ws] meta", msg);
+            const windowMs = TIMEFRAME * 500;
+            const anchor = startMs && !Number.isNaN(startMs) ? startMs : meta.endTs;
+            requestRange(anchor - windowMs, anchor);
+            // Adjust visible range to start anchor for easier navigation
+            const rightTime = Math.floor(anchor / 1000);
+            const leftTime = Math.floor((anchor - windowMs) / 1000);
+            chart.timeScale().setVisibleRange({ from: leftTime, to: rightTime });
+          } else if (msg.type === "candles") {
+            console.log("[ws] candles", new Date(msg.from).toISOString(), new Date(msg.to).toISOString(), "count", msg.candles.length);
+            ingest(msg.candles);
+          }
+        };
+      }
+
+      function ingest(candles) {
+        let newMin = loadedRange.min;
+        let newMax = loadedRange.max;
+        for (const c of candles) {
+          if ((c.buyCount ?? 0) + (c.sellCount ?? 0) === 0) continue; // skip empty candles rendered as zeros
+          cache.set(c.time, c);
+          if (newMin === null || c.time < newMin) newMin = c.time;
+          if (newMax === null || c.time > newMax) newMax = c.time;
+        }
+        loadedRange = { min: newMin, max: newMax };
+        const sorted = Array.from(cache.values()).sort((a, b) => a.time - b.time);
+        suppressRangeEvent = true;
+        series.setData(
+          sorted.map((c) => ({
+            time: Math.floor(c.time / 1000),
+            open: c.open,
+            high: c.high,
+            low: c.low,
+            close: c.close,
+          })),
+        );
+        suppressRangeEvent = false;
+      }
+
+      function requestRange(from, to) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        let reqFrom = from;
+        let reqTo = to;
+        const span = to - from;
+        const pad = span * 2;
+        reqFrom = Math.max(meta.startTs, from - pad);
+        reqTo = Math.min(meta.endTs, to + pad);
+        if (lastRequested.from === reqFrom && lastRequested.to === reqTo) return;
+        lastRequested = { from: reqFrom, to: reqTo };
+        console.log("[ws] request", new Date(reqFrom).toISOString(), "->", new Date(reqTo).toISOString());
+        ws.send(JSON.stringify({ type: "range", from: reqFrom, to: reqTo }));
+      }
+
+      chart.timeScale().subscribeVisibleTimeRangeChange((range) => {
+        if (suppressRangeEvent) return;
+        if (!range || !range.from || !range.to) return;
+        const from = Math.floor(Number(range.from) * 1000);
+        const to = Math.floor(Number(range.to) * 1000);
+        // console.log("[chart] visible time range changed", range, "->", new Date(from).toISOString(), new Date(to).toISOString());
+
+        if (loadedRange.min !== null && loadedRange.max !== null && from > loadedRange.min + TIMEFRAME && to < loadedRange.max - TIMEFRAME) {
+          // console.log("[chart] range already loaded");
+          return; // already have coverage
+        }
+        
+
+        if (to >= loadedRange.max - TIMEFRAME) {
+          console.log("[chart] need to load more data at the end");
+          requestRange(loadedRange.max, loadedRange.max + TIMEFRAME * 100);
+        }
+
+        if (from <= loadedRange.min + TIMEFRAME) {
+          console.log("[chart] need to load more data at the start");
+          requestRange(loadedRange.min - TIMEFRAME * 100, loadedRange.min);
+        }
+      });
+
+      document.getElementById("connect").addEventListener("click", connect);
+    </script>
+  </body>
+</html>

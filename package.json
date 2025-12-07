@@ -1,0 +1,22 @@
+{
+  "name": "aggr-binaries",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "start": "npm run build && node dist/cli.js",
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc --noEmit",
+    "serve": "npm run build && node dist/server.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.4",
+    "typescript": "^5.6.3"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

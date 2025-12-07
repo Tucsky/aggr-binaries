@@ -1,0 +1,8 @@
+samples/
+.tmp/
+node_modules/
+.vscode/
+*.sqlite*
+.DS_Store
+dist/
+output/
