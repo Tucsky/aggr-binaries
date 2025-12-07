@@ -4,7 +4,7 @@ Tooling to index ~11M tick-trade files and turn them into gap-aware 1m OHLCV bin
 
 ## Features
 
-- **Index**: walk the input tree once, classify `legacy` vs `logical`, record collector/exchange/symbol/start_ts/size/mtime/ext into SQLite. Append-only: reruns insert only new paths (`INSERT OR IGNORE`), optional `--verify` checks mutated files. Legacy `start_ts` parsed as Europe/Paris (DST aware); logical parsed as UTC.
+- **Index**: walk the input tree once, classify `legacy` vs `logical`, record collector/exchange/symbol/start_ts/ext into SQLite. Append-only: reruns insert only new paths (`INSERT OR IGNORE`). Legacy `start_ts` parsed as Europe/Paris (DST aware); logical parsed as UTC.
 - **Normalize**: path-based exchange/symbol normalization (Poloniex quote-second rule; Bitget 2025-11-28 rename; legacy exchange map when reading file contents).
 - **Process**: stream each input file once, apply corrections, route trades into per-market accumulators on demand, then write `output/{collector}/{exchange}/{symbol}.bin` + companion JSON (`lastInputStartTs` for resume). Resume by skipping files with `start_ts < lastInputStartTs` and trades `< endTs` unless `--force`.
 - **Filters**: optional `--collector/--exchange/--symbol` to narrow both file selection (logical only) and per-trade routing (legacy can still contain multiple exchanges).
@@ -24,9 +24,7 @@ Copy and edit `indexer.config.example.json` → `indexer.config.json` (overridab
 {
   "root": "/Volumes/AGGR/input",
   "dbPath": "./index.sqlite",
-  "concurrency": 32,
   "batchSize": 1000,
-  "verifyExisting": false,
   "includePaths": [],        // optional: restrict walk to subtrees
   "outDir": "output"
 }
@@ -50,9 +48,7 @@ Shared flags (override config):
 
 Indexer flags:
 
-- `-c, --concurrency <n>` concurrent `stat` calls (default 32)
 - `-b, --batch <n>` inserts per transaction (default 1000)
-- `--verify` check size/mtime for existing rows
 
 Processor flags:
 
@@ -88,8 +84,6 @@ CREATE TABLE roots (
 CREATE TABLE files (
   root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
   relative_path TEXT NOT NULL,
-  size INTEGER NOT NULL,
-  mtime_ms INTEGER NOT NULL,
   collector TEXT NOT NULL,
   era TEXT NOT NULL,
   exchange TEXT,

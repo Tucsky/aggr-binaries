@@ -70,27 +70,34 @@ function stripCompression(name: string): string {
 export function classifyPath(
   rootId: number,
   relativePath: string,
-  size: number,
-  mtimeMs: number,
+  collectorHint?: Collector,
 ): IndexedFile | null {
-  if (relativePath.indexOf('samples/input/RAM/2018-2019-2020/BTCUSD_2018-04-14') !== -1) {
-    debugger
-  }
   const normalizedPath = path.sep === "/" ? relativePath : relativePath.split(path.sep).join("/");
   const segments = normalizedPath.split("/");
-  if (segments.length < 2) return null;
+  if (segments.length < 1) return null;
 
-  const collectorSeg = segments[0].toUpperCase();
-  if (collectorSeg !== Collector.RAM && collectorSeg !== Collector.PI) return null;
-  const collector = collectorSeg === Collector.RAM ? Collector.RAM : Collector.PI;
+  let collector: Collector | null = null;
+  let offset = 0;
+
+  const first = segments[0].toUpperCase();
+  if (first === Collector.RAM || first === Collector.PI) {
+    collector = first as Collector;
+    offset = 1; // bucket starts at index 1
+  } else if (collectorHint) {
+    collector = collectorHint;
+    offset = 0; // bucket starts at index 0 when root is inside collector
+  } else {
+    return null;
+  }
 
   const fileName = segments[segments.length - 1];
   const ext = path.extname(fileName) || undefined;
-  const isLogical = segments.length >= 5;
+  const segsAfterCollector = segments.length - offset;
 
-  if (isLogical) {
-    const exchangeDir = segments[2];
-    const symbolDir = segments[3];
+  // logical: {collector?}/{bucket}/{exchange}/{symbol}/{file}
+  if (segsAfterCollector >= 4) {
+    const exchangeDir = segments[offset + 1];
+    const symbolDir = segments[offset + 2];
     const baseName = stripCompression(fileName);
     const startTs = parseLogicalStartTs(baseName);
     const exchange = normalizeExchange(exchangeDir);
@@ -99,8 +106,6 @@ export function classifyPath(
     return {
       rootId,
       relativePath: normalizedPath,
-      size,
-      mtimeMs: Math.round(mtimeMs),
       collector,
       era: Era.Logical,
       exchange,
@@ -110,8 +115,8 @@ export function classifyPath(
     };
   }
 
-  // legacy layout: {collector}/{bucket}/{file}
-  if (segments.length >= 3) {
+  // legacy: {collector?}/{bucket}/{file}
+  if (segsAfterCollector >= 2) {
     const baseName = stripCompression(fileName);
     const underscoreIdx = baseName.indexOf("_");
     if (underscoreIdx === -1) return null;
@@ -122,8 +127,6 @@ export function classifyPath(
     return {
       rootId,
       relativePath: normalizedPath,
-      size,
-      mtimeMs: Math.round(mtimeMs),
       collector,
       era: Era.Legacy,
       exchange: undefined,

@@ -4,9 +4,7 @@ import path from "node:path";
 export interface Config {
   root: string;
   dbPath: string;
-  concurrency: number;
   batchSize: number;
-  verifyExisting: boolean;
   includePaths?: string[]; // relative to root
   // processing options (optional overrides from CLI)
   collector?: string;
@@ -24,9 +22,7 @@ export interface CliOverrides extends Partial<Config> {
 const DEFAULTS: Config = {
   root: "/Volumes/AGGR/input",
   dbPath: "index.sqlite",
-  concurrency: 32,
   batchSize: 1000,
-  verifyExisting: false,
 };
 
 export async function loadConfig(overrides: CliOverrides = {}): Promise<Config> {
@@ -56,9 +52,6 @@ export async function loadConfig(overrides: CliOverrides = {}): Promise<Config> 
   merged.root = path.resolve(merged.root);
   merged.dbPath = path.resolve(merged.dbPath);
 
-  if (!Number.isFinite(merged.concurrency) || merged.concurrency <= 0) {
-    merged.concurrency = DEFAULTS.concurrency;
-  }
   if (!Number.isFinite(merged.batchSize) || merged.batchSize <= 0) {
     merged.batchSize = DEFAULTS.batchSize;
   }
@@ -76,14 +69,12 @@ Usage: npm start -- <command> [options]
 
 Commands:
   index      Index filesystem into SQLite
-  process    (stub) Processing step, not implemented yet
+  process    Build/update binaries from indexed files (resume supported)
 
 Options (override config file):
   -r, --root <path>         Root input directory (default: ${DEFAULTS.root})
   -d, --db <path>           SQLite index path (default: ${DEFAULTS.dbPath})
-  -c, --concurrency <n>     Max concurrent stat calls (default: ${DEFAULTS.concurrency})
   -b, --batch <n>           Inserts per transaction (default: ${DEFAULTS.batchSize})
-  --verify                  Check size/mtime for already indexed files
   --include <path>          Relative path (under root) to scan; repeatable (default: whole root)
   --collector <RAM|PI>      Processing: target collector
   --exchange <name>         Processing: target exchange (normalized, e.g., BITFINEX)

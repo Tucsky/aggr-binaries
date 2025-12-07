@@ -24,8 +24,6 @@ export enum QuoteCurrency {
 // CREATE TABLE files (
 //   root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
 //   relative_path TEXT NOT NULL,
-//   size INTEGER NOT NULL,
-//   mtime_ms INTEGER NOT NULL,
 //   collector TEXT NOT NULL,   -- RAM | PI
 //   era TEXT NOT NULL,         -- legacy | logical
 //   exchange TEXT,
@@ -42,8 +40,6 @@ export enum QuoteCurrency {
 export interface IndexedFile {
   rootId: number;
   relativePath: string; // POSIX separators
-  size: number;
-  mtimeMs: number;
   collector: Collector;
   era: Era;
   exchange?: string;
@@ -57,8 +53,6 @@ export interface FileSystemEntry {
   rootPath: string;
   relativePath: string; // POSIX separators
   fullPath: string;
-  size: number;
-  mtimeMs: number;
   ext?: string;
 }
 
@@ -68,4 +62,16 @@ export interface IndexStats {
   existing: number;
   conflicts: number;
   skipped: number;
+}
+
+// Row as stored in SQLite (snake_case, matches schema)
+export interface FileRow {
+  root_id: number;
+  relative_path: string;
+  collector: Collector;
+  era: Era;
+  exchange?: string | null;
+  symbol?: string | null;
+  start_ts?: number | null;
+  ext?: string | null;
 }

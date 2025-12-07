@@ -1,8 +1,6 @@
 {
   "root": "./samples/input",
   "dbPath": "./index.sqlite",
-  "concurrency": 32,
   "batchSize": 1000,
-  "verifyExisting": false,
   "includePaths": []
 }

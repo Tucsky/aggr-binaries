@@ -8,9 +8,7 @@ interface ParsedArgs {
   overrides: {
     root?: string;
     dbPath?: string;
-    concurrency?: number;
     batchSize?: number;
-    verifyExisting?: boolean;
     includePaths?: string[];
     configPath?: string;
     useConfig?: boolean;
@@ -41,53 +39,57 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
   }
 
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
+  const normalized: string[] = [];
+  for (const arg of args) {
+    if (arg.startsWith("--") && arg.includes("=")) {
+      const [k, v] = arg.split("=", 2);
+      normalized.push(k, v);
+    } else {
+      normalized.push(arg);
+    }
+  }
+
+  for (let i = 0; i < normalized.length; i += 1) {
+    const arg = normalized[i];
     switch (arg) {
       case "-r":
       case "--root":
-        parsed.overrides.root = args[++i];
+        parsed.overrides.root = normalized[++i];
         break;
       case "-d":
       case "--db":
-        parsed.overrides.dbPath = args[++i];
+        parsed.overrides.dbPath = normalized[++i];
         break;
       case "-c":
-      case "--concurrency":
-        parsed.overrides.concurrency = Number(args[++i]);
-        break;
       case "-b":
       case "--batch":
-        parsed.overrides.batchSize = Number(args[++i]);
-        break;
-      case "--verify":
-        parsed.overrides.verifyExisting = true;
+        parsed.overrides.batchSize = Number(normalized[++i]);
         break;
       case "--include": {
-        const val = args[++i];
+        const val = normalized[++i];
         if (!val) throw new Error("Missing value for --include");
         if (!parsed.overrides.includePaths) parsed.overrides.includePaths = [];
         parsed.overrides.includePaths.push(val);
         break;
       }
       case "--config":
-        parsed.overrides.configPath = args[++i];
+        parsed.overrides.configPath = normalized[++i];
         parsed.overrides.useConfig = true;
         break;
       case "--no-config":
         parsed.overrides.useConfig = false;
         break;
       case "--collector":
-        parsed.overrides.collector = args[++i];
+        parsed.overrides.collector = normalized[++i];
         break;
       case "--exchange":
-        parsed.overrides.exchange = args[++i];
+        parsed.overrides.exchange = normalized[++i];
         break;
       case "--symbol":
-        parsed.overrides.symbol = args[++i];
+        parsed.overrides.symbol = normalized[++i];
         break;
       case "--outdir":
-        parsed.overrides.outDir = args[++i];
+        parsed.overrides.outDir = normalized[++i];
         break;
       case "--force":
         parsed.overrides.force = true;
@@ -135,7 +137,7 @@ async function main() {
   try {
     if (parsed.command === "index") {
       console.log(
-        `Indexing from ${config.root} -> ${config.dbPath} (concurrency=${config.concurrency}, batch=${config.batchSize}, verify=${config.verifyExisting})`,
+        `Indexing from ${config.root} -> ${config.dbPath} (batch=${config.batchSize})`,
       );
       const stats = await runIndex(config, db);
       const duration = ((Date.now() - start) / 1000).toFixed(1);

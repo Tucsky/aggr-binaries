@@ -1,7 +1,8 @@
+import path from "node:path";
 import type { Db } from "./db.js";
 import type { Config } from "./config.js";
 import { classifyPath } from "./normalize.js";
-import type { IndexStats, IndexedFile } from "./model.js";
+import type { IndexStats, IndexedFile, FileRow } from "./model.js";
 import { walkFiles } from "./walker.js";
 
 export async function runIndex(config: Config, db: Db): Promise<IndexStats> {
@@ -9,28 +10,17 @@ export async function runIndex(config: Config, db: Db): Promise<IndexStats> {
   const stats: IndexStats = { seen: 0, inserted: 0, existing: 0, conflicts: 0, skipped: 0 };
 
   let batch: IndexedFile[] = [];
+  const collectorHint = deriveCollectorHint(config.root);
 
   for await (const entry of walkFiles(config.root, rootId, {
-    statConcurrency: config.concurrency,
     includePaths: config.includePaths,
   })) {
     stats.seen += 1;
 
-    const row = classifyPath(entry.rootId, entry.relativePath, entry.size, entry.mtimeMs);
+    const row = classifyPath(entry.rootId, entry.relativePath, collectorHint);
     if (!row) {
       stats.skipped += 1;
       continue;
-    }
-
-    if (config.verifyExisting) {
-      const existing = db.getExistingMeta(row.rootId, row.relativePath);
-      if (existing) {
-        stats.existing += 1;
-        if (existing.size !== row.size || existing.mtime_ms !== row.mtimeMs) {
-          stats.conflicts += 1;
-        }
-        continue;
-      }
     }
 
     batch.push(row);
@@ -41,9 +31,9 @@ export async function runIndex(config: Config, db: Db): Promise<IndexStats> {
       batch = [];
     }
 
-    if (stats.seen % 10_000 === 0) {
-      logProgress(stats, batch.length);
-    }
+  if (stats.seen % 10_000 === 0) {
+    logProgress(stats, batch.length);
+  }
   }
 
   if (batch.length) {
@@ -59,4 +49,12 @@ function logProgress(stats: IndexStats, pendingBatch: number): void {
   console.log(
     `[progress] seen=${stats.seen} inserted=${stats.inserted} existing=${stats.existing} conflicts=${stats.conflicts} skipped=${stats.skipped} pendingBatch=${pendingBatch}`,
   );
+}
+
+function deriveCollectorHint(rootPath: string) {
+  const base = rootPath.split(path.sep).pop();
+  if (!base) return undefined;
+  const upper = base.toUpperCase();
+  if (upper === "RAM" || upper === "PI") return upper as any;
+  return undefined;
 }

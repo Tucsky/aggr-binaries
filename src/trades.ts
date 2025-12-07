@@ -1,0 +1,137 @@
+import { normalizeExchange, normalizeSymbol } from "./normalize.js";
+
+export type Side = "buy" | "sell";
+
+export interface Trade {
+  ts: number;
+  price: number;
+  size: number;
+  side: Side;
+  liquidation: boolean;
+  exchange: string;
+  symbol: string;
+}
+
+export interface Candle {
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  buyVol: bigint;
+  sellVol: bigint;
+  buyCount: number;
+  sellCount: number;
+  liqBuy: bigint;
+  liqSell: bigint;
+}
+
+export const PRICE_SCALE = 1e4; // int32 safe for typical crypto prices
+export const VOL_SCALE = 1e6; // quote volume micro units
+export const CANDLE_BYTES = 56;
+
+const LEGACY_MAP: Record<string, [string, string]> = {
+  bitfinex: ["BITFINEX", "BTCUSD"],
+  binance: ["BINANCE", "btcusdt"],
+  okex: ["OKEX", "BTC-USDT"],
+  kraken: ["KRAKEN", "XBT-USD"],
+  gdax: ["COINBASE", "BTC-USD"],
+  poloniex: ["POLONIEX", "BTC_USDT"],
+  huobi: ["HUOBI", "btcusdt"],
+  bitstamp: ["BITSTAMP", "btcusd"],
+  bitmex: ["BITMEX", "XBTUSD"],
+  binance_futures: ["BINANCE_FUTURES", "btcusdt"],
+  deribit: ["DERIBIT", "BTC-PERPETUAL"],
+  ftx: ["FTX", "BTC-PERP"],
+  bybit: ["BYBIT", "BTCUSD"],
+  hitbtc: ["HITBTC", "BTCUSD"],
+};
+
+export function parseLegacyLine(line: string): Trade | null {
+  const parts = line.trim().split(/\s+/);
+  if (parts.length < 5) return null;
+  const rawEx = parts[0];
+  const ts = Number(parts[1]);
+  const price = Number(parts[2]);
+  const size = Number(parts[3]);
+  const side = parts[4] === "1" ? "buy" : "sell";
+  const liquidation = parts[5] === "1";
+  const mapped = LEGACY_MAP[rawEx];
+  if (!mapped) return null;
+  const [exchange, rawSymbol] = mapped;
+  const symbol = normalizeSymbol(exchange, rawSymbol, ts) ?? rawSymbol;
+  if (!Number.isFinite(ts) || !Number.isFinite(price) || !Number.isFinite(size)) return null;
+  return { ts, price, size, side, liquidation, exchange, symbol };
+}
+
+export function parseLogicalLine(
+  line: string,
+  pathExchange?: string | null,
+  pathSymbol?: string | null,
+): Trade | null {
+  const parts = line.trim().split(/\s+/);
+  if (parts.length < 4) return null;
+  const ts = Number(parts[0]);
+  const price = Number(parts[1]);
+  const size = Number(parts[2]);
+  const side = parts[3] === "1" ? "buy" : "sell";
+  const liquidation = parts[4] === "1";
+  if (!pathExchange || !pathSymbol) return null;
+  const exchange = normalizeExchange(pathExchange) ?? pathExchange;
+  const symbol = normalizeSymbol(exchange, pathSymbol, ts) ?? pathSymbol;
+  if (!Number.isFinite(ts) || !Number.isFinite(price) || !Number.isFinite(size)) return null;
+  return { ts, price, size, side, liquidation, exchange, symbol };
+}
+
+export function applyCorrections(trade: Trade): Trade | null {
+  let t = { ...trade };
+  // bitfinex liquidations flip side
+  if (t.exchange === "BITFINEX" && t.liquidation) {
+    t = { ...t, side: t.side === "buy" ? "sell" : "buy" };
+  }
+  // okex liquidation size divide by 500 for specific range
+  if (t.exchange === "OKEX" && t.liquidation && t.ts >= 1572940388059 && t.ts < 1572964319495) {
+    t = { ...t, size: t.size / 500 };
+  }
+  // randomize side for non-liq in given range (deterministic hash)
+  if (!t.liquidation && t.ts >= 1574193600000 && t.ts <= 1575489600000) {
+    const rnd = (t.ts * 9301 + 49297) % 233280;
+    t = { ...t, side: rnd / 233280 >= 0.5 ? "buy" : "sell" };
+  }
+  return t;
+}
+
+export function accumulate(acc: { buckets: Map<number, Candle>; minMinute: number; maxMinute: number }, t: Trade) {
+  const minute = Math.floor(t.ts / 60000) * 60000;
+  if (minute < acc.minMinute) acc.minMinute = minute;
+  if (minute > acc.maxMinute) acc.maxMinute = minute;
+  const priceInt = Math.round(t.price * PRICE_SCALE);
+  const quoteVol = BigInt(Math.round(t.price * t.size * VOL_SCALE));
+  const existing = acc.buckets.get(minute);
+  const bucket =
+    existing ??
+    {
+      open: priceInt,
+      high: priceInt,
+      low: priceInt,
+      close: priceInt,
+      buyVol: 0n,
+      sellVol: 0n,
+      buyCount: 0,
+      sellCount: 0,
+      liqBuy: 0n,
+      liqSell: 0n,
+    };
+  bucket.high = Math.max(bucket.high, priceInt);
+  bucket.low = Math.min(bucket.low, priceInt);
+  bucket.close = priceInt;
+  if (t.side === "buy") {
+    bucket.buyVol += quoteVol;
+    bucket.buyCount += 1;
+    if (t.liquidation) bucket.liqBuy += quoteVol;
+  } else {
+    bucket.sellVol += quoteVol;
+    bucket.sellCount += 1;
+    if (t.liquidation) bucket.liqSell += quoteVol;
+  }
+  acc.buckets.set(minute, bucket);
+}

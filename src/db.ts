@@ -4,7 +4,6 @@ import type { IndexedFile } from "./model.js";
 export interface Db {
   db: DatabaseSync;
   ensureRoot(path: string): number;
-  getExistingMeta(rootId: number, relativePath: string): { size: number; mtime_ms: number } | undefined;
   insertFiles(rows: IndexedFile[]): { inserted: number; existing: number };
   close(): void;
 }
@@ -20,13 +19,9 @@ export function openDatabase(dbPath: string): Db {
 
   const insertStmt = db.prepare(
     `INSERT OR IGNORE INTO files
-      (root_id, relative_path, size, mtime_ms, collector, era, exchange, symbol, start_ts, ext)
+      (root_id, relative_path, collector, era, exchange, symbol, start_ts, ext)
      VALUES
-      (:rootId, :relativePath, :size, :mtimeMs, :collector, :era, :exchange, :symbol, :startTs, :ext);`,
-  );
-
-  const selectMeta = db.prepare(
-    "SELECT size, mtime_ms FROM files WHERE root_id = :rootId AND relative_path = :relativePath;",
+      (:rootId, :relativePath, :collector, :era, :exchange, :symbol, :startTs, :ext);`,
   );
 
   const ensureRootStmt = db.prepare("INSERT OR IGNORE INTO roots(path) VALUES(:path);");
@@ -41,9 +36,6 @@ export function openDatabase(dbPath: string): Db {
         throw new Error(`Failed to resolve root id for ${path}`);
       }
       return row.id;
-    },
-    getExistingMeta: (rootId, relativePath) => {
-      return selectMeta.get({ rootId, relativePath }) as { size: number; mtime_ms: number } | undefined;
     },
     insertFiles: (rows: IndexedFile[]) => insertMany(db, insertStmt, rows),
     close: () => db.close(),
@@ -64,8 +56,6 @@ function migrate(db: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS files (
       root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
       relative_path TEXT NOT NULL,
-      size INTEGER NOT NULL,
-      mtime_ms INTEGER NOT NULL,
       collector TEXT NOT NULL,
       era TEXT NOT NULL,
       exchange TEXT,
@@ -95,8 +85,6 @@ function insertMany(
       const res = stmt.run({
         rootId: row.rootId,
         relativePath: row.relativePath,
-        size: row.size,
-        mtimeMs: row.mtimeMs,
         collector: row.collector,
         era: row.era,
         exchange: row.exchange ?? null,

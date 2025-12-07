@@ -3,7 +3,6 @@ import path from "node:path";
 import type { FileSystemEntry } from "./model.js";
 
 interface WalkOptions {
-  statConcurrency?: number; // unused for now, kept for API compatibility
   includePaths?: string[];
 }
 
@@ -16,7 +15,7 @@ export async function* walkFiles(
 
   while (dirStack.length) {
     const dir = dirStack.pop()!;
-    let entries;
+    let entries: import("node:fs").Dirent[];
     try {
       entries = await fs.readdir(dir, { withFileTypes: true });
     } catch {
@@ -28,23 +27,18 @@ export async function* walkFiles(
       const fullPath = path.join(dir, dirent.name);
       if (dirent.isDirectory()) {
         dirStack.push(fullPath);
-      } else if (dirent.isFile()) {
-        const rel = path.relative(rootPath, fullPath);
-        try {
-          const stats = await fs.stat(fullPath);
-          yield {
-            rootId,
-            rootPath,
-            relativePath: toPosix(rel),
-            fullPath,
-            size: stats.size,
-            mtimeMs: Math.round(stats.mtimeMs),
-            ext: path.extname(fullPath) || undefined,
-          };
-        } catch {
-          // ignore stat failures
-        }
+        continue;
       }
+      if (!dirent.isFile()) continue;
+
+      const rel = path.relative(rootPath, fullPath);
+      yield {
+        rootId,
+        rootPath,
+        relativePath: toPosix(rel),
+        fullPath,
+        ext: path.extname(fullPath) || undefined,
+      };
     }
   }
 }
