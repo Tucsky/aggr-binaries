@@ -41,27 +41,29 @@ export async function runProcess(config: Config, db: Db): Promise<void> {
     throw new Error("No collectors found; specify --collector or ensure index has rows.");
   }
 
-  const files = loadFiles(db, collectors);
-  if (!files.length) {
+  const allowExchange = config.exchange?.toUpperCase();
+  const allowSymbol = config.symbol;
+  const totalCandidates = countCandidateFiles(db, collectors, allowExchange, allowSymbol);
+  if (!totalCandidates) {
     console.log("No files to process for selected collectors.");
     return;
   }
 
   console.log(
-    `[process] collectors=${collectors.join(",")} files=${files.length} filters=${
-      config.exchange || "ALL"
-    }/${config.symbol || "ALL"}`,
+    `[process] collectors=${collectors.join(",")} files=${totalCandidates} filters=${config.exchange || "ALL"}/${
+      config.symbol || "ALL"
+    } (streaming)`,
   );
 
   const outRoot = path.resolve(config.outDir ?? "output");
-  const allowExchange = config.exchange?.toUpperCase();
-  const allowSymbol = config.symbol;
   const timeframeMs = parseTimeframeMs(config.timeframe ?? "1m");
   const sparse = Boolean(config.sparseOutput);
+  const files = iterateFiles(db, collectors, allowExchange, allowSymbol);
 
   const startAll = Date.now();
-  const { accMap, totalLines, totalTradesKept, heartbeatTimer } = await processFiles({
+  const { accMap, totalLines, totalTradesKept, heartbeatTimer, processedFiles } = await processFiles({
     files,
+    totalCandidates,
     allowExchange,
     allowSymbol,
     config,
@@ -74,7 +76,7 @@ export async function runProcess(config: Config, db: Db): Promise<void> {
 
   const totalElapsed = (Date.now() - startAll) / 1000;
   console.log(
-    `[process] complete files=${files.length} lines=${totalLines} kept=${totalTradesKept} elapsed=${totalElapsed.toFixed(
+    `[process] complete files=${processedFiles}/${totalCandidates} lines=${totalLines} kept=${totalTradesKept} elapsed=${totalElapsed.toFixed(
       2,
     )}s`,
   );
@@ -90,15 +92,36 @@ async function resolveCollectors(config: Config, db: Db): Promise<string[]> {
   return rows.map((r) => r.collector.toUpperCase());
 }
 
-function loadFiles(db: Db, collectors: string[]): FileRow[] {
+function countCandidateFiles(db: Db, collectors: string[], allowExchange?: string, allowSymbol?: string): number {
+  const stmt = db.db.prepare(
+    `SELECT COUNT(*) as count FROM files
+     WHERE collector IN (${collectors.map((_, i) => `:c${i}`).join(",")})
+       AND (era = :legacyEra OR ((:allowExchange IS NULL OR exchange = :allowExchange) AND (:allowSymbol IS NULL OR symbol = :allowSymbol)));`,
+  );
+  const params: Record<string, string | null> = {
+    legacyEra: Era.Legacy,
+    allowExchange: allowExchange ?? null,
+    allowSymbol: allowSymbol ?? null,
+  };
+  collectors.forEach((c, i) => (params[`c${i}`] = c));
+  const row = stmt.get(params) as { count?: number } | undefined;
+  return row?.count ? Number(row.count) : 0;
+}
+
+function iterateFiles(db: Db, collectors: string[], allowExchange?: string, allowSymbol?: string): Iterable<FileRow> {
   const stmt = db.db.prepare(
     `SELECT * FROM files
      WHERE collector IN (${collectors.map((_, i) => `:c${i}`).join(",")})
+       AND (era = :legacyEra OR ((:allowExchange IS NULL OR exchange = :allowExchange) AND (:allowSymbol IS NULL OR symbol = :allowSymbol)))
      ORDER BY collector, COALESCE(start_ts, 0), relative_path;`,
   );
-  const params: Record<string, string> = {};
+  const params: Record<string, string | null> = {
+    legacyEra: Era.Legacy,
+    allowExchange: allowExchange ?? null,
+    allowSymbol: allowSymbol ?? null,
+  };
   collectors.forEach((c, i) => (params[`c${i}`] = c));
-  return stmt.all(params) as unknown as FileRow[];
+  return stmt.iterate(params) as Iterable<FileRow>;
 }
 
 async function ensureAccumulator(
@@ -152,10 +175,12 @@ interface ProcessResult {
   totalLines: number;
   totalTradesKept: number;
   heartbeatTimer: NodeJS.Timeout | null;
+  processedFiles: number;
 }
 
 async function processFiles(opts: {
-  files: FileRow[];
+  files: Iterable<FileRow>;
+  totalCandidates?: number;
   allowExchange?: string;
   allowSymbol?: string;
   config: Config;
@@ -163,32 +188,29 @@ async function processFiles(opts: {
   startAll: number;
   timeframeMs: number;
 }): Promise<ProcessResult> {
-  const { files, allowExchange, allowSymbol, config, outRoot, startAll, timeframeMs } = opts;
-
-  const filteredFiles = files.filter((f) => {
-    if (f.era === Era.Legacy) return true;
-    if (allowExchange && f.exchange && f.exchange !== allowExchange) return false;
-    if (allowSymbol && f.symbol && f.symbol !== allowSymbol) return false;
-    return true;
-  });
+  const { files, totalCandidates, allowExchange, allowSymbol, config, outRoot, startAll, timeframeMs } = opts;
 
   const accMap = new Map<string, Accumulator>();
   let totalLines = 0;
   let totalTradesKept = 0;
   let maxBuckets = 0;
   let processedFiles = 0;
-  const totalFiles = filteredFiles.length;
 
   const heartbeatTimer = setInterval(() => {
     console.log(
-      `[process] heartbeat files=${processedFiles}/${totalFiles} accumulators=${accMap.size} maxBuckets=${maxBuckets} elapsed=${(
+      `[process] heartbeat files=${processedFiles}/${totalCandidates ?? "?"} accumulators=${accMap.size} maxBuckets=${maxBuckets} elapsed=${(
         (Date.now() - startAll) /
         1000
       ).toFixed(1)}s`,
     );
   }, 10_000);
 
-  for (const file of filteredFiles) {
+  for (const file of files) {
+    if (file.era !== Era.Legacy) {
+      if (allowExchange && file.exchange && file.exchange !== allowExchange) continue;
+      if (allowSymbol && file.symbol && file.symbol !== allowSymbol) continue;
+    }
+
     processedFiles += 1;
     const { linesRead, tradesKept } = await processSingleFile({
       file,
@@ -207,7 +229,7 @@ async function processFiles(opts: {
     }
   }
 
-  return { accMap, totalLines, totalTradesKept, heartbeatTimer };
+  return { accMap, totalLines, totalTradesKept, heartbeatTimer, processedFiles };
 }
 
 async function processSingleFile(opts: {
