@@ -2,9 +2,10 @@ import { loadConfig, printHelp } from "./config.js";
 import { openDatabase } from "./db.js";
 import { runIndex } from "./indexer.js";
 import { runProcess } from "./process.js";
+import { runConvert } from "./convert.js";
 
 interface ParsedArgs {
-  command: "index" | "process";
+  command: "index" | "process" | "convert";
   overrides: {
     root?: string;
     dbPath?: string;
@@ -19,6 +20,7 @@ interface ParsedArgs {
     force?: boolean;
     timeframe?: string;
     sparseOutput?: boolean;
+    workers?: number;
   };
   showHelp: boolean;
 }
@@ -33,7 +35,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   // command is first non-flag argument
   const args = argv.slice(2);
   if (args[0] && !args[0].startsWith("-")) {
-    if (args[0] === "index" || args[0] === "process") {
+    if (args[0] === "index" || args[0] === "process" || args[0] === "convert") {
       parsed.command = args[0];
       args.shift();
     } else {
@@ -102,6 +104,9 @@ function parseArgs(argv: string[]): ParsedArgs {
       case "--sparse":
         parsed.overrides.sparseOutput = true;
         break;
+      case "--workers":
+        parsed.overrides.workers = Number(normalized[++i]);
+        break;
       case "-h":
       case "--help":
         parsed.showHelp = true;
@@ -153,6 +158,10 @@ async function main() {
         `Done in ${duration}s. inserted=${stats.inserted} existing=${stats.existing} conflicts=${stats.conflicts} skipped=${stats.skipped}`,
       );
     } else {
+      if (parsed.command === "convert") {
+        await runConvert(config, db);
+        return;
+      }
       await runProcess(config, db);
     }
   } catch (err) {

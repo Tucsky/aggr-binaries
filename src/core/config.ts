@@ -14,6 +14,7 @@ export interface Config {
   force?: boolean;
   timeframe?: string; // e.g., "1m", "5m", "1h"
   sparseOutput?: boolean;
+  workers?: number; // convert: concurrency
 }
 
 export interface CliOverrides extends Partial<Config> {
@@ -74,6 +75,7 @@ Usage: npm start -- <command> [options]
 Commands:
   index      Index filesystem into SQLite
   process    Build/update binaries from indexed files (resume supported)
+  convert    Transform legacy files into logical structure (gzip text)
 
 Options (override config file):
   -r, --root <path>         Root input directory (default: ${DEFAULTS.root})
@@ -87,6 +89,7 @@ Options (override config file):
   --force                   Processing: ignore processed-files cache
   --timeframe <tf>          Processing: timeframe string (e.g., 1m, 5m, 1h) (default: ${DEFAULTS.timeframe})
   --sparse                  Processing: write sparse binaries (only populated candles)
+  --workers <n>             Convert: parallel legacy files to process (default: CPU-based)
   --config <path>           Path to JSON config (default: ./indexer.config.json if present)
   --no-config               Skip loading any config file
   -h, --help                Show this help

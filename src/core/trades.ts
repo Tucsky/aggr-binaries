@@ -29,7 +29,7 @@ export const PRICE_SCALE = 1e4; // int32 safe for typical crypto prices
 export const VOL_SCALE = 1e6; // quote volume micro units
 export const CANDLE_BYTES = 56;
 
-const LEGACY_MAP: Record<string, [string, string]> = {
+export const LEGACY_MAP: Record<string, [string, string]> = {
   bitfinex: ["BITFINEX", "BTCUSD"],
   binance: ["BINANCE", "btcusdt"],
   okex: ["OKEX", "BTC-USDT"],
