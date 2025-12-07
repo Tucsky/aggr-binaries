@@ -15,6 +15,19 @@
         position: relative;
         height: 98vh;
       }
+      #controls-toggle {
+        position: absolute;
+        top: 8px;
+        left: 10px;
+        z-index: 11;
+        background: #161b22e6;
+        border: 1px solid #30363d;
+        color: #e6edf3;
+        border-radius: 6px;
+        padding: 4px 8px;
+        font-size: 10px;
+        cursor: pointer;
+      }
       #status {
         position: absolute;
         right: 4px;
@@ -79,10 +92,11 @@
   </head>
   <body>
     <div id="app">
+      <button id="controls-toggle">Show controls</button>
       <div id="controls">
-        <label>Collector <input id="collector" value="PI" size="6" /></label>
-        <label>Exchange <input id="exchange" value="BITFINEX" size="10" /></label>
-        <label>Symbol <input id="symbol" value="BTCUSD" size="10" /></label>
+        <label>Collector <input id="collector" size="6" /></label>
+        <label>Exchange <input id="exchange" size="10" /></label>
+        <label>Symbol <input id="symbol" size="10" /></label>
         <label>Start (UTC) <input id="start" type="datetime-local" /></label>
         <button id="connect">Connect</button>
         <span id="status" class="idle">idle</span>
@@ -107,15 +121,50 @@
         crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
       });
       const series = chart.addCandlestickSeries({ upColor: "#16a34a", downColor: "#ef4444", wickUpColor: "#16a34a", wickDownColor: "#ef4444" });
-      // datetime-local input:
-      document.getElementById('start').valueAsNumber = new Date();
+      function loadPrefs() {
+        try {
+          const raw = localStorage.getItem("aggr-viewer-prefs");
+          if (!raw) return;
+          const prefs = JSON.parse(raw);
+          if (prefs.collector) document.getElementById("collector").value = prefs.collector;
+          if (prefs.exchange) document.getElementById("exchange").value = prefs.exchange;
+          if (prefs.symbol) document.getElementById("symbol").value = prefs.symbol;
+          if (prefs.start) document.getElementById("start").value = prefs.start;
+        } catch {
+          // ignore
+        }
+      }
+
+      function savePrefs() {
+        const prefs = {
+          collector: document.getElementById("collector").value.trim(),
+          exchange: document.getElementById("exchange").value.trim(),
+          symbol: document.getElementById("symbol").value.trim(),
+          start: document.getElementById("start").value,
+        };
+        try {
+          localStorage.setItem("aggr-viewer-prefs", JSON.stringify(prefs));
+        } catch {
+          // ignore
+        }
+      }
+
+      loadPrefs();
+      if (!document.getElementById("collector").value) document.getElementById("collector").value = "PI";
+      if (!document.getElementById("exchange").value) document.getElementById("exchange").value = "BITFINEX";
+      if (!document.getElementById("symbol").value) document.getElementById("symbol").value = "BTCUSD";
+      if (!document.getElementById("start").value) document.getElementById("start").valueAsNumber = new Date();
+      setControlsVisible(true);
       let ws = null;
       let meta = null;
-      const cache = new Map(); // key: minute ts -> candle
-      let lastRequested = { from: 0, to: 0 };
-      let loadedRange = { min: null, max: null };
+      const cache = new Map(); // key: index -> candle (with time)
+      let lastRequested = { fromIndex: 0, toIndex: 0 };
+      let loadedIndex = { min: null, max: null };
       let suppressRangeEvent = false;
-      const TIMEFRAME = 1000 * 60
+      let TIMEFRAME = 1000 * 60;
+      let META_SPARSE = false;
+      let META_RECORDS = 0;
+      let anchorIndex = null;
 
       function setStatus(msg) {
         document.getElementById("status").textContent = msg;
@@ -141,8 +190,8 @@
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.close();
           ws.onclose()
-          loadedRange = { min: null, max: null };
-          lastRequested = { from: 0, to: 0 };
+          loadedIndex = { min: null, max: null };
+          lastRequested = { fromIndex: 0, toIndex: 0 };
           cache.clear();
           series.setData([]);
           return;
@@ -153,15 +202,16 @@
         const symbol = document.getElementById("symbol").value.trim();
         const startStr = document.getElementById("start").value;
         const startMs = startStr ? Date.parse(startStr) : null;
+        savePrefs();
         if (!collector || !exchange || !symbol) return;
         if (ws) ws.close();
         cache.clear();
         meta = null;
         series.setData([]);
-        loadedRange = { min: null, max: null };
-        lastRequested = { from: 0, to: 0 };
+        loadedIndex = { min: null, max: null };
+        lastRequested = { fromIndex: 0, toIndex: 0 };
 
-        const url = `ws://localhost:${location.port || 3000}/ws?collector=${collector}&exchange=${exchange}&symbol=${symbol}`;
+        const url = `ws://localhost:${location.port || 3000}/ws?collector=${collector}&exchange=${exchange}&symbol=${symbol}${startMs ? `&start=${startMs}` : ""}`;
         ws = new WebSocket(url);
         ws.onopen = () => setStatus("connected");
         ws.onclose = () => setStatus("closed");
@@ -171,31 +221,33 @@
           if (msg.type === "meta") {
             meta = msg;
             console.log("[ws] meta", msg);
+            TIMEFRAME = msg.timeframeMs ?? 60_000;
+            META_SPARSE = Boolean(msg.sparse);
+            META_RECORDS = msg.records ?? 0;
+            anchorIndex = msg.anchorIndex ?? (META_RECORDS > 0 ? META_RECORDS - 1 : 0);
             const windowMs = TIMEFRAME * 500;
-            const anchor = startMs && !Number.isNaN(startMs) ? startMs : meta.endTs;
-            requestRange(anchor - windowMs, anchor);
-            // Adjust visible range to start anchor for easier navigation
-            const rightTime = Math.floor(anchor / 1000);
-            const leftTime = Math.floor((anchor - windowMs) / 1000);
-            chart.timeScale().setVisibleRange({ from: leftTime, to: rightTime });
+            requestSlice(Math.max(0, anchorIndex - 1499), anchorIndex);
           } else if (msg.type === "candles") {
-            console.log("[ws] candles", new Date(msg.from).toISOString(), new Date(msg.to).toISOString(), "count", msg.candles.length);
-            ingest(msg.candles);
+            console.log("[ws] candles idx", msg.fromIndex, msg.toIndex, "count", msg.candles.length);
+            ingest(msg.fromIndex, msg.candles);
           }
         };
       }
 
-      function ingest(candles) {
-        let newMin = loadedRange.min;
-        let newMax = loadedRange.max;
-        for (const c of candles) {
-          if ((c.buyCount ?? 0) + (c.sellCount ?? 0) === 0) continue; // skip empty candles rendered as zeros
-          cache.set(c.time, c);
-          if (newMin === null || c.time < newMin) newMin = c.time;
-          if (newMax === null || c.time > newMax) newMax = c.time;
-        }
-        loadedRange = { min: newMin, max: newMax };
-        const sorted = Array.from(cache.values()).sort((a, b) => a.time - b.time);
+      function ingest(fromIndex, candles) {
+        let newMinIdx = loadedIndex.min;
+        let newMaxIdx = loadedIndex.max;
+        candles.forEach((c, i) => {
+          const idx = fromIndex + i;
+          // if ((c.buyCount ?? 0) + (c.sellCount ?? 0) === 0) continue; // skip empty candles rendered as zeros
+          cache.set(idx, { ...c, index: idx });
+          if (newMinIdx === null || idx < newMinIdx) newMinIdx = idx;
+          if (newMaxIdx === null || idx > newMaxIdx) newMaxIdx = idx;
+        });
+        loadedIndex = { min: newMinIdx, max: newMaxIdx };
+        const sorted = Array.from(cache.entries())
+          .sort((a, b) => a[0] - b[0])
+          .map(([, c]) => c);
         suppressRangeEvent = true;
         series.setData(
           sorted.map((c) => ({
@@ -209,18 +261,15 @@
         suppressRangeEvent = false;
       }
 
-      function requestRange(from, to) {
+      function requestSlice(fromIndex, toIndex) {
         if (!ws || ws.readyState !== WebSocket.OPEN) return;
-        let reqFrom = from;
-        let reqTo = to;
-        const span = to - from;
-        const pad = span * 2;
-        reqFrom = Math.max(meta.startTs, from - pad);
-        reqTo = Math.min(meta.endTs, to + pad);
-        if (lastRequested.from === reqFrom && lastRequested.to === reqTo) return;
-        lastRequested = { from: reqFrom, to: reqTo };
-        console.log("[ws] request", new Date(reqFrom).toISOString(), "->", new Date(reqTo).toISOString());
-        ws.send(JSON.stringify({ type: "range", from: reqFrom, to: reqTo }));
+        if (!meta) return;
+        const clampedFrom = Math.max(0, Math.min(META_RECORDS - 1, fromIndex));
+        const clampedTo = Math.max(0, Math.min(META_RECORDS - 1, toIndex));
+        if (lastRequested.fromIndex === clampedFrom && lastRequested.toIndex === clampedTo) return;
+        lastRequested = { fromIndex: clampedFrom, toIndex: clampedTo };
+        console.log("[ws] request slice", clampedFrom, "->", clampedTo);
+        ws.send(JSON.stringify({ type: "slice", fromIndex: clampedFrom, toIndex: clampedTo }));
       }
 
       chart.timeScale().subscribeVisibleTimeRangeChange((range) => {
@@ -228,26 +277,37 @@
         if (!range || !range.from || !range.to) return;
         const from = Math.floor(Number(range.from) * 1000);
         const to = Math.floor(Number(range.to) * 1000);
-        // console.log("[chart] visible time range changed", range, "->", new Date(from).toISOString(), new Date(to).toISOString());
+        if (loadedIndex.min === null || loadedIndex.max === null || cache.size === 0) return;
 
-        if (loadedRange.min !== null && loadedRange.max !== null && from > loadedRange.min + TIMEFRAME && to < loadedRange.max - TIMEFRAME) {
-          // console.log("[chart] range already loaded");
-          return; // already have coverage
+        const cachedArr = Array.from(cache.values()).sort((a, b) => a.time - b.time);
+        const minTime = cachedArr[0].time;
+        const maxTime = cachedArr[cachedArr.length - 1].time;
+
+        if (from < minTime + TIMEFRAME) {
+          console.log("[chart] need more left");
+          const nextFrom = Math.max(0, loadedIndex.min - 2000);
+          requestSlice(nextFrom, loadedIndex.min - 1);
         }
-        
-
-        if (to >= loadedRange.max - TIMEFRAME) {
-          console.log("[chart] need to load more data at the end");
-          requestRange(loadedRange.max, loadedRange.max + TIMEFRAME * 100);
-        }
-
-        if (from <= loadedRange.min + TIMEFRAME) {
-          console.log("[chart] need to load more data at the start");
-          requestRange(loadedRange.min - TIMEFRAME * 100, loadedRange.min);
+        if (to > maxTime - TIMEFRAME) {
+          console.log("[chart] need more right");
+          const nextTo = Math.min(META_RECORDS - 1, loadedIndex.max + 2000);
+          requestSlice(loadedIndex.max + 1, nextTo);
         }
       });
 
       document.getElementById("connect").addEventListener("click", connect);
+      document.getElementById("controls-toggle").addEventListener("click", () => {
+        const controls = document.getElementById("controls");
+        const isHidden = controls.style.display === "none";
+        setControlsVisible(isHidden);
+      });
+
+      function setControlsVisible(show) {
+        const controls = document.getElementById("controls");
+        const toggle = document.getElementById("controls-toggle");
+        controls.style.display = show ? "flex" : "none";
+        toggle.textContent = show ? "Hide controls" : "Show controls";
+      }
     </script>
   </body>
 </html>

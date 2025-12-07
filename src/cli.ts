@@ -17,6 +17,8 @@ interface ParsedArgs {
     symbol?: string;
     outDir?: string;
     force?: boolean;
+    timeframe?: string;
+    sparseOutput?: boolean;
   };
   showHelp: boolean;
 }
@@ -93,6 +95,12 @@ function parseArgs(argv: string[]): ParsedArgs {
         break;
       case "--force":
         parsed.overrides.force = true;
+        break;
+      case "--timeframe":
+        parsed.overrides.timeframe = normalized[++i];
+        break;
+      case "--sparse":
+        parsed.overrides.sparseOutput = true;
         break;
       case "-h":
       case "--help":

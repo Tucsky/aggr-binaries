@@ -56,6 +56,8 @@ export async function runProcess(config: Config, db: Db): Promise<void> {
   const outRoot = path.resolve(config.outDir ?? "output");
   const allowExchange = config.exchange?.toUpperCase();
   const allowSymbol = config.symbol;
+  const timeframeMs = parseTimeframeMs(config.timeframe ?? "1m");
+  const sparse = Boolean(config.sparseOutput);
 
   const startAll = Date.now();
   const { accMap, totalLines, totalTradesKept, heartbeatTimer } = await processFiles({
@@ -65,9 +67,10 @@ export async function runProcess(config: Config, db: Db): Promise<void> {
     config,
     outRoot,
     startAll,
+    timeframeMs,
   });
 
-  await writeOutputs(accMap, outRoot);
+  await writeOutputs(accMap, outRoot, timeframeMs, sparse);
 
   const totalElapsed = (Date.now() - startAll) / 1000;
   console.log(
@@ -158,8 +161,9 @@ async function processFiles(opts: {
   config: Config;
   outRoot: string;
   startAll: number;
+  timeframeMs: number;
 }): Promise<ProcessResult> {
-  const { files, allowExchange, allowSymbol, config, outRoot, startAll } = opts;
+  const { files, allowExchange, allowSymbol, config, outRoot, startAll, timeframeMs } = opts;
 
   const filteredFiles = files.filter((f) => {
     if (f.era === Era.Legacy) return true;
@@ -193,6 +197,7 @@ async function processFiles(opts: {
       config,
       outRoot,
       accMap,
+      timeframeMs,
     });
 
     totalLines += linesRead;
@@ -212,8 +217,9 @@ async function processSingleFile(opts: {
   config: Config;
   outRoot: string;
   accMap: Map<string, Accumulator>;
+  timeframeMs: number;
 }): Promise<{ linesRead: number; tradesKept: number }> {
-  const { file, allowExchange, allowSymbol, config, outRoot, accMap } = opts;
+  const { file, allowExchange, allowSymbol, config, outRoot, accMap, timeframeMs } = opts;
 
   const fullPath = path.join(config.root, file.relative_path);
   const isLegacy = file.era === Era.Legacy;
@@ -250,7 +256,7 @@ async function processSingleFile(opts: {
     const corrected = applyCorrections({ ...trade, symbol: normSym });
     if (!corrected) continue;
 
-    accumulate(acc, corrected);
+    accumulate(acc, corrected, timeframeMs);
     if (fileStartTs !== null && fileStartTs > acc.maxInputStartTs) acc.maxInputStartTs = fileStartTs;
     tradesKept += 1;
   }
@@ -262,7 +268,7 @@ async function processSingleFile(opts: {
   return { linesRead, tradesKept };
 }
 
-async function writeOutputs(accMap: Map<string, Accumulator>, outRoot: string) {
+async function writeOutputs(accMap: Map<string, Accumulator>, outRoot: string, timeframeMs: number, sparse: boolean) {
   let written = 0;
   const accList = Array.from(accMap.values());
   for (const acc of accList) {
@@ -274,8 +280,12 @@ async function writeOutputs(accMap: Map<string, Accumulator>, outRoot: string) {
     const startBase =
       acc.companion?.startTs !== undefined ? Math.min(acc.companion.startTs, acc.minMinute) : acc.minMinute;
     const endBase =
-      acc.companion?.endTs !== undefined ? Math.max(acc.companion.endTs, acc.maxMinute + 60000) : acc.maxMinute + 60000;
-    const totalCandles = Math.max(0, Math.floor((endBase - startBase) / 60000));
+      acc.companion?.endTs !== undefined
+        ? Math.max(acc.companion.endTs, acc.maxMinute + timeframeMs)
+        : acc.maxMinute + timeframeMs;
+    const totalCandles = sparse
+      ? acc.buckets.size
+      : Math.max(0, Math.floor((endBase - startBase) / timeframeMs));
     const estimatedMb = ((totalCandles * CANDLE_BYTES) / (1024 * 1024)).toFixed(2);
 
     const outDir = path.join(outRoot, acc.collector, acc.exchange);
@@ -285,10 +295,10 @@ async function writeOutputs(accMap: Map<string, Accumulator>, outRoot: string) {
     console.log(
       `[${acc.collector}/${acc.exchange}/${acc.symbol}] writing ${totalCandles} candles (~${estimatedMb} MB) range ${new Date(
         startBase,
-      ).toISOString()} -> ${new Date(endBase).toISOString()}`,
+      ).toISOString()} -> ${new Date(endBase).toISOString()} sparse=${sparse}`,
     );
 
-    await writeBinary(outBase + ".bin", acc.buckets, startBase, endBase - 60000);
+    await writeBinary(outBase + ".bin", acc.buckets, startBase, endBase - timeframeMs, timeframeMs, sparse);
 
     const lastInputStartTs =
       acc.maxInputStartTs > Number.NEGATIVE_INFINITY || acc.companion?.lastInputStartTs !== undefined
@@ -302,6 +312,8 @@ async function writeOutputs(accMap: Map<string, Accumulator>, outRoot: string) {
       totalCandles,
       startBase,
       endBase,
+      timeframeMs,
+      sparse,
       lastInputStartTs === Number.NEGATIVE_INFINITY ? undefined : lastInputStartTs,
     );
 
@@ -315,8 +327,40 @@ async function writeOutputs(accMap: Map<string, Accumulator>, outRoot: string) {
   }
 }
 
-async function writeBinary(outPath: string, buckets: Map<number, Candle>, minMinute: number, maxMinute: number): Promise<void> {
+async function writeBinary(
+  outPath: string,
+  buckets: Map<number, Candle>,
+  minSlot: number,
+  maxSlot: number,
+  timeframeMs: number,
+  sparse: boolean,
+): Promise<void> {
   const fh = await fs.open(outPath, "w");
+  if (sparse) {
+    const sorted = Array.from(buckets.entries()).sort((a, b) => a[0] - b[0]);
+    const recordSize = 8 + CANDLE_BYTES; // ts + candle
+    const buf = Buffer.allocUnsafe(recordSize * sorted.length);
+    let idx = 0;
+    for (const [ts, c] of sorted) {
+      const base = idx * recordSize;
+      buf.writeBigInt64LE(BigInt(ts), base);
+      buf.writeInt32LE(c.open, base + 8);
+      buf.writeInt32LE(c.high, base + 12);
+      buf.writeInt32LE(c.low, base + 16);
+      buf.writeInt32LE(c.close, base + 20);
+      buf.writeBigInt64LE(c.buyVol, base + 24);
+      buf.writeBigInt64LE(c.sellVol, base + 32);
+      buf.writeUint32LE(c.buyCount >>> 0, base + 40);
+      buf.writeUint32LE(c.sellCount >>> 0, base + 44);
+      buf.writeBigInt64LE(c.liqBuy, base + 48);
+      buf.writeBigInt64LE(c.liqSell, base + 56);
+      idx += 1;
+    }
+    await fh.write(buf, 0, buf.length, 0);
+    await fh.close();
+    return;
+  }
+
   const empty = {
     open: 0,
     high: 0,
@@ -333,12 +377,12 @@ async function writeBinary(outPath: string, buckets: Map<number, Candle>, minMin
   // Write in chunks to avoid millions of small syscalls when the range spans years.
   const chunkCandles = 4096;
   const buf = Buffer.allocUnsafe(chunkCandles * CANDLE_BYTES);
-  let ts = minMinute;
+  let ts = minSlot;
   let fileOffset = 0;
 
-  while (ts <= maxMinute) {
+  while (ts <= maxSlot) {
     let count = 0;
-    for (; count < chunkCandles && ts <= maxMinute; count += 1, ts += 60000) {
+    for (; count < chunkCandles && ts <= maxSlot; count += 1, ts += timeframeMs) {
       const c = buckets.get(ts) ?? empty;
       const base = count * CANDLE_BYTES;
       buf.writeInt32LE(c.open, base);
@@ -367,17 +411,21 @@ async function writeCompanion(
   totalCandles: number,
   minTs: number,
   maxTs: number,
+  timeframeMs: number,
+  sparse: boolean,
   lastInputStartTs?: number,
 ) {
   const data = {
     exchange,
     symbol,
-    timeframe: "1m",
+    timeframe: timeframeLabel(timeframeMs),
+    timeframeMs,
     startTs: minTs,
     endTs: maxTs,
     priceScale: PRICE_SCALE,
     volumeScale: VOL_SCALE,
     records: totalCandles,
+    sparse,
     lastInputStartTs,
   };
   await fs.writeFile(outPath, JSON.stringify(data, null, 2));
@@ -388,11 +436,13 @@ async function readCompanion(pathStr: string): Promise<
       exchange: string;
       symbol: string;
       timeframe: string;
+      timeframeMs?: number;
       startTs: number;
       endTs: number;
       priceScale: number;
       volumeScale: number;
       records: number;
+      sparse?: boolean;
       lastInputStartTs?: number;
     }
   | undefined
@@ -403,4 +453,30 @@ async function readCompanion(pathStr: string): Promise<
   } catch {
     return undefined;
   }
+}
+
+function parseTimeframeMs(tf: string): number {
+  const m = tf.trim().toLowerCase().match(/^(\d+)([smhd])$/);
+  if (!m) return 60_000;
+  const n = Number(m[1]);
+  switch (m[2]) {
+    case "s":
+      return n * 1000;
+    case "m":
+      return n * 60_000;
+    case "h":
+      return n * 3_600_000;
+    case "d":
+      return n * 86_400_000;
+    default:
+      return 60_000;
+  }
+}
+
+function timeframeLabel(ms: number): string {
+  if (ms % 86_400_000 === 0) return `${ms / 86_400_000}d`;
+  if (ms % 3_600_000 === 0) return `${ms / 3_600_000}h`;
+  if (ms % 60_000 === 0) return `${ms / 60_000}m`;
+  if (ms % 1000 === 0) return `${ms / 1000}s`;
+  return `${ms}ms`;
 }

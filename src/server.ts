@@ -11,17 +11,19 @@ interface Companion {
   exchange: string;
   symbol: string;
   timeframe: string;
+  timeframeMs?: number;
   startTs: number;
   endTs: number;
   priceScale: number;
   volumeScale: number;
   records: number;
+  sparse?: boolean;
 }
 
 interface CandleMsg {
   type: "candles";
-  from: number;
-  to: number;
+  fromIndex: number;
+  toIndex: number;
   candles: Array<{
     time: number;
     open: number;
@@ -47,14 +49,18 @@ async function readCandles(
   collector: string,
   exchange: string,
   symbol: string,
-  fromTs: number,
-  toTs: number,
+  fromIndex: number,
+  toIndex: number,
   companion: Companion,
 ): Promise<CandleMsg> {
+  if (companion.sparse) {
+    return readCandlesSparse(collector, exchange, symbol, fromIndex, toIndex, companion);
+  }
   const binPath = path.join(OUTPUT_ROOT, collector, exchange, `${symbol}.bin`);
   const fh = await fs.open(binPath, "r");
-  const firstIdx = Math.max(0, Math.floor((fromTs - companion.startTs) / 60000));
-  const lastIdx = Math.min(companion.records - 1, Math.floor((toTs - companion.startTs) / 60000));
+  const tf = companion.timeframeMs ?? 60_000;
+  const firstIdx = Math.max(0, Math.min(companion.records - 1, fromIndex));
+  const lastIdx = Math.max(firstIdx, Math.min(companion.records - 1, toIndex));
   const count = Math.max(0, lastIdx - firstIdx + 1);
   const buf = Buffer.allocUnsafe(count * 56);
   await fh.read(buf, 0, buf.length, firstIdx * 56);
@@ -74,7 +80,7 @@ async function readCandles(
     const liqBuy = Number(buf.readBigInt64LE(base + 40)) / companion.volumeScale;
     const liqSell = Number(buf.readBigInt64LE(base + 48)) / companion.volumeScale;
     candles.push({
-      time: companion.startTs + (firstIdx + i) * 60000,
+      time: companion.startTs + (firstIdx + i) * tf,
       open,
       high,
       low,
@@ -88,7 +94,52 @@ async function readCandles(
     });
   }
 
-  return { type: "candles", from: fromTs, to: toTs, candles };
+  return { type: "candles", fromIndex: firstIdx, toIndex: lastIdx, candles };
+}
+
+async function readCandlesSparse(
+  collector: string,
+  exchange: string,
+  symbol: string,
+  fromIndex: number,
+  toIndex: number,
+  companion: Companion,
+): Promise<CandleMsg> {
+  const binPath = path.join(OUTPUT_ROOT, collector, exchange, `${symbol}.bin`);
+  const buf = await fs.readFile(binPath);
+  const recordSize = 8 + 56;
+  const total = Math.floor(buf.length / recordSize);
+  const firstIdx = Math.max(0, Math.min(total - 1, fromIndex));
+  const lastIdx = Math.max(firstIdx, Math.min(total - 1, toIndex));
+  const candles: CandleMsg["candles"] = [];
+  for (let i = firstIdx; i <= lastIdx; i++) {
+    const base = i * recordSize;
+    const ts = Number(buf.readBigInt64LE(base));
+    const open = buf.readInt32LE(base + 8) / companion.priceScale;
+    const high = buf.readInt32LE(base + 12) / companion.priceScale;
+    const low = buf.readInt32LE(base + 16) / companion.priceScale;
+    const close = buf.readInt32LE(base + 20) / companion.priceScale;
+    const buyVol = Number(buf.readBigInt64LE(base + 24)) / companion.volumeScale;
+    const sellVol = Number(buf.readBigInt64LE(base + 32)) / companion.volumeScale;
+    const buyCount = buf.readUInt32LE(base + 40);
+    const sellCount = buf.readUInt32LE(base + 44);
+    const liqBuy = Number(buf.readBigInt64LE(base + 48)) / companion.volumeScale;
+    const liqSell = Number(buf.readBigInt64LE(base + 56)) / companion.volumeScale;
+    candles.push({
+      time: ts,
+      open,
+      high,
+      low,
+      close,
+      buyVol,
+      sellVol,
+      buyCount,
+      sellCount,
+      liqBuy,
+      liqSell,
+    });
+  }
+  return { type: "candles", fromIndex: firstIdx, toIndex: firstIdx + candles.length - 1, candles };
 }
 
 const server = http.createServer(async (req, res) => {
@@ -124,6 +175,8 @@ server.on("upgrade", async (req, socket) => {
   const collector = (url.searchParams.get("collector") ?? "").toUpperCase();
   const exchange = (url.searchParams.get("exchange") ?? "").toUpperCase();
   const symbol = url.searchParams.get("symbol") ?? "";
+  const startOverride = url.searchParams.get("start");
+  const startMs = startOverride ? Number(startOverride) : null;
   if (!collector || !exchange || !symbol) {
     socket.destroy();
     return;
@@ -145,8 +198,10 @@ server.on("upgrade", async (req, socket) => {
   socket.write(headers.join("\r\n"));
 
   let companion: Companion | null = null;
+  let anchorIndex: number | null = null;
   try {
     companion = await readCompanion(collector, exchange, symbol);
+    anchorIndex = await computeAnchorIndex(collector, exchange, symbol, companion, startMs);
     console.log(
       "[ws] meta",
       collector,
@@ -161,6 +216,10 @@ server.on("upgrade", async (req, socket) => {
       endTs: companion.endTs,
       priceScale: companion.priceScale,
       volumeScale: companion.volumeScale,
+      timeframeMs: companion.timeframeMs ?? 60_000,
+      sparse: companion.sparse ?? false,
+      records: companion.records,
+      anchorIndex: anchorIndex ?? companion.records - 1,
     });
   } catch {
     socket.destroy();
@@ -171,20 +230,10 @@ server.on("upgrade", async (req, socket) => {
     const msg = decodeFrame(buf);
     if (!msg || msg.opcode !== 1 || !companion) return;
     try {
-      const payload = JSON.parse(msg.data.toString()) as { type: string; from?: number; to?: number };
-      if (payload.type === "range" && typeof payload.from === "number" && typeof payload.to === "number") {
-        console.log(
-          "[ws] range request",
-          new Date(payload.from).toISOString(),
-          "->",
-          new Date(payload.to).toISOString(),
-        );
-        const resp = await readCandles(collector, exchange, symbol, payload.from, payload.to, companion);
-        if (resp.candles.length) {
-          send(socket, resp);
-        } else {
-          console.log("[ws] range request - no data in range");
-        }
+      const payload = JSON.parse(msg.data.toString()) as { type: string; fromIndex?: number; toIndex?: number };
+      if (payload.type === "slice" && typeof payload.fromIndex === "number" && typeof payload.toIndex === "number") {
+        const resp = await readCandles(collector, exchange, symbol, payload.fromIndex, payload.toIndex, companion);
+        send(socket, resp);
       }
     } catch {
       // ignore
@@ -251,3 +300,47 @@ function decodeFrame(buf: Buffer): { opcode: number; data: Buffer } | null {
 server.listen(PORT, () => {
   console.log(`Server listening on http://localhost:${PORT}`);
 });
+
+async function computeAnchorIndex(
+  collector: string,
+  exchange: string,
+  symbol: string,
+  companion: Companion,
+  startMs: number | null,
+): Promise<number> {
+  const records = companion.records;
+  if (!records || records <= 0) return 0;
+  if (!startMs || Number.isNaN(startMs)) {
+    return records - 1;
+  }
+
+  if (!companion.sparse) {
+    const tf = companion.timeframeMs ?? 60_000;
+    const idx = Math.floor((startMs - companion.startTs) / tf);
+    return Math.max(0, Math.min(records - 1, idx));
+  }
+
+  // sparse: binary search by timestamp
+  const binPath = path.join(OUTPUT_ROOT, collector, exchange, `${symbol}.bin`);
+  const recordSize = 8 + 56;
+  let lo = 0;
+  let hi = records - 1;
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    const ts = await readSparseTimestamp(binPath, mid, recordSize);
+    if (ts >= startMs) {
+      hi = mid;
+    } else {
+      lo = mid + 1;
+    }
+  }
+  return lo;
+}
+
+async function readSparseTimestamp(binPath: string, index: number, recordSize: number): Promise<number> {
+  const fh = await fs.open(binPath, "r");
+  const buf = Buffer.allocUnsafe(8);
+  await fh.read(buf, 0, 8, index * recordSize);
+  await fh.close();
+  return Number(buf.readBigInt64LE(0));
+}

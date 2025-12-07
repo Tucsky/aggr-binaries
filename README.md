@@ -6,7 +6,7 @@ Tooling to index ~11M tick-trade files and turn them into gap-aware 1m OHLCV bin
 
 - **Index**: walk the input tree once, classify `legacy` vs `logical`, record collector/exchange/symbol/start_ts/ext into SQLite. Append-only: reruns insert only new paths (`INSERT OR IGNORE`). Legacy `start_ts` parsed as Europe/Paris (DST aware); logical parsed as UTC.
 - **Normalize**: path-based exchange/symbol normalization (Poloniex quote-second rule; Bitget 2025-11-28 rename; legacy exchange map when reading file contents).
-- **Process**: stream each input file once, apply corrections, route trades into per-market accumulators on demand, then write `output/{collector}/{exchange}/{symbol}.bin` + companion JSON (`lastInputStartTs` for resume). Resume by skipping files with `start_ts < lastInputStartTs` and trades `< endTs` unless `--force`.
+- **Process**: stream each input file once, apply corrections, route trades into per-market accumulators on demand, then write `output/{collector}/{exchange}/{symbol}.bin` + companion JSON (`lastInputStartTs` for resume). Resume by skipping files with `start_ts < lastInputStartTs` and trades `< endTs` unless `--force`. Optional sparse output (only populated candles) and configurable timeframe (e.g., 1m, 5m, 1h).
 - **Filters**: optional `--collector/--exchange/--symbol` to narrow both file selection (logical only) and per-trade routing (legacy can still contain multiple exchanges).
 - **Performance**: low-memory walk, batched SQLite writes, chunked binary writes (4096-candle blocks) to avoid millions of tiny syscalls, no per-trade DB I/O during processing.
 
@@ -26,7 +26,9 @@ Copy and edit `indexer.config.example.json` → `indexer.config.json` (overridab
   "dbPath": "./index.sqlite",
   "batchSize": 1000,
   "includePaths": [],        // optional: restrict walk to subtrees
-  "outDir": "output"
+  "outDir": "output",
+  "timeframe": "1m",
+  "sparseOutput": false
 }
 ```
 
@@ -55,6 +57,8 @@ Processor flags:
 - `--collector <name>` (RAM/PI)
 - `--exchange <EXCHANGE>`
 - `--symbol <SYMBOL>`
+- `--timeframe <tf>` (e.g., 1m, 5m, 1h; default 1m)
+- `--sparse` write only populated candles (no gap fill; for testing)
 - `--force` ignore resume guards (`lastInputStartTs` / `endTs`)
 
 Examples:

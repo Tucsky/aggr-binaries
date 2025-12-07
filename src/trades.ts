@@ -100,13 +100,17 @@ export function applyCorrections(trade: Trade): Trade | null {
   return t;
 }
 
-export function accumulate(acc: { buckets: Map<number, Candle>; minMinute: number; maxMinute: number }, t: Trade) {
-  const minute = Math.floor(t.ts / 60000) * 60000;
-  if (minute < acc.minMinute) acc.minMinute = minute;
-  if (minute > acc.maxMinute) acc.maxMinute = minute;
+export function accumulate(
+  acc: { buckets: Map<number, Candle>; minMinute: number; maxMinute: number },
+  t: Trade,
+  timeframeMs: number,
+) {
+  const slot = Math.floor(t.ts / timeframeMs) * timeframeMs;
+  if (slot < acc.minMinute) acc.minMinute = slot;
+  if (slot > acc.maxMinute) acc.maxMinute = slot;
   const priceInt = Math.round(t.price * PRICE_SCALE);
   const quoteVol = BigInt(Math.round(t.price * t.size * VOL_SCALE));
-  const existing = acc.buckets.get(minute);
+  const existing = acc.buckets.get(slot);
   const bucket =
     existing ??
     {
@@ -133,5 +137,5 @@ export function accumulate(acc: { buckets: Map<number, Candle>; minMinute: numbe
     bucket.sellCount += 1;
     if (t.liquidation) bucket.liqSell += quoteVol;
   }
-  acc.buckets.set(minute, bucket);
+  acc.buckets.set(slot, bucket);
 }
