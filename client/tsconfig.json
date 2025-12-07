@@ -1,0 +1,12 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "moduleResolution": "NodeNext",
+    "types": ["svelte"],
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true,
+    "rootDir": ".."
+  },
+  "include": ["../client/src/**/*", "../client/src/**/*.svelte", "../client/vite.config.ts", "../client/tailwind.config.cjs", "../client/postcss.config.cjs", "../client/index.html"]
+}

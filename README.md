@@ -32,7 +32,7 @@ Copy and edit `indexer.config.example.json` → `indexer.config.json` (overridab
 }
 ```
 
-## CLI
+## CLI (core)
 
 Entry: `npm start -- <subcommand> [flags]`
 
@@ -109,3 +109,19 @@ CREATE INDEX idx_files_collector ON files(collector);
 - Accumulators are created on demand per (collector, exchange, symbol); each input file is streamed once, dispatching trades to the right accumulator.
 - Output companion JSON includes `lastInputStartTs` to skip already-processed files; trades older than `endTs` are ignored unless `--force`.
 - Binary writer emits gap-aware 1m candles across the observed/previous range; writes are chunked to keep syscalls low.
+
+## Preview module (frontend + websocket server)
+
+Structure is split:
+- Core (indexer/processor) lives under `src/core`.
+- Preview websocket server under `src/server.ts`.
+- Frontend lives in `client/` (Svelte + Vite + Tailwind).
+
+Commands:
+- `npm run dev:client` — run Vite dev server for the frontend.
+- `npm run build:client` — build static assets into `client/dist`.
+- `npm run serve` — build everything (core + client) and start the websocket/static server from `dist/server.js` (serves `client/dist`).
+
+Preview WS endpoints:
+- `GET /` serves the built frontend.
+- `WS /ws?collector=...&exchange=...&symbol=...&start=ms` returns `meta` with timeframe/sparse/records/anchorIndex, and supports `slice` requests by candle index. Works with dense (gap-filled) and sparse binaries.

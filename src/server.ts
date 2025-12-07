@@ -5,7 +5,7 @@ import path from "node:path";
 
 const PORT = Number(process.env.PORT || 3000);
 const OUTPUT_ROOT = path.resolve(process.env.OUTPUT_ROOT || "output");
-const PUBLIC_DIR = path.resolve(process.env.PUBLIC_DIR || "public");
+const PUBLIC_DIR = path.resolve(process.env.PUBLIC_DIR || "client/dist");
 
 interface Companion {
   exchange: string;

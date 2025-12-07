@@ -7,16 +7,29 @@
     "node": ">=22.0.0"
   },
   "scripts": {
-    "start": "npm run build && node dist/cli.js",
-    "build": "tsc -p tsconfig.json",
+    "start": "npm run build:core && node dist/core/cli.js",
+    "build": "npm run build:core && npm run build:client",
+    "build:core": "tsc -p tsconfig.json",
+    "build:client": "vite build --config client/vite.config.ts",
     "lint": "tsc --noEmit",
-    "serve": "npm run build && node dist/server.js"
+    "serve": "npm run build && node dist/server.js",
+    "dev:client": "vite dev --config client/vite.config.ts",
+    "check:client": "svelte-check --tsconfig client/tsconfig.json"
   },
   "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^3.1.2",
     "@types/node": "^22.7.4",
-    "typescript": "^5.6.3"
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.47",
+    "svelte": "^4.2.18",
+    "svelte-check": "^4.0.5",
+    "svelte-preprocess": "^5.1.4",
+    "tailwindcss": "^3.4.13",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10"
   },
   "dependencies": {
+    "lightweight-charts": "^4.1.0",
     "ws": "^8.18.0"
   }
 }
