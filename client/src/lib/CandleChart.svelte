@@ -3,9 +3,7 @@
   import { onDestroy, onMount } from "svelte";
   import type { Candle, Meta } from "./types.js";
   import { meta as metaStore, status as statusStore } from "./viewerStore.js";
-  import type { ViewerWs } from "./viewerWs.js";
-
-  export let ws: ViewerWs;
+  import { onCandles, requestSlice } from "./viewerWs.js";
 
   let chartEl: HTMLDivElement;
   let chart: IChartApi | null = null;
@@ -20,13 +18,13 @@
 
   onMount(() => {
     setupChart();
-    unsubCandles = ws.onCandles((fromIndex, candles) => ingest(fromIndex, candles));
+    unsubCandles = onCandles((fromIndex, candles) => ingest(fromIndex, candles));
     unsubMeta = metaStore.subscribe((m) => {
       currentMeta = m;
       reset();
       if (m) {
         const fromIdx = Math.max(0, m.anchorIndex - 500);
-        ws.requestSlice(fromIdx, m.anchorIndex);
+        requestSlice(fromIdx, m.anchorIndex, "initial load");
       }
     });
     unsubStatus = statusStore.subscribe((s) => {
@@ -64,13 +62,14 @@
       const maxTime = sorted[sorted.length - 1].time * 1000;
       const fromMs = Number(range.from) * 1000;
       const toMs = Number(range.to) * 1000;
-      if (fromMs < minTime + currentMeta.timeframeMs) {
-        const nextFrom = Math.max(0, loadedIndex.min - 500);
-        ws.requestSlice(nextFrom, loadedIndex.min - 1);
+      const margin = currentMeta.timeframeMs * 2;
+      if (fromMs < minTime + margin && loadedIndex.min! > 0) {
+        const nextFrom = Math.max(0, loadedIndex.min! - 500);
+        requestSlice(nextFrom, loadedIndex.min! - 1, "scroll left");
       }
-      if (toMs > maxTime - currentMeta.timeframeMs) {
-        const nextTo = Math.min(currentMeta.records - 1, loadedIndex.max + 500);
-        ws.requestSlice(loadedIndex.max + 1, nextTo);
+      if (toMs > maxTime - margin && loadedIndex.max! < currentMeta.records - 1) {
+        const nextTo = Math.min(currentMeta.records - 1, loadedIndex.max! + 500);
+        requestSlice(loadedIndex.max! + 1, nextTo, "scroll right");
       }
     });
   }
@@ -84,6 +83,7 @@
 
   function ingest(fromIndex: number, candles: Candle[]) {
     if (!currentMeta) return;
+    if (!candles.length) return;
     let newMin = loadedIndex.min;
     let newMax = loadedIndex.max;
     candles.forEach((c, i) => {

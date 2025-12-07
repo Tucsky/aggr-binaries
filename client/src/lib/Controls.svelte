@@ -1,9 +1,8 @@
 <script lang="ts">
-  import { createEventDispatcher, onDestroy } from "svelte";
+  import { onDestroy } from "svelte";
   import { get } from "svelte/store";
   import { collapsed, meta, prefs, savePrefs, status } from "./viewerStore.js";
-
-  const dispatch = createEventDispatcher<{ connect: { start?: string }; disconnect: void }>();
+  import { connect, disconnect } from "./viewerWs.js";
 
   let local = get(prefs);
 
@@ -14,13 +13,13 @@
     collapsed.update((v) => !v);
   }
 
-  function connect() {
+  function handleConnect() {
     savePrefs(local);
-    dispatch("connect", { start: local.start });
+    connect(local);
   }
 
-  function disconnect() {
-    dispatch("disconnect");
+  function handleDisconnect() {
+    disconnect();
   }
 
   $: if (!local.collector) local.collector = "PI";
@@ -78,7 +77,7 @@
     </label>
     <button
       class="mt-1 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold px-3 py-2 rounded"
-      on:click={$status === "connected" ? disconnect : connect}
+      on:click={$status === "connected" ? handleDisconnect : handleConnect}
     >
       {$status === "connected" ? "Disconnect" : "Connect"}
     </button>

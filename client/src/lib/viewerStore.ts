@@ -24,7 +24,7 @@ export function savePrefs(value: Prefs): void {
   }
 }
 
-function loadPrefs(): Prefs {
+export function loadPrefs(): Prefs {
   try {
     const raw = localStorage.getItem(PREF_KEY);
     if (!raw) return defaultPrefs;
