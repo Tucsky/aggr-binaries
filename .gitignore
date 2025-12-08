@@ -8,3 +8,4 @@ dist/
 output/
 convert-progress.json
 indexer.config.json
+convert.log

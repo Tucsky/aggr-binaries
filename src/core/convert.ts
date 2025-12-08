@@ -33,19 +33,65 @@ interface LegacyMeta {
   hasHour: boolean;
 }
 
+interface KillerCounts {
+  cols: number;
+  unknownExchange: number;
+  nonFinite: number;
+  invalidSide: number;
+}
+
+const LOG_PATH = path.resolve("convert.log");
+let logStream: import("node:fs").WriteStream | null = null;
+let logStreamErrored = false;
+
+function ensureLogStream(): import("node:fs").WriteStream | null {
+  if (logStream || logStreamErrored) return logStream;
+  try {
+    logStream = createWriteStream(LOG_PATH, { flags: "a" });
+    logStream.on("error", (err) => {
+      logStreamErrored = true;
+      console.warn(`[convert] failed to write log ${LOG_PATH}: ${String(err)}`);
+    });
+  } catch (err) {
+    logStreamErrored = true;
+    console.warn(`[convert] failed to open log ${LOG_PATH}: ${String(err)}`);
+    return null;
+  }
+  return logStream;
+}
+
+function mirrorLog(line: string): void {
+  const stream = ensureLogStream();
+  if (!stream) return;
+  if (!stream.write(`${line}\n`)) {
+    stream.once("drain", () => {});
+  }
+}
+
+function convertLog(line: string): void {
+  console.log(line);
+  mirrorLog(line);
+}
+
+function convertWarn(line: string): void {
+  console.warn(line);
+  mirrorLog(line);
+}
+
 export async function runConvert(config: Config, db: Db): Promise<void> {
   const manifestPath = path.resolve("convert-progress.json");
   const useManifest = !config.exchange && !config.symbol && !config.force;
   const workers = resolveWorkers(config);
+  const allowExchange = config.exchange ? config.exchange.toUpperCase() : null;
+  const allowSymbol = config.symbol ? config.symbol.toUpperCase() : null;
+  const runStarted = Date.now();
 
   const manifest = await loadManifest(manifestPath);
   const candidates = loadLegacyCandidates(db, config.collector, config.includePaths);
   const metaByPath = new Map(candidates.map((m) => [m.relativePath, m]));
 
   if (useManifest && manifest.inProgress.size) {
-    console.log(
-      `[convert] cleaning ${manifest.inProgress.size} in-progress files from previous run`,
-    );
+    convertLog(`[convert] cleaning ${manifest.inProgress.size} in-progress files from previous run`);
     for (const rel of manifest.inProgress) {
       const meta = metaByPath.get(rel);
       if (meta) await removeOutputsForMeta(meta, config.root);
@@ -55,10 +101,7 @@ export async function runConvert(config: Config, db: Db): Promise<void> {
     await saveManifest(manifest);
   }
 
-  const allowExchange = config.exchange ? config.exchange.toUpperCase() : undefined;
-  const allowSymbol = config.symbol;
-
-  console.log(
+  convertLog(
     `[convert] files=${candidates.length} workers=${workers} filters=${config.collector ?? "ALL"}/${allowExchange ?? "ALL"}/${allowSymbol ?? "ALL"} manifest=${useManifest ? "on" : "off"}`,
   );
 
@@ -84,7 +127,7 @@ export async function runConvert(config: Config, db: Db): Promise<void> {
           manifest.file.inProgress = Array.from(manifest.inProgress);
           await saveManifest(manifest);
         }
-        const res = await convertSingleFile(meta, config, allowExchange, allowSymbol);
+        const res = await convertSingleFile(meta, config);
         if (useManifest) {
           manifest.inProgress.delete(meta.relativePath);
           manifest.file.inProgress = Array.from(manifest.inProgress);
@@ -94,8 +137,8 @@ export async function runConvert(config: Config, db: Db): Promise<void> {
         totalLines += res.linesRead;
         totalTrades += res.tradesWritten;
         if (processed % 50 === 0 || processed === candidates.length) {
-          console.log(
-            `[convert] progress ${processed}/${candidates.length} lines=${totalLines} trades=${totalTrades}`,
+          convertLog(
+            `[convert] progress ${processed}/${candidates.length} lines=${formatCount(totalLines)} trades=${formatCount(totalTrades)}`,
           );
         }
       }
@@ -104,8 +147,9 @@ export async function runConvert(config: Config, db: Db): Promise<void> {
 
   await Promise.all(workerFns);
 
-  console.log(
-    `[convert] done files=${processed}/${candidates.length} lines=${totalLines} trades=${totalTrades}`,
+  const totalElapsed = ((Date.now() - runStarted) / 1000).toFixed(2);
+  convertLog(
+    `[convert] done files=${processed}/${candidates.length} lines=${formatCount(totalLines)} trades=${formatCount(totalTrades)} elapsed=${totalElapsed}s`,
   );
 }
 
@@ -192,9 +236,7 @@ function formatUtcToken(ts: number, includeHour: boolean): string {
 
 async function convertSingleFile(
   meta: LegacyMeta,
-  config: Config,
-  allowExchange?: string,
-  allowSymbol?: string,
+  config: Config
 ): Promise<{ linesRead: number; tradesWritten: number }> {
   const fullPath = path.join(config.root, meta.relativePath);
   const outToken = formatUtcToken(meta.utcStart, meta.hasHour);
@@ -205,13 +247,19 @@ async function convertSingleFile(
   );
 
   const started = Date.now();
-  console.log(`[convert] start ${meta.relativePath}`);
+  convertLog(`[convert] start ${meta.relativePath}`);
 
   const streams = new Map<string, { gzip: zlib.Gzip; file: import("node:fs").WriteStream }>();
   let linesRead = 0;
   let tradesWritten = 0;
+  const killerCounts: KillerCounts = {
+    cols: 0,
+    unknownExchange: 0,
+    nonFinite: 0,
+    invalidSide: 0,
+  };
 
-  const input = createReadStream(fullPath);
+  const input = createReadStream(fullPath, { highWaterMark: 1 << 20 });
   const rl = readline.createInterface({ input, crlfDelay: Infinity });
 
   try {
@@ -219,10 +267,8 @@ async function convertSingleFile(
       const line = rawLine.trim();
       if (!line) continue;
       linesRead += 1;
-      const trade = parseLegacyTrade(line, meta.relativePath, linesRead);
+      const trade = parseLegacyTrade(line, meta.relativePath, linesRead, killerCounts);
       if (!trade) continue;
-      if (allowExchange && trade.exchange !== allowExchange) continue;
-      if (allowSymbol && trade.symbol !== allowSymbol) continue;
       const corrected = applyCorrections(trade);
       if (!corrected) continue;
 
@@ -232,7 +278,7 @@ async function convertSingleFile(
         const outDir = path.join(outDirBase, corrected.exchange, corrected.symbol);
         await fs.mkdir(outDir, { recursive: true });
         const outPath = path.join(outDir, `${outToken}.gz`);
-        const writeStream = createWriteStream(outPath);
+        const writeStream = createWriteStream(outPath, { highWaterMark: 1 << 20 });
         const gzip = zlib.createGzip();
         gzip.pipe(writeStream);
         stream = { gzip, file: writeStream };
@@ -261,23 +307,44 @@ async function convertSingleFile(
   }
 
   const elapsed = ((Date.now() - started) / 1000).toFixed(2);
-  console.log(
-    `[convert] done ${meta.relativePath} lines=${linesRead} trades=${tradesWritten} elapsed=${elapsed}s`,
-  );
+  const offset = tradesWritten - linesRead;
+  const parts = [
+    `[convert] done ${meta.relativePath}`,
+    `total=${formatCount(tradesWritten)}`,
+    `offset=${offset}`,
+  ];
+  const killerTuples: Array<[number, string]> = [
+    [killerCounts.unknownExchange, "unx"],
+    [killerCounts.nonFinite, "nan"],
+    [killerCounts.cols, "inv"],
+    [killerCounts.invalidSide, "sd"],
+  ];
+  for (const [count, label] of killerTuples) {
+    if (count > 0) parts.push(`${label}=${count}`);
+  }
+  parts.push(`elapsed=${elapsed}s`);
+  convertLog(parts.join(" "));
 
   return { linesRead, tradesWritten };
 }
 
-function parseLegacyTrade(line: string, file: string, lineNo: number): Trade | null {
+function parseLegacyTrade(
+  line: string,
+  file: string,
+  lineNo: number,
+  killers?: KillerCounts,
+): Trade | null {
   const parts = line.split(/\s+/);
   if (parts.length < 5) {
-    console.log(`Invalid legacy line (cols<5) ${file}:${lineNo} : ${line}`);
+    if (killers) killers.cols += 1;
+    convertLog(`Invalid legacy line (cols<5) ${file}:${lineNo} : ${line}`);
     return null;
   }
   const rawExchange = parts[0];
   const lower = rawExchange.toLowerCase();
   const mapped = LEGACY_MAP[lower];
   if (!mapped) {
+    if (killers) killers.unknownExchange += 1;
     // console.log(`Unknown legacy exchange "${rawExchange}" at ${file}:${lineNo} : ${line}`);
     return null;
   }
@@ -287,11 +354,13 @@ function parseLegacyTrade(line: string, file: string, lineNo: number): Trade | n
   const sideToken = parts[4];
   const liquidationToken = parts[5];
   if (!Number.isFinite(ts) || !Number.isFinite(price) || !Number.isFinite(size)) {
-    console.log(`Non-finite field at ${file}:${lineNo} : ${line}`);
+    if (killers) killers.nonFinite += 1;
+    convertLog(`Non-finite field at ${file}:${lineNo} : ${line}`);
     return null;
   }
   if (sideToken !== "1" && sideToken !== "0") {
-    console.log(`Invalid side token "${sideToken}" at ${file}:${lineNo} : ${line}`);
+    if (killers) killers.invalidSide += 1;
+    convertLog(`Invalid side token "${sideToken}" at ${file}:${lineNo} : ${line}`);
     return null;
   }
   return {
@@ -303,6 +372,18 @@ function parseLegacyTrade(line: string, file: string, lineNo: number): Trade | n
     exchange: mapped[0],
     symbol: mapped[1],
   };
+}
+
+function formatCount(value: number): string {
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000_000) return `${trimTrailingZero((value / 1_000_000_000).toFixed(1))}B`;
+  if (abs >= 1_000_000) return `${trimTrailingZero((value / 1_000_000).toFixed(1))}M`;
+  if (abs >= 1_000) return `${trimTrailingZero((value / 1_000).toFixed(1))}k`;
+  return String(value);
+}
+
+function trimTrailingZero(num: string): string {
+  return num.replace(/\.0$/, "");
 }
 
 function onceDrain(stream: zlib.Gzip): Promise<void> {
@@ -368,7 +449,7 @@ async function saveManifest(manifest: ManifestState): Promise<void> {
   try {
     await fs.writeFile(manifest.path, body);
   } catch (err) {
-    console.warn(`[convert] failed to write manifest ${manifest.path}: ${String(err)}`);
+    convertWarn(`[convert] failed to write manifest ${manifest.path}: ${String(err)}`);
   }
   manifest.file = payload;
 }
