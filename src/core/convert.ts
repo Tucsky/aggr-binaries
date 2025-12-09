@@ -78,6 +78,13 @@ function convertWarn(line: string): void {
   mirrorLog(line);
 }
 
+function sanitizeLineForLog(line: string): string {
+  if (!line) return line;
+  // allow tab and printable ASCII
+  if (/[^\t\x20-\x7e]/.test(line)) return "???";
+  return line.length > 160 ? `${line.slice(0, 160)}…` : line;
+}
+
 export async function runConvert(config: Config, db: Db): Promise<void> {
   const manifestPath = path.resolve("convert-progress.json");
   const useManifest = !config.exchange && !config.symbol && !config.force;
@@ -193,13 +200,18 @@ function deriveMeta(row: FileRow): LegacyMeta | null {
   if (parts.length < 2) return null;
   const collectorDir = parts[0];
   const collector = row.collector ?? collectorDir;
+  const collectorUpper = collector.toUpperCase();
   const collectorInPath = collectorDir.toUpperCase() === collector.toUpperCase();
   const bucketParts = collectorInPath ? parts.slice(1, -1) : parts.slice(0, -1);
   const bucket = bucketParts.join("/");
   const fileName = parts[parts.length - 1];
   const dateToken = extractDateToken(stripCompression(fileName));
   const hasHour = dateToken.length > "YYYY-MM-DD".length;
-  const utcStart = row.start_ts ?? parseLegacyStartTs(dateToken) ?? 0;
+  let utcStart: number =
+    collectorUpper === "PI"
+      ? parseLegacyStartTsPi(dateToken) ?? 0
+      : parseLegacyStartTs(dateToken) ?? 0;
+  if (utcStart === 0) throw new Error(`Cannot parse date token "${dateToken}" in ${row.relative_path}`);
   return {
     relativePath: row.relative_path,
     collector,
@@ -209,6 +221,29 @@ function deriveMeta(row: FileRow): LegacyMeta | null {
     utcStart,
     hasHour,
   };
+}
+
+const HOUR_MS = 60 * 60 * 1000;
+const PI_LABEL_PARIS_END = 2019121917; // inclusive
+const PI_LABEL_UTC_START = 2020022916; // inclusive
+const PI_LABEL_LAG_START = 2020032905; // inclusive
+const PI_LABEL_LAG_END = 2020100709; // inclusive
+
+function parseLegacyStartTsPi(token: string): number | undefined {
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:-(\d{2}))?$/.exec(token);
+  if (!m) return undefined;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  const hour = m[4] ? Number(m[4]) : 0;
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day) || !Number.isFinite(hour)) return undefined;
+  const label = ((year * 100 + month) * 100 + day) * 100 + hour;
+  const baseUtc = Date.UTC(year, month - 1, day, hour);
+  if (label <= PI_LABEL_PARIS_END) return parseLegacyStartTs(token); // Paris (DST aware)
+  if (label < PI_LABEL_UTC_START) return parseLegacyStartTs(token); // gap but keep Paris rule
+  if (label < PI_LABEL_LAG_START) return baseUtc; // filenames in UTC
+  if (label <= PI_LABEL_LAG_END) return baseUtc - HOUR_MS; // filenames are UTC+1 (lagging DST)
+  return baseUtc; // remainder effectively UTC
 }
 
 function extractDateToken(baseName: string): string {
@@ -240,6 +275,7 @@ async function convertSingleFile(
 ): Promise<{ linesRead: number; tradesWritten: number }> {
   const fullPath = path.join(config.root, meta.relativePath);
   const outToken = formatUtcToken(meta.utcStart, meta.hasHour);
+  console.log(`Converting ${meta.relativePath} → ${outToken}.gz`);
   const outDirBase = path.join(
     config.root,
     meta.collectorInPath ? meta.collector : "",
@@ -285,8 +321,9 @@ async function convertSingleFile(
         streams.set(key, stream);
       }
       const side = corrected.side === "buy" ? "1" : "0";
-      const liq = corrected.liquidation ? "1" : "0";
-      const outLine = `${corrected.ts} ${corrected.price} ${corrected.size} ${side} ${liq}\n`;
+      const outLine = corrected.liquidation
+        ? `${corrected.ts} ${corrected.price} ${corrected.size} ${side} 1\n`
+        : `${corrected.ts} ${corrected.price} ${corrected.size} ${side}\n`;
       if (!stream.gzip.write(outLine)) {
         await onceDrain(stream.gzip);
       }
@@ -337,7 +374,7 @@ function parseLegacyTrade(
   const parts = line.split(/\s+/);
   if (parts.length < 5) {
     if (killers) killers.cols += 1;
-    convertLog(`Invalid legacy line (cols<5) ${file}:${lineNo} : ${line}`);
+    convertLog(`Invalid legacy line (cols<5) ${file}:${lineNo} : ${sanitizeLineForLog(line)}`);
     return null;
   }
   const rawExchange = parts[0];
@@ -355,12 +392,12 @@ function parseLegacyTrade(
   const liquidationToken = parts[5];
   if (!Number.isFinite(ts) || !Number.isFinite(price) || !Number.isFinite(size)) {
     if (killers) killers.nonFinite += 1;
-    convertLog(`Non-finite field at ${file}:${lineNo} : ${line}`);
+    convertLog(`Non-finite field at ${file}:${lineNo} : ${sanitizeLineForLog(line)}`);
     return null;
   }
   if (sideToken !== "1" && sideToken !== "0") {
     if (killers) killers.invalidSide += 1;
-    convertLog(`Invalid side token "${sideToken}" at ${file}:${lineNo} : ${line}`);
+    convertLog(`Invalid side token "${sideToken}" at ${file}:${lineNo} : ${sanitizeLineForLog(line)}`);
     return null;
   }
   return {

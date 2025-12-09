@@ -12,12 +12,13 @@ Target: index ~12M tick-trade files (~3–4 TB) and convert them into **gap-awar
 
 - **2018-04-14** RAM starts legacy collection. Daily files like `BTCUSD_2018-11-29`. Rows: `{exchange} {ts_ms} {price} {size} {side(1=buy)} {liquidation?}`.
 - **2018-12-02 10:37** RAM switches to 4h files (filenames in Paris time, UTC+1).
-- **2019-03-01** PI starts legacy collection.
+- **2019-03-01** PI starts legacy collection (filenames in Paris time; in sync with RAM).
 - **2019-04-01** DST to UTC+2 (filenames reflect Paris summer time).
 - **2019-10-28** DST back to UTC+1.
-- **2019-12-19 17:00** PI stops.
-- **2020-02-29 16:00** PI resumes.
-- **2020-10-07 09:00** Last PI legacy file.
+- **2019-12-19 17:00** PI stops mid-file.
+- **2020-02-29 16:00** PI resumes; filenames appear to be UTC until **2020-03-29 05**.
+- **2020-03-29 05 → 2020-10-07 09** PI filenames lag DST by +1h (UTC+1) while France is UTC+2.
+- **2020-10-07 09:00** Last PI legacy file (PI shuts down before DST back).
 - **2021-05-24 12:40** PI switches to logical structure (UTC filenames, gzip, 4h).
 - **2021-07-01** RAM switches to logical structure (UTC filenames; briefly hourly, then 4h).
 - **2021-08-08 20:00** RAM settles on 4h (00,04,08,12,16,20).
