@@ -4,18 +4,17 @@ import readline from "node:readline";
 import zlib from "node:zlib";
 import type { Config } from "./config.js";
 import type { Db } from "./db.js";
+import { Collector, type FileRow } from "./model.js";
+import { normalizeSymbol } from "./normalize.js";
 import {
+  CANDLE_BYTES,
   PRICE_SCALE,
   VOL_SCALE,
-  CANDLE_BYTES,
-  applyCorrections,
-  parseLegacyLine,
-  parseLogicalLine,
   accumulate,
-  type Candle,
+  applyCorrections,
+  parseTradeLine,
+  type Candle
 } from "./trades.js";
-import { Collector, Era, type FileRow } from "./model.js";
-import { normalizeSymbol } from "./normalize.js";
 
 interface Accumulator {
   collector: string;
@@ -96,10 +95,10 @@ function countCandidateFiles(db: Db, collectors: string[], allowExchange?: strin
   const stmt = db.db.prepare(
     `SELECT COUNT(*) as count FROM files
      WHERE collector IN (${collectors.map((_, i) => `:c${i}`).join(",")})
-       AND (era = :legacyEra OR ((:allowExchange IS NULL OR exchange = :allowExchange) AND (:allowSymbol IS NULL OR symbol = :allowSymbol)));`,
+       AND (:allowExchange IS NULL OR exchange = :allowExchange)
+       AND (:allowSymbol IS NULL OR symbol = :allowSymbol);`,
   );
   const params: Record<string, string | null> = {
-    legacyEra: Era.Legacy,
     allowExchange: allowExchange ?? null,
     allowSymbol: allowSymbol ?? null,
   };
@@ -112,11 +111,11 @@ function iterateFiles(db: Db, collectors: string[], allowExchange?: string, allo
   const stmt = db.db.prepare(
     `SELECT * FROM files
      WHERE collector IN (${collectors.map((_, i) => `:c${i}`).join(",")})
-       AND (era = :legacyEra OR ((:allowExchange IS NULL OR exchange = :allowExchange) AND (:allowSymbol IS NULL OR symbol = :allowSymbol)))
+       AND (:allowExchange IS NULL OR exchange = :allowExchange)
+       AND (:allowSymbol IS NULL OR symbol = :allowSymbol)
      ORDER BY collector, COALESCE(start_ts, 0), relative_path;`,
   );
   const params: Record<string, string | null> = {
-    legacyEra: Era.Legacy,
     allowExchange: allowExchange ?? null,
     allowSymbol: allowSymbol ?? null,
   };
@@ -206,10 +205,8 @@ async function processFiles(opts: {
   }, 10_000);
 
   for (const file of files) {
-    if (file.era !== Era.Legacy) {
-      if (allowExchange && file.exchange && file.exchange !== allowExchange) continue;
-      if (allowSymbol && file.symbol && file.symbol !== allowSymbol) continue;
-    }
+    if (allowExchange && file.exchange && file.exchange !== allowExchange) continue;
+    if (allowSymbol && file.symbol && file.symbol !== allowSymbol) continue;
 
     processedFiles += 1;
     const { linesRead, tradesKept } = await processSingleFile({
@@ -244,10 +241,14 @@ async function processSingleFile(opts: {
   const { file, allowExchange, allowSymbol, config, outRoot, accMap, timeframeMs } = opts;
 
   const fullPath = path.join(config.root, file.relative_path);
-  const isLegacy = file.era === Era.Legacy;
   const pathExchange: string | null = file.exchange ?? null;
   const pathSymbol: string | null = file.symbol ?? null;
   const fileStartTs: number | null = typeof file.start_ts === "number" ? file.start_ts : null;
+
+  if (!pathExchange || !pathSymbol) {
+    console.warn(`[process] skipping ${file.relative_path} due to missing exchange/symbol metadata`);
+    return { linesRead: 0, tradesKept: 0 };
+  }
 
   let linesRead = 0;
   let tradesKept = 0;
@@ -257,7 +258,7 @@ async function processSingleFile(opts: {
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
   for await (const line of rl) {
     linesRead += 1;
-    const trade = isLegacy ? parseLegacyLine(line) : parseLogicalLine(line, pathExchange, pathSymbol);
+    const trade = parseTradeLine(line, pathExchange, pathSymbol);
     if (!trade) continue;
 
     if (allowExchange && trade.exchange !== allowExchange) continue;

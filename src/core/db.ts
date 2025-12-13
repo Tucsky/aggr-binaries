@@ -19,9 +19,9 @@ export function openDatabase(dbPath: string): Db {
 
   const insertStmt = db.prepare(
     `INSERT OR IGNORE INTO files
-      (root_id, relative_path, collector, era, exchange, symbol, start_ts, ext)
+      (root_id, relative_path, collector, exchange, symbol, start_ts, ext)
      VALUES
-      (:rootId, :relativePath, :collector, :era, :exchange, :symbol, :startTs, :ext);`,
+      (:rootId, :relativePath, :collector, :exchange, :symbol, :startTs, :ext);`,
   );
 
   const ensureRootStmt = db.prepare("INSERT OR IGNORE INTO roots(path) VALUES(:path);");
@@ -57,7 +57,6 @@ function migrate(db: DatabaseSync): void {
       root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
       relative_path TEXT NOT NULL,
       collector TEXT NOT NULL,
-      era TEXT NOT NULL,
       exchange TEXT,
       symbol TEXT,
       start_ts INTEGER,
@@ -86,7 +85,6 @@ function insertMany(
         rootId: row.rootId,
         relativePath: row.relativePath,
         collector: row.collector,
-        era: row.era,
         exchange: row.exchange ?? null,
         symbol: row.symbol ?? null,
         startTs: row.startTs ?? null,

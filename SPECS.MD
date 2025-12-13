@@ -2,13 +2,15 @@
 
 Target: index ~12M tick-trade files (~3–4 TB) and convert them into **gap-aware 1m OHLC+ binaries**, one file per market per collector (RAM, PI). Performance, correctness, and resumability are mandatory.
 
-- Two eras: **legacy** (pre-2021) and **logical** (post-2021).
+- Single logical layout for all collectors (there use to be two structures, but the legacy input has been converted away into logical which is the one we only know now and will reference throughout the repo).
 - Two collectors: **RAM** (primary) and **PI** (secondary/backup).
 - Processing must normalize symbols, fix known data issues, and be rerunnable without reprocessing old input.
 
 ---
 
 ## II. Collection timeline (key milestones)
+
+Historical reference (⚠️ all legacy inputs have already been normalized into the logical layout):
 
 - **2018-04-14** RAM starts legacy collection. Daily files like `BTCUSD_2018-11-29`. Rows: `{exchange} {ts_ms} {price} {size} {side(1=buy)} {liquidation?}`.
 - **2018-12-02 10:37** RAM switches to 4h files (filenames in Paris time, UTC+1).
@@ -22,24 +24,21 @@ Target: index ~12M tick-trade files (~3–4 TB) and convert them into **gap-awar
 - **2021-05-24 12:40** PI switches to logical structure (UTC filenames, gzip, 4h).
 - **2021-07-01** RAM switches to logical structure (UTC filenames; briefly hourly, then 4h).
 - **2021-08-08 20:00** RAM settles on 4h (00,04,08,12,16,20).
-
+- **2021-08-08 - 2023** Starting to collect more markets (alt coins)
+- **2025-06-03 13:49** Remove most of alt coins, focus on top 14 coins (~700-800 markets)
+- **2025-12-06** Started working on aggr-binaries (this repo) to index/normalize/combine/compact the collected data
+- **2025-12-09** Normalized legacy collection into logical structure, removed legacy aspect from this repo
 ---
 
 ## III. Structure & normalization
 
-### Legacy era (path)
-- Path: `{collector}/{bucket}/BTCUSD_YYYY-...`
-- Exchange is **not** in the path; inferred per row using a fixed map.
-- `start_ts` is parsed from filename in **Europe/Paris** local time (DST aware), then stored as UTC ms.
-
-### Logical era (path)
+### Logical layout
 - Path: `{collector}/{bucket}/{exchange}/{symbol}/{YYYY-MM-DD[-HH][.gz]}`
-- Exchange/symbol come from the path.
-- `start_ts` parsed from filename as **UTC**.
+- Exchange/symbol come from the path; filenames are parsed as UTC.
+- Content: `{ts_ms} {price} {size} {side(1=buy)} {liquidation?}` (1 trade = 1 line)
+- Files may be plain text or gzip-compressed (probably 99.9% are gzip tho).
 
 ### Symbol/exchange normalization
-- Legacy row exchange map:
-  `bitfinex→BITFINEX/BTCUSD`, `binance→BINANCE/btcusdt`, `okex→OKEX/BTC-USDT`, `kraken→KRAKEN/XBT-USD`, `gdax→COINBASE/BTC-USD`, `poloniex→POLONIEX/BTC_USDT`, `huobi→HUOBI/btcusdt`, `bitstamp→BITSTAMP/btcusd`, `bitmex→BITMEX/XBTUSD`, `binance_futures→BINANCE_FUTURES/btcusdt`, `deribit→DERIBIT/BTC-PERPETUAL`, `ftx→FTX/BTC-PERP`, `bybit→BYBIT/BTCUSD`, `hitbtc→HITBTC/BTCUSD`.
 - Poloniex flip (2021-08-18 16:00): `USDT_BTC` → `BTC_USDT` (apply to all pairs; enforce quote-second form always).
 - Bitget rename (2025-11-28): spot gains `-SPOT`; `_UMCBL/_DMCBL/_CMCBL` dropped from perps; suffix-less before the cut → spot (`-SPOT`), after the cut → derivative.
 
@@ -89,14 +88,14 @@ Companion JSON example:
 
 ## VI. Indexing (Step 1)
 
-Persisted in SQLite (`files` table keyed by `(root_id, relative_path)`), columns: collector, era, exchange, symbol, start_ts, size, mtime_ms, ext. Runs are append-only (`INSERT OR IGNORE`); `--verify` optionally flags mutated size/mtime. `--include` allows partial subtree walks. Legacy `start_ts` is parsed in Paris local time; logical in UTC.
+Persisted in SQLite (`files` table keyed by `(root_id, relative_path)`), columns: collector, exchange, symbol, start_ts, ext. Runs are append-only (`INSERT OR IGNORE`); `--include` allows partial subtree walks. `start_ts` is parsed from the filename in UTC.
 
 ---
 
 ## VII. Processing (Step 2)
 
-- Load candidate files from SQLite ordered by collector, `start_ts`, path. Filters: collector/exchange/symbol. Logical files are pre-filtered by exchange/symbol; legacy files are always read (may contain multiple exchanges).
-- Stream each file once (gzip if needed); parse by era; apply normalization + corrections; dispatch to per-market accumulators created on demand.
+- Load candidate files from SQLite ordered by collector, `start_ts`, path. Filters: collector/exchange/symbol.
+- Stream each file once (gzip if needed); parse rows, apply normalization + corrections; dispatch to per-market accumulators created on demand.
 - Resume: if companion `lastInputStartTs` exists, skip files with `start_ts` older than that; skip trades earlier than companion `endTs` unless `--force`.
 - Accumulators hold 1m buckets; outputs written to `output/{collector}/{exchange}/{symbol}.bin` + companion JSON. Binary writes are chunked to reduce syscall overhead; gap-aware across previous + current range.
 - No DB “processed” flags; resume relies solely on companions.

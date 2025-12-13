@@ -1,7 +1,7 @@
 import path from "node:path";
-import { parseLegacyStartTs, parseLogicalStartTs } from "./dates.js";
+import { parseLogicalStartTs } from "./dates.js";
 import type { IndexedFile } from "./model.js";
-import { Collector, Era, QuoteCurrency } from "./model.js";
+import { Collector, QuoteCurrency } from "./model.js";
 
 const EXCHANGE_MAP: Record<string, string> = {
   bitfinex: "BITFINEX",
@@ -92,49 +92,25 @@ export function classifyPath(
 
   const fileName = segments[segments.length - 1];
   const ext = path.extname(fileName) || undefined;
-  const segsAfterCollector = segments.length - offset;
 
-  // logical: {collector?}/{bucket}/{exchange}/{symbol}/{file}
-  if (segsAfterCollector >= 4) {
-    const exchangeDir = segments[offset + 1];
-    const symbolDir = segments[offset + 2];
-    const baseName = stripCompression(fileName);
-    const startTs = parseLogicalStartTs(baseName);
-    const exchange = normalizeExchange(exchangeDir);
-    const symbol = normalizeSymbol(exchange, symbolDir, startTs);
+  // logical structure: {collector?}/{bucket}/{exchange}/{symbol}/{file}
+  const exchangeDir = segments[offset + 1];
+  const symbolDir = segments[offset + 2];
 
-    return {
-      rootId,
-      relativePath: normalizedPath,
-      collector,
-      era: Era.Logical,
-      exchange,
-      symbol,
-      startTs,
-      ext,
-    };
-  }
+  if (!exchangeDir || !symbolDir) return null;
 
-  // legacy: {collector?}/{bucket}/{file}
-  if (segsAfterCollector >= 2) {
-    const baseName = stripCompression(fileName);
-    const underscoreIdx = baseName.indexOf("_");
-    if (underscoreIdx === -1) return null;
-    const symbolToken = baseName.slice(0, underscoreIdx);
-    const dateToken = baseName.slice(underscoreIdx + 1);
-    const startTs = parseLegacyStartTs(dateToken);
+  const baseName = stripCompression(fileName);
+  const startTs = parseLogicalStartTs(baseName);
+  const exchange = normalizeExchange(exchangeDir);
+  const symbol = normalizeSymbol(exchange, symbolDir, startTs);
 
-    return {
-      rootId,
-      relativePath: normalizedPath,
-      collector,
-      era: Era.Legacy,
-      exchange: undefined,
-      symbol: symbolToken || undefined,
-      startTs,
-      ext,
-    };
-  }
-
-  return null;
+  return {
+    rootId,
+    relativePath: normalizedPath,
+    collector,
+    exchange,
+    symbol,
+    startTs,
+    ext,
+  };
 }
