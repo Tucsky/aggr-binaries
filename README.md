@@ -4,11 +4,10 @@ Tooling to index ~11M tick-trade files and turn them into gap-aware 1m OHLCV bin
 
 ## Features
 
-- **Index**: walk the input tree once, classify `legacy` vs `logical`, record collector/exchange/symbol/start_ts/ext into SQLite. Append-only: reruns insert only new paths (`INSERT OR IGNORE`). Legacy `start_ts` parsed as Europe/Paris (DST aware); logical parsed as UTC.
-- **Normalize**: path-based exchange/symbol normalization (Poloniex quote-second rule; Bitget 2025-11-28 rename; legacy exchange map when reading file contents).
+- **Index**: walk the input tree once, capture collector/exchange/symbol/start_ts/ext into SQLite. Append-only: reruns insert only new paths (`INSERT OR IGNORE`). Filenames are parsed as UTC.
+- **Normalize**: path-based exchange/symbol normalization (Poloniex quote-second rule; Bitget 2025-11-28 rename).
 - **Process**: stream each input file once, apply corrections, route trades into per-market accumulators on demand, then write `output/{collector}/{exchange}/{symbol}.bin` + companion JSON (`lastInputStartTs` for resume). Resume by skipping files with `start_ts < lastInputStartTs` and trades `< endTs` unless `--force`. Optional sparse output (only populated candles) and configurable timeframe (e.g., 1m, 5m, 1h).
-- **Convert**: transform legacy files into logical gzip text files (one per exchange/symbol per source file), applying the same corrections; resumeable via `convert-progress.json` manifest with in-progress cleanup.
-- **Filters**: optional `--collector/--exchange/--symbol` to narrow both file selection (logical only) and per-trade routing (legacy can still contain multiple exchanges).
+- **Filters**: optional `--collector/--exchange/--symbol` to narrow file selection and per-trade routing.
 - **Performance**: low-memory walk, batched SQLite writes, chunked binary writes (4096-candle blocks) to avoid millions of tiny syscalls, no per-trade DB I/O during processing.
 
 ## Installation
@@ -41,7 +40,6 @@ Subcommands:
 
 - `index` — build/append the SQLite inventory.
 - `process` — read indexed files, generate binaries.
-- `convert` — rewrite legacy files into logical structure (gzip text, UTC filenames, per-exchange splits).
 
 Shared flags (override config):
 
@@ -62,7 +60,6 @@ Processor flags:
 - `--timeframe <tf>` (e.g., 1m, 5m, 1h; default 1m)
 - `--sparse` write only populated candles (no gap fill; for testing)
 - `--force` ignore resume guards (`lastInputStartTs` / `endTs`)
-- `--workers <n>` (convert) parallel legacy files to convert (default: CPU-based)
 
 Examples:
 
@@ -78,16 +75,6 @@ npm start -- process --collector RAM --exchange BITMEX --symbol XBTUSD
 
 # process all collectors/markets (uses resume via companions)
 npm start -- process
-
-# convert all legacy files into logical layout (UTC filenames, gzipped)
-npm start -- convert
-
-# convert one exchange from legacy (debugging)
-npm start -- convert --collector RAM --exchange BITMEX --workers 1
-
-Convert notes:
-- Reads legacy rows from SQLite (filters honoured), converts filenames to UTC tokens, and writes gzip text files under the same bucket: `{collector?}/{bucket}/{exchange}/{symbol}/{UTC-token}.gz`.
-- Uses `convert-progress.json` for resume (skips completed files, cleans any in-progress outputs on start). The manifest is bypassed when `--exchange`/`--symbol` filters or `--force` are set.
 ```
 
 ## Schema (SQLite)
@@ -102,7 +89,6 @@ CREATE TABLE files (
   root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
   relative_path TEXT NOT NULL,
   collector TEXT NOT NULL,
-  era TEXT NOT NULL,
   exchange TEXT,
   symbol TEXT,
   start_ts INTEGER,
@@ -117,8 +103,7 @@ CREATE INDEX idx_files_collector ON files(collector);
 
 ## Processing notes
 
-- Legacy lines use a fixed exchange→(exchange,symbol) map; logical uses path exchange/symbol.
-- Corrections applied per trade (Bitfinex liquidation side flip; OKEX liquidation size/500 window; randomized side window).
+- Lines come from `{collector}/{bucket}/{exchange}/{symbol}/{UTC-token}[.gz]` and contain `{ts_ms} {price} {size} {side(1=buy)} {liquidation?}`; 
 - Accumulators are created on demand per (collector, exchange, symbol); each input file is streamed once, dispatching trades to the right accumulator.
 - Output companion JSON includes `lastInputStartTs` to skip already-processed files; trades older than `endTs` are ignored unless `--force`.
 - Binary writer emits gap-aware 1m candles across the observed/previous range; writes are chunked to keep syscalls low.

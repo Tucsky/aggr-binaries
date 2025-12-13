@@ -2,7 +2,7 @@ import path from "node:path";
 import type { Db } from "./db.js";
 import type { Config } from "./config.js";
 import { classifyPath } from "./normalize.js";
-import type { IndexStats, IndexedFile, FileRow } from "./model.js";
+import type { IndexStats, IndexedFile } from "./model.js";
 import { walkFiles } from "./walker.js";
 
 export async function runIndex(config: Config, db: Db): Promise<IndexStats> {
@@ -31,9 +31,9 @@ export async function runIndex(config: Config, db: Db): Promise<IndexStats> {
       batch = [];
     }
 
-  if (stats.seen % 10_000 === 0) {
-    logProgress(stats, batch.length);
-  }
+    if (stats.seen % 10_000 === 0) {
+      logProgress(stats, batch.length);
+    }
   }
 
   if (batch.length) {

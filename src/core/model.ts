@@ -3,11 +3,6 @@ export enum Collector {
   PI = "PI",
 }
 
-export enum Era {
-  Legacy = "legacy",
-  Logical = "logical",
-}
-
 export enum QuoteCurrency {
   USDT = "USDT",
   USDC = "USDC",
@@ -25,7 +20,6 @@ export enum QuoteCurrency {
 //   root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
 //   relative_path TEXT NOT NULL,
 //   collector TEXT NOT NULL,   -- RAM | PI
-//   era TEXT NOT NULL,         -- legacy | logical
 //   exchange TEXT,
 //   symbol TEXT,
 //   start_ts INTEGER,
@@ -41,7 +35,6 @@ export interface IndexedFile {
   rootId: number;
   relativePath: string; // POSIX separators
   collector: Collector;
-  era: Era;
   exchange?: string;
   symbol?: string;
   startTs?: number;
@@ -69,7 +62,6 @@ export interface FileRow {
   root_id: number;
   relative_path: string;
   collector: Collector;
-  era: Era;
   exchange?: string | null;
   symbol?: string | null;
   start_ts?: number | null;

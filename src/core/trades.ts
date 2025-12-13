@@ -29,41 +29,7 @@ export const PRICE_SCALE = 1e4; // int32 safe for typical crypto prices
 export const VOL_SCALE = 1e6; // quote volume micro units
 export const CANDLE_BYTES = 56;
 
-export const LEGACY_MAP: Record<string, [string, string]> = {
-  bitfinex: ["BITFINEX", "BTCUSD"],
-  binance: ["BINANCE", "btcusdt"],
-  okex: ["OKEX", "BTC-USDT"],
-  kraken: ["KRAKEN", "XBT-USD"],
-  gdax: ["COINBASE", "BTC-USD"],
-  poloniex: ["POLONIEX", "BTC_USDT"],
-  huobi: ["HUOBI", "btcusdt"],
-  bitstamp: ["BITSTAMP", "btcusd"],
-  bitmex: ["BITMEX", "XBTUSD"],
-  binance_futures: ["BINANCE_FUTURES", "btcusdt"],
-  deribit: ["DERIBIT", "BTC-PERPETUAL"],
-  ftx: ["FTX", "BTC-PERP"],
-  bybit: ["BYBIT", "BTCUSD"],
-  hitbtc: ["HITBTC", "BTCUSD"],
-};
-
-export function parseLegacyLine(line: string): Trade | null {
-  const parts = line.trim().split(/\s+/);
-  if (parts.length < 5) return null;
-  const rawEx = parts[0];
-  const ts = Number(parts[1]);
-  const price = Number(parts[2]);
-  const size = Number(parts[3]);
-  const side = parts[4] === "1" ? "buy" : "sell";
-  const liquidation = parts[5] === "1";
-  const mapped = LEGACY_MAP[rawEx];
-  if (!mapped) return null;
-  const [exchange, rawSymbol] = mapped;
-  const symbol = normalizeSymbol(exchange, rawSymbol, ts) ?? rawSymbol;
-  if (!Number.isFinite(ts) || !Number.isFinite(price) || !Number.isFinite(size)) return null;
-  return { ts, price, size, side, liquidation, exchange, symbol };
-}
-
-export function parseLogicalLine(
+export function parseTradeLine(
   line: string,
   pathExchange?: string | null,
   pathSymbol?: string | null,
