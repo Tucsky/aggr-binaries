@@ -1,83 +1,156 @@
-# AGGR index & processor
 
-Tooling to index ~11M tick-trade files and turn them into gap-aware 1m OHLCV binaries. Everything is local: Node.js + SQLite (no server).
+# AGGR index & processor — specification
 
-## Features
+Tooling to index ~11–12M tick-trade files (~3–4 TB) and convert them into **gap-aware OHLC+ binaries** (default 1m). Everything is local: Node.js + SQLite, no server dependency for the core pipeline. Performance, correctness, and resumability are mandatory design constraints.
 
-- **Index**: walk the input tree once, capture collector/exchange/symbol/start_ts/ext into SQLite. Append-only: reruns insert only new paths (`INSERT OR IGNORE`). Filenames are parsed as UTC.
-- **Normalize**: path-based exchange/symbol normalization (Poloniex quote-second rule; Bitget 2025-11-28 rename).
-- **Process**: stream each input file once, apply corrections, route trades into per-market accumulators on demand, then write `output/{collector}/{exchange}/{symbol}.bin` + companion JSON (`lastInputStartTs` for resume). Resume by skipping files with `start_ts < lastInputStartTs` and trades `< endTs` unless `--force`. Optional sparse output (only populated candles) and configurable timeframe (e.g., 1m, 5m, 1h).
-- **Filters**: optional `--collector/--exchange/--symbol` to narrow file selection and per-trade routing.
-- **Performance**: low-memory walk, batched SQLite writes, chunked binary writes (4096-candle blocks) to avoid millions of tiny syscalls, no per-trade DB I/O during processing.
+---
 
-## Installation
+## I. Context & goals
 
-Requires Node ≥ 22 (uses built-in `node:sqlite` and `--experimental-strip-types`).
+**Target**  
+- Index ~12M tick-trade files collected since 2018.
+- Convert them into **gap-aware OHLC+ binaries**, one binary per `(collector, exchange, symbol)`.
+- Output must be rerunnable, resumable, and deterministic.
 
-```bash
-npm install
+**Key constraints**
+- Single logical input layout for all collectors (legacy inputs already converted).
+- Two collectors:
+  - **RAM** (primary)
+  - **PI** (secondary / backup)
+- No per-trade database I/O during processing.
+- Resume must rely on output state, not DB flags.
+
+---
+
+## II. Collection timeline (historical reference)
+
+⚠️ All legacy inputs mentioned below have already been normalized into the logical layout. The timeline is kept verbatim for reasoning, validation, and audits.
+
+- **2018-04-14** RAM starts legacy collection.  
+  Daily files like `BTCUSD_2018-11-29`.  
+  Rows: `{exchange} {ts_ms} {price} {size} {side(1=buy)} {liquidation?}`.
+- **2018-12-02 10:37** RAM switches to 4h files (filenames in Paris time, UTC+1).
+- **2019-03-01** PI starts legacy collection (filenames in Paris time; in sync with RAM).
+- **2019-04-01** DST to UTC+2 (filenames reflect Paris summer time).
+- **2019-10-28** DST back to UTC+1.
+- **2019-12-19 17:00** PI stops mid-file.
+- **2020-02-29 16:00** PI resumes; filenames appear to be UTC until **2020-03-29 05**.
+- **2020-03-29 05 → 2020-10-07 09** PI filenames lag DST by +1h (UTC+1) while France is UTC+2.
+- **2020-10-07 09:00** Last PI legacy file (PI shuts down before DST back).
+- **2021-05-24 12:40** PI switches to logical structure (UTC filenames, gzip, 4h).
+- **2021-07-01** RAM switches to logical structure (UTC filenames; briefly hourly, then 4h).
+- **2021-08-08 20:00** RAM settles on 4h (00,04,08,12,16,20).
+- **2021-08-08 – 2023** Start collecting many more markets (altcoins).
+- **2025-06-03 13:49** Remove most altcoins, focus on top 14 coins (~700–800 markets).
+- **2025-12-06** Start work on `aggr-binaries` (this repo).
+- **2025-12-09** Legacy collections normalized into logical structure; legacy code paths removed.
+
+---
+
+## III. Logical input structure
+
+### Path layout
+
 ```
 
-Copy and edit `indexer.config.example.json` → `indexer.config.json` (overridable via `--config`):
+{collector}/{bucket}/{exchange}/{symbol}/{YYYY-MM-DD[-HH][.gz]}
+
+```
+
+- Exchange and symbol are derived from the path.
+- Filenames are parsed as **UTC**, regardless of historical origin.
+- Files may be plain text or gzip (≈99.9% gzip).
+
+### File content (1 trade per line)
+
+```
+
+{ts_ms} {price} {size} {side(1=buy)} {liquidation?}
+
+```
+
+---
+
+## IV. Symbol & exchange normalization
+
+Normalization is path-based and deterministic.
+
+### Poloniex
+- **2021-08-18 16:00**: `USDT_BTC` → `BTC_USDT`
+- Enforce **quote-second form** for all pairs, globally.
+
+### Bitget (2025-11-28 rename)
+- Spot markets gain `-SPOT`.
+- `_UMCBL`, `_DMCBL`, `_CMCBL` suffixes dropped from perps.
+- Before cut:
+  - Suffix-less → **spot** (`-SPOT`)
+- After cut:
+  - Suffix-less → **derivative**
+
+---
+
+## V. Per-trade data correction rules
+
+Applied during streaming, before accumulation.
+
+1. **Bitfinex liquidations**: flip side.
+2. **OKEX liquidation bug**  
+   Window: `1572940388059 ≤ ts < 1572964319495`  
+   Action: `size /= 500`
+3. **Bad non-liquidation sides**  
+   Window: `1574193600000 ≤ ts ≤ 1575489600000`  
+   Action: deterministic random side.
+4. **Corrupted / concatenated rows**  
+   Defensive parsing; drop invalid rows.
+5. Wick filtering existed historically but is **not applied** in current processing.
+
+---
+
+## VI. Output format
+
+### Candles
+
+- Gap-aware **1m candles** by default (configurable).
+- Every minute between previous companion range and new data is represented.
+
+**Per-candle binary layout (~56 B)**
+
+```
+OHLC:          4 × int32  = 16 B
+vBuy/vSell:    2 × int64  = 16 B   // quote volume
+cBuy/cSell:    2 × uint32 =  8 B   // trade counts
+lBuy/lSell:    2 × int64  = 16 B   // liquidation quote volume
+--------------------------------------------------------------
+
+Total ≈ 56 B
+```
+
+### Companion JSON
+
+Example:
 
 ```json
 {
-  "root": "/Volumes/AGGR/input",
-  "dbPath": "./index.sqlite",
-  "batchSize": 1000,
-  "includePaths": [],        // optional: restrict walk to subtrees
-  "outDir": "output",
+  "exchange": "BINANCE",
+  "symbol": "BTCUSDT",
   "timeframe": "1m",
-  "sparseOutput": false
+  "startTs": 1514764800000,
+  "endTs": 1735603200000,
+  "priceScale": 10000,
+  "volumeScale": 1000000,
+  "records": 10519200,
+  "lastInputStartTs": 1714608000000
 }
 ```
 
-## CLI (core)
+* `lastInputStartTs`: used to skip already-processed files.
+* Trades `< endTs` are ignored on resume unless `--force`.
 
-Entry: `npm start -- <subcommand> [flags]`
+---
 
-Subcommands:
+## VII. Indexing (step 1)
 
-- `index` — build/append the SQLite inventory.
-- `process` — read indexed files, generate binaries.
-
-Shared flags (override config):
-
-- `-r, --root <path>` input root
-- `-d, --db <path>` SQLite path
-- `--config <path>` config file (default `indexer.config.json` if present), `--no-config` to ignore
-- `--include <path>` repeatable, restrict index walk to relative subtrees
-
-Indexer flags:
-
-- `-b, --batch <n>` inserts per transaction (default 1000)
-
-Processor flags:
-
-- `--collector <name>` (RAM/PI)
-- `--exchange <EXCHANGE>`
-- `--symbol <SYMBOL>`
-- `--timeframe <tf>` (e.g., 1m, 5m, 1h; default 1m)
-- `--sparse` write only populated candles (no gap fill; for testing)
-- `--force` ignore resume guards (`lastInputStartTs` / `endTs`)
-
-Examples:
-
-```bash
-# index everything from config
-npm start -- index
-
-# index only a subtree
-npm start -- index --include "PI/2018-2019-2020"
-
-# process one market
-npm start -- process --collector RAM --exchange BITMEX --symbol XBTUSD
-
-# process all collectors/markets (uses resume via companions)
-npm start -- process
-```
-
-## Schema (SQLite)
+### SQLite schema
 
 ```sql
 CREATE TABLE roots (
@@ -96,30 +169,174 @@ CREATE TABLE files (
   created_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
   PRIMARY KEY (root_id, relative_path)
 );
+
 CREATE INDEX idx_files_exchange_symbol ON files(exchange, symbol);
 CREATE INDEX idx_files_start_ts ON files(start_ts);
 CREATE INDEX idx_files_collector ON files(collector);
 ```
 
-## Processing notes
+### Behavior
 
-- Lines come from `{collector}/{bucket}/{exchange}/{symbol}/{UTC-token}[.gz]` and contain `{ts_ms} {price} {size} {side(1=buy)} {liquidation?}`; 
-- Accumulators are created on demand per (collector, exchange, symbol); each input file is streamed once, dispatching trades to the right accumulator.
-- Output companion JSON includes `lastInputStartTs` to skip already-processed files; trades older than `endTs` are ignored unless `--force`.
-- Binary writer emits gap-aware 1m candles across the observed/previous range; writes are chunked to keep syscalls low.
+* Walk input tree once.
+* Parse filename → `start_ts` (UTC).
+* Append-only via `INSERT OR IGNORE`.
+* `--include` allows subtree-restricted walks.
+* No mutation or “processed” flags.
 
-## Preview module (frontend + websocket server)
+---
 
-Structure is split:
-- Core (indexer/processor) lives under `src/core`.
-- Preview websocket server under `src/server.ts`.
-- Frontend lives in `client/` (Svelte + Vite + Tailwind).
+## VIII. Processing (step 2)
 
-Commands:
-- `npm run dev:client` — run Vite dev server for the frontend.
-- `npm run build:client` — build static assets into `client/dist`.
-- `npm run serve` — build everything (core + client) and start the websocket/static server from `dist/server.js` (serves `client/dist`).
+### Core logic
 
-Preview WS endpoints:
-- `GET /` serves the built frontend.
-- `WS /ws?collector=...&exchange=...&symbol=...&start=ms` returns `meta` with timeframe/sparse/records/anchorIndex, and supports `slice` requests by candle index. Works with dense (gap-filled) and sparse binaries.
+* Load candidate files from SQLite ordered by:
+
+  * collector
+  * `start_ts`
+  * path
+* Optional filters:
+
+  * `--collector`
+  * `--exchange`
+  * `--symbol`
+* Stream each file **once** (gzip if needed).
+* Apply normalization + corrections per trade.
+* Dispatch trades into per-market accumulators created on demand.
+* Write:
+
+  ```
+  output/{collector}/{exchange}/{symbol}.bin
+  output/{collector}/{exchange}/{symbol}.json
+  ```
+
+### Resume semantics
+
+* If companion exists:
+
+  * Skip files with `start_ts < lastInputStartTs`
+  * Skip trades `< endTs`
+* `--force` bypasses both guards.
+* No database state is used for resume.
+
+### Performance characteristics
+
+* Low-memory directory walk.
+* Batched SQLite writes during indexing.
+* No per-trade DB I/O.
+* Binary writes chunked in **4096-candle blocks** to avoid millions of syscalls.
+* Accumulators are in-memory maps keyed by `(collector, exchange, symbol)`.
+
+---
+
+## IX. Configuration
+
+Requires **Node ≥ 22**
+(uses built-in `node:sqlite` and `--experimental-strip-types`).
+
+Install:
+
+```bash
+npm install
+```
+
+Config file: `indexer.config.json`
+(copy from `indexer.config.example.json`)
+
+```json
+{
+  "root": "/Volumes/AGGR/input",
+  "dbPath": "./index.sqlite",
+  "batchSize": 1000,
+  "includePaths": [],
+  "outDir": "output",
+  "timeframe": "1m",
+  "sparseOutput": false
+}
+```
+
+All values can be overridden via CLI flags.
+
+---
+
+## X. CLI
+
+Entry point:
+
+```bash
+npm start -- <subcommand> [flags]
+```
+
+### Subcommands
+
+* `index` — build / append SQLite inventory.
+* `process` — generate binaries.
+
+### Shared flags
+
+* `-r, --root <path>` input root
+* `-d, --db <path>` SQLite path
+* `--config <path>` config file
+* `--no-config` ignore config file
+* `--include <path>` repeatable subtree restriction
+
+### Indexer flags
+
+* `-b, --batch <n>` inserts per transaction (default 1000)
+
+### Processor flags
+
+* `--collector <name>` (RAM / PI)
+* `--exchange <EXCHANGE>`
+* `--symbol <SYMBOL>`
+* `--timeframe <tf>` (1m, 5m, 1h…)
+* `--sparse` write only populated candles
+* `--force` ignore resume guards
+
+### Examples
+
+```bash
+npm start -- index
+npm start -- index --include "PI/2018-2019-2020"
+
+npm start -- process --collector RAM --exchange BITMEX --symbol XBTUSD
+npm start -- process
+```
+
+---
+
+## XI. Preview module (frontend + websocket server)
+
+### Structure
+
+* Core pipeline: `src/core`
+* WebSocket server: `src/server.ts`
+* Frontend: `client/` (Svelte + Vite + Tailwind)
+
+### Commands
+
+```bash
+npm run dev:client
+npm run build:client
+npm run serve
+```
+
+* `serve` builds everything and starts the WS + static server from `dist/server.js`.
+
+### WebSocket API
+
+* `GET /` → serves built frontend
+* `WS /ws?collector=...&exchange=...&symbol=...&start=ms`
+
+Server responds with:
+
+* `meta` (timeframe, sparse, records, anchorIndex)
+* Supports `slice` requests by candle index
+* Works with dense (gap-filled) and sparse binaries
+
+---
+
+## XII. Summary
+
+* Append-only indexing, resumable processing, gap-aware outputs.
+* No legacy assumptions in code; historical complexity is captured here for correctness.
+* Designed to safely process millions of files with minimal memory and syscall overhead.
