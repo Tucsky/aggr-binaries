@@ -2,23 +2,31 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import { openDatabase } from "./core/db.js";
+import type { CompanionMetadata } from "./core/model.js";
 
 const PORT = Number(process.env.PORT || 3000);
 const OUTPUT_ROOT = path.resolve(process.env.OUTPUT_ROOT || "output");
+const DB_PATH = path.resolve(process.env.DB_PATH || "index.sqlite");
 const PUBLIC_DIR = path.resolve(process.env.PUBLIC_DIR || "client/dist");
+const db = openDatabase(DB_PATH);
 
-interface Companion {
-  exchange: string;
-  symbol: string;
-  timeframe: string;
-  timeframeMs?: number;
-  startTs: number;
-  endTs: number;
-  priceScale: number;
-  volumeScale: number;
-  records: number;
-  sparse?: boolean;
-}
+process.on("exit", () => {
+  try {
+    db.close();
+  } catch {
+    // ignore
+  }
+});
+process.on("SIGINT", () => {
+  try {
+    db.close();
+  } finally {
+    process.exit(0);
+  }
+});
+
+type Companion = CompanionMetadata;
 
 interface CandleMsg {
   type: "candles";
@@ -39,24 +47,36 @@ interface CandleMsg {
   }>;
 }
 
-async function readCompanion(collector: string, exchange: string, symbol: string): Promise<Companion> {
-  const companionPath = path.join(OUTPUT_ROOT, collector, exchange, `${symbol}.json`);
+async function loadCompanion(collector: string, exchange: string, symbol: string, timeframe: string): Promise<Companion> {
+  const entry = db.getRegistryEntry({ collector, exchange, symbol, timeframe });
+  if (!entry) {
+    throw new Error(`Registry entry not found for ${collector}/${exchange}/${symbol}/${timeframe}`);
+  }
+  const companionPath = path.join(OUTPUT_ROOT, collector, exchange, symbol, `${timeframe}.json`);
   const raw = await fs.readFile(companionPath, "utf8");
-  return JSON.parse(raw) as Companion;
+  const parsed = JSON.parse(raw) as Companion;
+  return {
+    ...parsed,
+    timeframe: parsed.timeframe ?? timeframe,
+    sparse: parsed.sparse ?? entry.sparse,
+    startTs: parsed.startTs ?? entry.startTs,
+    endTs: parsed.endTs ?? entry.endTs,
+  };
 }
 
 async function readCandles(
   collector: string,
   exchange: string,
   symbol: string,
+  timeframe: string,
   fromIndex: number,
   toIndex: number,
   companion: Companion,
 ): Promise<CandleMsg> {
   if (companion.sparse) {
-    return readCandlesSparse(collector, exchange, symbol, fromIndex, toIndex, companion);
+    return readCandlesSparse(collector, exchange, symbol, timeframe, fromIndex, toIndex, companion);
   }
-  const binPath = path.join(OUTPUT_ROOT, collector, exchange, `${symbol}.bin`);
+  const binPath = path.join(OUTPUT_ROOT, collector, exchange, symbol, `${timeframe}.bin`);
   const fh = await fs.open(binPath, "r");
   const tf = companion.timeframeMs ?? 60_000;
   const firstIdx = Math.max(0, Math.min(companion.records - 1, fromIndex));
@@ -101,11 +121,12 @@ async function readCandlesSparse(
   collector: string,
   exchange: string,
   symbol: string,
+  timeframe: string,
   fromIndex: number,
   toIndex: number,
   companion: Companion,
 ): Promise<CandleMsg> {
-  const binPath = path.join(OUTPUT_ROOT, collector, exchange, `${symbol}.bin`);
+  const binPath = path.join(OUTPUT_ROOT, collector, exchange, symbol, `${timeframe}.bin`);
   const buf = await fs.readFile(binPath);
   const recordSize = 8 + 56;
   const total = Math.floor(buf.length / recordSize);
@@ -175,6 +196,7 @@ server.on("upgrade", async (req, socket) => {
   const collector = (url.searchParams.get("collector") ?? "").toUpperCase();
   const exchange = (url.searchParams.get("exchange") ?? "").toUpperCase();
   const symbol = url.searchParams.get("symbol") ?? "";
+  const timeframe = url.searchParams.get("timeframe") ?? "1m";
   const startOverride = url.searchParams.get("start");
   const startMs = startOverride ? Number(startOverride) : null;
   if (!collector || !exchange || !symbol) {
@@ -200,13 +222,14 @@ server.on("upgrade", async (req, socket) => {
   let companion: Companion | null = null;
   let anchorIndex: number | null = null;
   try {
-    companion = await readCompanion(collector, exchange, symbol);
-    anchorIndex = await computeAnchorIndex(collector, exchange, symbol, companion, startMs);
+    companion = await loadCompanion(collector, exchange, symbol, timeframe);
+    anchorIndex = await computeAnchorIndex(collector, exchange, symbol, timeframe, companion, startMs);
     console.log(
       "[ws] meta",
       collector,
       exchange,
       symbol,
+      timeframe,
       new Date(companion.startTs).toISOString(),
       new Date(companion.endTs).toISOString(),
     );
@@ -217,11 +240,13 @@ server.on("upgrade", async (req, socket) => {
       priceScale: companion.priceScale,
       volumeScale: companion.volumeScale,
       timeframeMs: companion.timeframeMs ?? 60_000,
+      timeframe: companion.timeframe ?? timeframe,
       sparse: companion.sparse ?? false,
       records: companion.records,
       anchorIndex: anchorIndex ?? companion.records - 1,
     });
-  } catch {
+  } catch (err) {
+    console.error("[ws] failed to load companion", err);
     socket.destroy();
     return;
   }
@@ -232,7 +257,7 @@ server.on("upgrade", async (req, socket) => {
     try {
       const payload = JSON.parse(msg.data.toString()) as { type: string; fromIndex?: number; toIndex?: number };
       if (payload.type === "slice" && typeof payload.fromIndex === "number" && typeof payload.toIndex === "number") {
-        const resp = await readCandles(collector, exchange, symbol, payload.fromIndex, payload.toIndex, companion);
+        const resp = await readCandles(collector, exchange, symbol, timeframe, payload.fromIndex, payload.toIndex, companion);
         send(socket, resp);
       }
     } catch {
@@ -305,6 +330,7 @@ async function computeAnchorIndex(
   collector: string,
   exchange: string,
   symbol: string,
+  timeframe: string,
   companion: Companion,
   startMs: number | null,
 ): Promise<number> {
@@ -321,7 +347,7 @@ async function computeAnchorIndex(
   }
 
   // sparse: binary search by timestamp
-  const binPath = path.join(OUTPUT_ROOT, collector, exchange, `${symbol}.bin`);
+  const binPath = path.join(OUTPUT_ROOT, collector, exchange, symbol, `${timeframe}.bin`);
   const recordSize = 8 + 56;
   let lo = 0;
   let hi = records - 1;

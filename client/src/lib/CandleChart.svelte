@@ -45,7 +45,7 @@
       grid: { vertLines: { color: "#161b22" }, horzLines: { color: "#161b22" } },
       timeScale: { rightOffset: 1, barSpacing: 6, timeVisible: true, secondsVisible: false },
       crosshair: { mode: 1 },
-      priceScale: { mode: 2 },
+      rightPriceScale: { mode: 2 },
     });
     series = chart.addCandlestickSeries({
       upColor: "#16a34a",
@@ -57,9 +57,9 @@
     chart.timeScale().subscribeVisibleTimeRangeChange((range) => {
       if (suppressRangeEvent || !range || !range.from || !range.to || !currentMeta) return;
       if (loadedIndex.min === null || loadedIndex.max === null || cache.size === 0) return;
-      const sorted = Array.from(cache.values()).sort((a, b) => a.time - b.time);
-      const minTime = sorted[0].time * 1000;
-      const maxTime = sorted[sorted.length - 1].time * 1000;
+      const sorted = Array.from(cache.values()).sort((a, b) => Number(a.time) - Number(b.time));
+      const minTime = Number(sorted[0].time) * 1000;
+      const maxTime = Number(sorted[sorted.length - 1].time) * 1000;
       const fromMs = Number(range.from) * 1000;
       const toMs = Number(range.to) * 1000;
       const margin = currentMeta.timeframeMs * 2;
@@ -97,13 +97,19 @@
       .sort((a, b) => a[0] - b[0])
       .map(([, c]) => c);
     suppressRangeEvent = true;
-    series?.setData(sorted.map((c) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close })));
+    series?.setData(sorted.map((c) => {
+      if (!c.open || !c.high || !c.low || !c.close) {
+        return ({ time: c.time }) // gap candle
+      }
+      return ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close })
+    }));
     suppressRangeEvent = false;
-    if (sorted.length) {
+    /* if (sorted.length) {
       const last = sorted[sorted.length - 1];
       const first = sorted[Math.max(0, sorted.length - 500)];
+      console.log('Setting visible range:', new Date(first.time * 1000).toISOString(), 'to', new Date(last.time * 1000).toISOString()); 
       chart?.timeScale().setVisibleRange({ from: first.time, to: last.time });
-    }
+    }*/ 
   }
 </script>
 

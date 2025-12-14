@@ -5,6 +5,7 @@ export type Status = "idle" | "connected" | "closed" | "error";
 export interface Meta {
   startTs: number;
   endTs: number;
+  timeframe: string;
   priceScale: number;
   volumeScale: number;
   timeframeMs: number;
@@ -17,6 +18,7 @@ export interface Prefs {
   collector: string;
   exchange: string;
   symbol: string;
+  timeframe: string;
   start: string;
 }
 

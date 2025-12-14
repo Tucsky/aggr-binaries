@@ -2,9 +2,10 @@ import { loadConfig, printHelp } from "./config.js";
 import { openDatabase } from "./db.js";
 import { runIndex } from "./indexer.js";
 import { runProcess } from "./process.js";
+import { runRegistry } from "./registry.js";
 
 interface ParsedArgs {
-  command: "index" | "process";
+  command: "index" | "process" | "registry";
   overrides: {
     root?: string;
     dbPath?: string;
@@ -33,7 +34,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   // command is first non-flag argument
   const args = argv.slice(2);
   if (args[0] && !args[0].startsWith("-")) {
-    if (args[0] === "index" || args[0] === "process") {
+    if (args[0] === "index" || args[0] === "process" || args[0] === "registry") {
       parsed.command = args[0];
       args.shift();
     } else {
@@ -155,6 +156,16 @@ async function main() {
     }
     if (parsed.command === "process") {
       await runProcess(config, db);
+    }
+    if (parsed.command === "registry") {
+      console.log(
+        `Rebuilding registry from ${config.outDir ?? "output"}${config.collector ? ` collector=${config.collector}` : ""}${config.exchange ? ` exchange=${config.exchange}` : ""}${config.symbol ? ` symbol=${config.symbol}` : ""}`,
+      );
+      const stats = await runRegistry(config, db);
+      const duration = ((Date.now() - start) / 1000).toFixed(1);
+      console.log(
+        `Registry synced in ${duration}s. scanned=${stats.scanned} upserted=${stats.upserted} deleted=${stats.deleted}`,
+      );
     }
   } catch (err) {
     console.error("Operation failed:", err);

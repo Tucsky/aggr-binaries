@@ -67,3 +67,43 @@ export interface FileRow {
   start_ts: number;
   ext?: string | null;
 }
+
+export interface CompanionMetadata {
+  exchange: string;
+  symbol: string;
+  timeframe: string;
+  timeframeMs?: number;
+  startTs: number;
+  endTs: number;
+  priceScale: number;
+  volumeScale: number;
+  records: number;
+  sparse?: boolean;
+  lastInputStartTs?: number;
+}
+
+export interface RegistryEntry {
+  collector: string;
+  exchange: string;
+  symbol: string;
+  timeframe: string;
+  startTs: number;
+  endTs: number;
+  sparse: boolean;
+  created_at?: number;
+  updated_at?: number;
+}
+
+export interface RegistryKey {
+  collector: string;
+  exchange: string;
+  symbol: string;
+  timeframe: string;
+}
+
+export interface RegistryFilter {
+  collector?: string;
+  exchange?: string;
+  symbol?: string;
+  timeframe?: string;
+}

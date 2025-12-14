@@ -37,14 +37,15 @@ export function disconnect(): void {
 export function connect(prefs: Prefs): void {
   disconnect();
   const startMs = prefs.start ? Date.parse(prefs.start) : null;
+  const timeframe = prefs.timeframe?.trim() || "1m";
   const url = `ws://localhost:3000/ws?collector=${prefs.collector.trim().toUpperCase()}&exchange=${prefs.exchange
     .trim()
-    .toUpperCase()}&symbol=${prefs.symbol.trim()}${startMs ? `&start=${startMs}` : ""}`;
+    .toUpperCase()}&symbol=${prefs.symbol.trim()}&timeframe=${timeframe}${startMs ? `&start=${startMs}` : ""}`;
 
   ws = new WebSocket(url);
   ws.onopen = () => {
     status.set("connected");
-    notify(`Connected to ${prefs.collector}/${prefs.exchange}/${prefs.symbol}`, "success", 2000);
+    notify(`Connected to ${prefs.collector}/${prefs.exchange}/${prefs.symbol} @ ${timeframe}`, "success", 2000);
   };
   ws.onclose = () => {
     status.set("closed");
@@ -60,6 +61,7 @@ export function connect(prefs: Prefs): void {
       currentMeta = {
         startTs: msg.startTs,
         endTs: msg.endTs,
+        timeframe: msg.timeframe ?? timeframe,
         priceScale: msg.priceScale,
         volumeScale: msg.volumeScale,
         timeframeMs: msg.timeframeMs ?? 60_000,

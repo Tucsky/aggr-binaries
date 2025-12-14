@@ -199,9 +199,11 @@ CREATE INDEX idx_files_collector ON files(collector);
 * Write:
 
   ```
-  output/{collector}/{exchange}/{symbol}.bin
-  output/{collector}/{exchange}/{symbol}.json
+  output/{collector}/{exchange}/{symbol}/{timeframe}.bin
+  output/{collector}/{exchange}/{symbol}/{timeframe}.json
   ```
+
+* On successful write, registry is upserted (collector/exchange/symbol/timeframe + sparse/startTs/endTs).
 
 ### Resume semantics
 
@@ -264,6 +266,7 @@ npm start -- <subcommand> [flags]
 
 * `index` — build / append SQLite inventory.
 * `process` — generate binaries.
+* `registry` — rebuild registry table by scanning output companions.
 
 ### Shared flags
 
@@ -319,7 +322,7 @@ npm run serve
 ### WebSocket API
 
 * `GET /` → serves built frontend
-* `WS /ws?collector=...&exchange=...&symbol=...&start=ms`
+* `WS /ws?collector=...&exchange=...&symbol=...&timeframe=1m&start=ms`
 
 Server responds with:
 
@@ -332,5 +335,6 @@ Server responds with:
 ## XII. Summary
 
 * Append-only indexing, resumable processing, gap-aware outputs.
+* Outputs are timeframe-scoped (`collector/exchange/symbol/<tf>.bin/.json`) and registered in SQLite (upsert during processing; `npm start -- registry` to rescan companions).
 * No legacy assumptions in code; historical complexity is captured here for correctness.
 * Designed to safely process millions of files with minimal memory and syscall overhead.

@@ -25,6 +25,7 @@
   $: if (!local.collector) local.collector = "PI";
   $: if (!local.exchange) local.exchange = "BITFINEX";
   $: if (!local.symbol) local.symbol = "BTCUSD";
+  $: if (!local.timeframe) local.timeframe = "1m";
 
   // Cleanup
   onDestroy(unsubscribe);
@@ -68,6 +69,14 @@
       />
     </label>
     <label class="flex items-center gap-2">
+      <span class="w-20 text-slate-300">Timeframe</span>
+      <input
+        class="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-100"
+        bind:value={local.timeframe}
+        size="6"
+      />
+    </label>
+    <label class="flex items-center gap-2">
       <span class="w-20 text-slate-300">Start (UTC)</span>
       <input
         class="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-100"
@@ -95,6 +104,7 @@
     </div>
     {#if $status === "connected"}
       <div class="text-xs text-slate-300 space-y-1">
+        <div>Timeframe: {$meta?.timeframe ?? `${($meta?.timeframeMs ?? 0) / 1000}s`}</div>
         <div>Records: {$meta?.records ?? "?"}</div>
       </div>
     {/if}

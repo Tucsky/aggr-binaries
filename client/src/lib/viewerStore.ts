@@ -1,5 +1,5 @@
 import { writable, type Writable } from "svelte/store";
-import type { Meta, Prefs, Status } from "./types";
+import type { Meta, Prefs, Status } from "./types.js";
 
 const PREF_KEY = "aggr-viewer-prefs";
 
@@ -7,6 +7,7 @@ const defaultPrefs: Prefs = {
   collector: "PI",
   exchange: "BITFINEX",
   symbol: "BTCUSD",
+  timeframe: "1m",
   start: "",
 };
 
@@ -33,6 +34,7 @@ export function loadPrefs(): Prefs {
       collector: parsed.collector ?? defaultPrefs.collector,
       exchange: parsed.exchange ?? defaultPrefs.exchange,
       symbol: parsed.symbol ?? defaultPrefs.symbol,
+      timeframe: parsed.timeframe ?? defaultPrefs.timeframe,
       start: parsed.start ?? defaultPrefs.start,
     };
   } catch {

@@ -10,9 +10,10 @@ export interface Config {
   collector?: string;
   exchange?: string;
   symbol?: string;
-  outDir?: string;
+  outDir: string;
   force?: boolean;
-  timeframe?: string; // e.g., "1m", "5m", "1h"
+  timeframe: string; // e.g., "1m", "5m", "1h"
+  timeframeMs: number;
   sparseOutput?: boolean;
 }
 
@@ -25,7 +26,9 @@ const DEFAULTS: Config = {
   root: "/Volumes/AGGR/input",
   dbPath: "index.sqlite",
   batchSize: 1000,
+  outDir: "output",
   timeframe: "1m",
+  timeframeMs: 60_000,
   sparseOutput: false,
 };
 
@@ -55,6 +58,9 @@ export async function loadConfig(overrides: CliOverrides = {}): Promise<Config> 
 
   merged.root = path.resolve(merged.root);
   merged.dbPath = path.resolve(merged.dbPath);
+  merged.outDir = path.resolve(merged.outDir || DEFAULTS.outDir);
+  merged.timeframe = (merged.timeframe || DEFAULTS.timeframe).trim();
+  merged.timeframeMs = parseTimeframeMs(merged.timeframe) ?? DEFAULTS.timeframeMs;
 
   if (!Number.isFinite(merged.batchSize) || merged.batchSize <= 0) {
     merged.batchSize = DEFAULTS.batchSize;
@@ -74,6 +80,7 @@ Usage: npm start -- <command> [options]
 Commands:
   index      Index filesystem into SQLite
   process    Build/update binaries from indexed files (resume supported)
+  registry   Rebuild registry table from existing companions
 
 Options (override config file):
   -r, --root <path>         Root input directory (default: ${DEFAULTS.root})
@@ -83,7 +90,7 @@ Options (override config file):
   --collector <RAM|PI>      Processing: target collector
   --exchange <name>         Processing: target exchange (normalized, e.g., BITFINEX)
   --symbol <name>           Processing: target symbol (normalized, e.g., BTCUSD)
-  --outdir <path>           Processing: output directory (default: ./output)
+  --outdir <path>           Processing: output directory (default: ${DEFAULTS.outDir})
   --force                   Processing: ignore processed-files cache
   --timeframe <tf>          Processing: timeframe string (e.g., 1m, 5m, 1h) (default: ${DEFAULTS.timeframe})
   --sparse                  Processing: write sparse binaries (only populated candles)
@@ -92,4 +99,22 @@ Options (override config file):
   -h, --help                Show this help
 `;
   console.log(help.trim());
+}
+
+export function parseTimeframeMs(tf: string): number | undefined {
+  const m = tf.trim().toLowerCase().match(/^(\d+)([smhd])$/);
+  if (!m) return undefined;
+  const n = Number(m[1]);
+  switch (m[2]) {
+    case "s":
+      return n * 1000;
+    case "m":
+      return n * 60_000;
+    case "h":
+      return n * 3_600_000;
+    case "d":
+      return n * 86_400_000;
+    default:
+      return undefined;
+  }
 }

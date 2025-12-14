@@ -4,7 +4,7 @@ import readline from "node:readline";
 import zlib from "node:zlib";
 import type { Config } from "./config.js";
 import type { Db } from "./db.js";
-import type { FileRow } from "./model.js";
+import type { CompanionMetadata, FileRow } from "./model.js";
 import {
   CANDLE_BYTES,
   PRICE_SCALE,
@@ -23,14 +23,7 @@ interface Accumulator {
   minMinute: number;
   maxMinute: number;
   maxInputStartTs: number;
-  companion?: {
-    startTs: number;
-    endTs: number;
-    lastInputStartTs?: number;
-    priceScale: number;
-    volumeScale: number;
-    records: number;
-  };
+  companion?: CompanionMetadata;
 }
 
 interface ProcessStats {
@@ -68,13 +61,11 @@ export async function runProcess(config: Config, db: Db): Promise<void> {
     return;
   }
 
-  const outRoot = path.resolve(config.outDir ?? "output");
-  const timeframeMs = parseTimeframeMs(config.timeframe ?? "1m");
-  const sparse = Boolean(config.sparseOutput);
+  const timeframe = config.timeframe;
   const markets = iterateMarkets(db, collectors, allowExchange, allowSymbol);
 
   console.log(
-    `[process] collectors=${collectors.join(",")} markets=${totalMarkets} files=${totalCandidates} filters=${allowExchange || "ALL"}/${allowSymbol || "ALL"} (market-first)`,
+    `[process] collectors=${collectors.join(",")} markets=${totalMarkets} files=${totalCandidates} timeframe=${timeframe} filters=${allowExchange || "ALL"}/${allowSymbol || "ALL"} (market-first)`,
   );
 
   const startAll = Date.now();
@@ -84,10 +75,7 @@ export async function runProcess(config: Config, db: Db): Promise<void> {
     totalMarkets,
     db,
     config,
-    outRoot,
     startAll,
-    timeframeMs,
-    sparse,
   });
 
   const totalElapsed = (Date.now() - startAll) / 1000;
@@ -176,12 +164,12 @@ function iterateFilesForMarket(
 }
 
 async function startAccumulatorForMarket(
-  outRoot: string,
+  config: Config,
   collector: string,
   exchange: string,
   symbol: string,
 ): Promise<Accumulator> {
-  const companionPath = path.join(outRoot, collector, exchange, `${symbol}.json`);
+  const companionPath = path.join(config.outDir, collector, exchange, symbol, `${config.timeframe}.json`);
   const companion = await readCompanion(companionPath);
   return {
     collector,
@@ -192,16 +180,7 @@ async function startAccumulatorForMarket(
     minMinute: Number.POSITIVE_INFINITY,
     maxMinute: Number.NEGATIVE_INFINITY,
     maxInputStartTs: companion?.lastInputStartTs ?? Number.NEGATIVE_INFINITY,
-    companion: companion
-      ? {
-          startTs: companion.startTs,
-          endTs: companion.endTs,
-          lastInputStartTs: companion.lastInputStartTs,
-          priceScale: companion.priceScale,
-          volumeScale: companion.volumeScale,
-          records: companion.records,
-        }
-      : undefined,
+    companion: companion ?? undefined,
   };
 }
 
@@ -211,12 +190,18 @@ async function processByMarket(opts: {
   totalMarkets: number;
   db: Db;
   config: Config;
-  outRoot: string;
   startAll: number;
-  timeframeMs: number;
-  sparse: boolean;
 }): Promise<ProcessStats> {
-  const { markets, totalCandidates, totalMarkets, db, config, outRoot, startAll, timeframeMs, sparse } = opts;
+  const {
+    markets,
+    totalCandidates,
+    totalMarkets,
+    db,
+    config,
+    startAll,
+  } = opts;
+
+  const timeframeMs = config.timeframeMs;
 
   let acc: Accumulator | null = null;
   let totalLines = 0;
@@ -233,7 +218,7 @@ async function processByMarket(opts: {
   }, 10_000);
 
   for (const market of markets) {
-    acc = await startAccumulatorForMarket(outRoot, market.collector, market.exchange, market.symbol);
+    acc = await startAccumulatorForMarket(config, market.collector, market.exchange, market.symbol);
 
     const minStartTs =
       !config.force && acc.companion?.lastInputStartTs !== undefined ? acc.companion.lastInputStartTs : undefined;
@@ -257,7 +242,7 @@ async function processByMarket(opts: {
       }
     }
 
-    await writeMarketOutput(acc, outRoot, timeframeMs, sparse);
+    await writeMarketOutput(acc, config, db);
     processedMarkets += 1;
     acc = null;
   }
@@ -319,7 +304,15 @@ async function makeStream(filePath: string) {
   return stream;
 }
 
-async function writeMarketOutput(acc: Accumulator, outRoot: string, timeframeMs: number, sparse: boolean) {
+async function writeMarketOutput(
+  acc: Accumulator,
+  config: Config,
+  db: Db,
+) {
+  const timeframe = config.timeframe;
+  const timeframeMs = config.timeframeMs;
+  const sparse = Boolean(config.sparseOutput);
+
   if (!acc.bucketCount || !isFinite(acc.minMinute) || !isFinite(acc.maxMinute)) {
     console.log(`[${acc.collector}/${acc.exchange}/${acc.symbol}] no trades; skipping output`);
     return;
@@ -332,12 +325,11 @@ async function writeMarketOutput(acc: Accumulator, outRoot: string, timeframeMs:
   const totalCandles = sparse ? acc.bucketCount : Math.max(0, Math.floor((endBase - startBase) / timeframeMs));
   const estimatedMb = ((totalCandles * CANDLE_BYTES) / (1024 * 1024)).toFixed(2);
 
-  const outDir = path.join(outRoot, acc.collector, acc.exchange);
-  await fs.mkdir(outDir, { recursive: true });
-  const outBase = path.join(outDir, acc.symbol);
+  const outBase = path.join(config.outDir, acc.collector, acc.exchange, acc.symbol, timeframe);
+  await fs.mkdir(path.dirname(outBase), { recursive: true });
 
   console.log(
-    `[${acc.collector}/${acc.exchange}/${acc.symbol}] writing ${totalCandles} candles (~${estimatedMb} MB) range ${new Date(
+    `[${acc.collector}/${acc.exchange}/${acc.symbol}/${timeframe}] writing ${totalCandles} candles (~${estimatedMb} MB) range ${new Date(
       startBase,
     ).toISOString()} -> ${new Date(endBase).toISOString()} sparse=${sparse}`,
   );
@@ -346,20 +338,33 @@ async function writeMarketOutput(acc: Accumulator, outRoot: string, timeframeMs:
 
   const lastInputStartTs = acc.maxInputStartTs === Number.NEGATIVE_INFINITY ? undefined : acc.maxInputStartTs;
 
-  await writeCompanion(
-    outBase + ".json",
-    acc.exchange,
-    acc.symbol,
-    totalCandles,
-    startBase,
-    endBase,
+  const metadata: CompanionMetadata = {
+    exchange: acc.exchange,
+    symbol: acc.symbol,
+    timeframe,
     timeframeMs,
+    startTs: startBase,
+    endTs: endBase,
+    priceScale: PRICE_SCALE,
+    volumeScale: VOL_SCALE,
+    records: totalCandles,
     sparse,
     lastInputStartTs,
-  );
+  };
+
+  await writeCompanion(outBase + ".json", metadata);
+  db.upsertRegistry({
+    collector: acc.collector,
+    exchange: acc.exchange,
+    symbol: acc.symbol,
+    timeframe,
+    startTs: metadata.startTs,
+    endTs: metadata.endTs,
+    sparse: metadata.sparse ?? false,
+  });
 
   console.log(
-    `[${acc.collector}/${acc.exchange}/${acc.symbol}] processed ${acc.bucketCount} populated candles into ${totalCandles} slots -> ${outBase}.bin`,
+    `[${acc.collector}/${acc.exchange}/${acc.symbol}/${timeframe}] processed ${acc.bucketCount} populated candles into ${totalCandles} slots -> ${outBase}.bin`,
   );
 }
 
@@ -440,79 +445,15 @@ async function writeBinary(
   await fh.close();
 }
 
-async function writeCompanion(
-  outPath: string,
-  exchange: string,
-  symbol: string,
-  totalCandles: number,
-  minTs: number,
-  maxTs: number,
-  timeframeMs: number,
-  sparse: boolean,
-  lastInputStartTs?: number,
-) {
-  const data = {
-    exchange,
-    symbol,
-    timeframe: timeframeLabel(timeframeMs),
-    timeframeMs,
-    startTs: minTs,
-    endTs: maxTs,
-    priceScale: PRICE_SCALE,
-    volumeScale: VOL_SCALE,
-    records: totalCandles,
-    sparse,
-    lastInputStartTs,
-  };
-  await fs.writeFile(outPath, JSON.stringify(data, null, 2));
+async function writeCompanion(outPath: string, metadata: CompanionMetadata) {
+  await fs.writeFile(outPath, JSON.stringify(metadata, null, 2));
 }
 
-async function readCompanion(pathStr: string): Promise<
-  | {
-      exchange: string;
-      symbol: string;
-      timeframe: string;
-      timeframeMs?: number;
-      startTs: number;
-      endTs: number;
-      priceScale: number;
-      volumeScale: number;
-      records: number;
-      sparse?: boolean;
-      lastInputStartTs?: number;
-    }
-  | undefined
-> {
+async function readCompanion(pathStr: string): Promise<CompanionMetadata | undefined> {
   try {
     const raw = await fs.readFile(pathStr, "utf8");
-    return JSON.parse(raw);
+    return JSON.parse(raw) as CompanionMetadata;
   } catch {
     return undefined;
   }
-}
-
-function parseTimeframeMs(tf: string): number {
-  const m = tf.trim().toLowerCase().match(/^(\d+)([smhd])$/);
-  if (!m) return 60_000;
-  const n = Number(m[1]);
-  switch (m[2]) {
-    case "s":
-      return n * 1000;
-    case "m":
-      return n * 60_000;
-    case "h":
-      return n * 3_600_000;
-    case "d":
-      return n * 86_400_000;
-    default:
-      return 60_000;
-  }
-}
-
-function timeframeLabel(ms: number): string {
-  if (ms % 86_400_000 === 0) return `${ms / 86_400_000}d`;
-  if (ms % 3_600_000 === 0) return `${ms / 3_600_000}h`;
-  if (ms % 60_000 === 0) return `${ms / 60_000}m`;
-  if (ms % 1000 === 0) return `${ms / 1000}s`;
-  return `${ms}ms`;
 }
