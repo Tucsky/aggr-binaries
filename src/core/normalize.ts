@@ -3,31 +3,8 @@ import { parseLogicalStartTs } from "./dates.js";
 import type { IndexedFile } from "./model.js";
 import { Collector, QuoteCurrency } from "./model.js";
 
-const EXCHANGE_MAP: Record<string, string> = {
-  bitfinex: "BITFINEX",
-  binance: "BINANCE",
-  okex: "OKEX",
-  kraken: "KRAKEN",
-  gdax: "COINBASE",
-  poloniex: "POLONIEX",
-  huobi: "HUOBI",
-  bitstamp: "BITSTAMP",
-  bitmex: "BITMEX",
-  binance_futures: "BINANCE_FUTURES",
-  deribit: "DERIBIT",
-  ftx: "FTX",
-  bybit: "BYBIT",
-  hitbtc: "HITBTC",
-};
-
 const BITGET_SYMBOL_CHANGE_TS = Date.UTC(2025, 10, 28, 0, 0, 0); // 2025-11-28
 const POLONIEX_QUOTES = new Set<string>(Object.values(QuoteCurrency));
-
-export function normalizeExchange(raw?: string): string | undefined {
-  if (!raw) return undefined;
-  const mapped = EXCHANGE_MAP[raw.toLowerCase()];
-  return mapped ?? raw.toUpperCase();
-}
 
 function normalizePoloniexSymbol(raw: string): string {
   if (!raw.includes("_")) return raw;
@@ -101,8 +78,10 @@ export function classifyPath(
 
   const baseName = stripCompression(fileName);
   const startTs = parseLogicalStartTs(baseName);
-  const exchange = normalizeExchange(exchangeDir);
+  if (startTs === undefined) return null;
+  const exchange = exchangeDir.toUpperCase();
   const symbol = normalizeSymbol(exchange, symbolDir, startTs);
+  if (!symbol) return null;
 
   return {
     rootId,

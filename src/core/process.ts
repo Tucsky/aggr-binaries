@@ -4,14 +4,12 @@ import readline from "node:readline";
 import zlib from "node:zlib";
 import type { Config } from "./config.js";
 import type { Db } from "./db.js";
-import { Collector, type FileRow } from "./model.js";
-import { normalizeSymbol } from "./normalize.js";
+import type { FileRow } from "./model.js";
 import {
   CANDLE_BYTES,
   PRICE_SCALE,
   VOL_SCALE,
   accumulate,
-  applyCorrections,
   parseTradeLine,
   type Candle
 } from "./trades.js";
@@ -21,6 +19,7 @@ interface Accumulator {
   exchange: string;
   symbol: string;
   buckets: Map<number, Candle>;
+  bucketCount: number;
   minMinute: number;
   maxMinute: number;
   maxInputStartTs: number;
@@ -34,6 +33,26 @@ interface Accumulator {
   };
 }
 
+interface ProcessStats {
+  totalLines: number;
+  totalTradesKept: number;
+  processedFiles: number;
+  processedMarkets: number;
+  maxBuckets: number;
+}
+
+interface StreamResult {
+  linesRead: number;
+  tradesKept: number;
+  newBuckets: number;
+}
+
+interface MarketRef {
+  collector: string;
+  exchange: string;
+  symbol: string;
+}
+
 export async function runProcess(config: Config, db: Db): Promise<void> {
   const collectors = await resolveCollectors(config, db);
   if (!collectors.length) {
@@ -43,46 +62,40 @@ export async function runProcess(config: Config, db: Db): Promise<void> {
   const allowExchange = config.exchange?.toUpperCase();
   const allowSymbol = config.symbol;
   const totalCandidates = countCandidateFiles(db, collectors, allowExchange, allowSymbol);
+  const totalMarkets = countMarkets(db, collectors, allowExchange, allowSymbol);
   if (!totalCandidates) {
     console.log("No files to process for selected collectors.");
     return;
   }
 
-  console.log(
-    `[process] collectors=${collectors.join(",")} files=${totalCandidates} filters=${config.exchange || "ALL"}/${
-      config.symbol || "ALL"
-    } (streaming)`,
-  );
-
   const outRoot = path.resolve(config.outDir ?? "output");
   const timeframeMs = parseTimeframeMs(config.timeframe ?? "1m");
   const sparse = Boolean(config.sparseOutput);
-  const files = iterateFiles(db, collectors, allowExchange, allowSymbol);
+  const markets = iterateMarkets(db, collectors, allowExchange, allowSymbol);
+
+  console.log(
+    `[process] collectors=${collectors.join(",")} markets=${totalMarkets} files=${totalCandidates} filters=${allowExchange || "ALL"}/${allowSymbol || "ALL"} (market-first)`,
+  );
 
   const startAll = Date.now();
-  const { accMap, totalLines, totalTradesKept, heartbeatTimer, processedFiles } = await processFiles({
-    files,
+  const stats = await processByMarket({
+    markets,
     totalCandidates,
-    allowExchange,
-    allowSymbol,
+    totalMarkets,
+    db,
     config,
     outRoot,
     startAll,
     timeframeMs,
+    sparse,
   });
-
-  await writeOutputs(accMap, outRoot, timeframeMs, sparse);
 
   const totalElapsed = (Date.now() - startAll) / 1000;
   console.log(
-    `[process] complete files=${processedFiles}/${totalCandidates} lines=${totalLines} kept=${totalTradesKept} elapsed=${totalElapsed.toFixed(
+    `[process] complete markets=${stats.processedMarkets} files=${stats.processedFiles}/${totalCandidates} lines=${stats.totalLines} kept=${stats.totalTradesKept} maxBuckets=${stats.maxBuckets} elapsed=${totalElapsed.toFixed(
       2,
     )}s`,
   );
-
-  if (heartbeatTimer) {
-    clearInterval(heartbeatTimer);
-  }
 }
 
 async function resolveCollectors(config: Config, db: Db): Promise<string[]> {
@@ -107,44 +120,78 @@ function countCandidateFiles(db: Db, collectors: string[], allowExchange?: strin
   return row?.count ? Number(row.count) : 0;
 }
 
-function iterateFiles(db: Db, collectors: string[], allowExchange?: string, allowSymbol?: string): Iterable<FileRow> {
+function iterateMarkets(db: Db, collectors: string[], allowExchange?: string, allowSymbol?: string): Iterable<MarketRef> {
   const stmt = db.db.prepare(
-    `SELECT * FROM files
+    `SELECT DISTINCT collector, exchange, symbol FROM files
      WHERE collector IN (${collectors.map((_, i) => `:c${i}`).join(",")})
        AND (:allowExchange IS NULL OR exchange = :allowExchange)
        AND (:allowSymbol IS NULL OR symbol = :allowSymbol)
-     ORDER BY collector, COALESCE(start_ts, 0), relative_path;`,
+     ORDER BY collector, exchange, symbol;`,
   );
   const params: Record<string, string | null> = {
     allowExchange: allowExchange ?? null,
     allowSymbol: allowSymbol ?? null,
   };
   collectors.forEach((c, i) => (params[`c${i}`] = c));
-  return stmt.iterate(params) as Iterable<FileRow>;
+  return stmt.iterate(params) as Iterable<MarketRef>;
 }
 
-async function ensureAccumulator(
-  accMap: Map<string, Accumulator>,
+function countMarkets(db: Db, collectors: string[], allowExchange?: string, allowSymbol?: string): number {
+  const stmt = db.db.prepare(
+    `SELECT COUNT(DISTINCT collector || '::' || exchange || '::' || symbol) as count FROM files
+     WHERE collector IN (${collectors.map((_, i) => `:c${i}`).join(",")})
+       AND (:allowExchange IS NULL OR exchange = :allowExchange)
+       AND (:allowSymbol IS NULL OR symbol = :allowSymbol);`,
+  );
+  const params: Record<string, string | null> = {
+    allowExchange: allowExchange ?? null,
+    allowSymbol: allowSymbol ?? null,
+  };
+  collectors.forEach((c, i) => (params[`c${i}`] = c));
+  const row = stmt.get(params) as { count?: number } | undefined;
+  return row?.count ? Number(row.count) : 0;
+}
+
+function makeMarketKey(collector: string, exchange: string, symbol: string): string {
+  return `${collector}::${exchange}::${symbol}`;
+}
+
+function iterateFilesForMarket(
+  db: Db,
+  market: MarketRef,
+  minStartTs?: number,
+): Iterable<FileRow> {
+  const stmt = db.db.prepare(
+    `SELECT * FROM files
+     WHERE collector = :collector AND exchange = :exchange AND symbol = :symbol
+       AND (:minStartTs IS NULL OR start_ts >= :minStartTs)
+     ORDER BY start_ts, relative_path;`,
+  );
+  return stmt.iterate({
+    collector: market.collector,
+    exchange: market.exchange,
+    symbol: market.symbol,
+    minStartTs: minStartTs ?? null,
+  }) as Iterable<FileRow>;
+}
+
+async function startAccumulatorForMarket(
   outRoot: string,
-  collector: Collector | string,
+  collector: string,
   exchange: string,
   symbol: string,
-): Promise<Accumulator | null> {
-  const key = `${collector}::${exchange}::${symbol}`;
-  const existing = accMap.get(key);
-  if (existing) return existing;
-
+): Promise<Accumulator> {
   const companionPath = path.join(outRoot, collector, exchange, `${symbol}.json`);
   const companion = await readCompanion(companionPath);
-
-  const acc: Accumulator = {
+  return {
     collector,
     exchange,
     symbol,
     buckets: new Map(),
+    bucketCount: 0,
     minMinute: Number.POSITIVE_INFINITY,
     maxMinute: Number.NEGATIVE_INFINITY,
-    maxInputStartTs: Number.NEGATIVE_INFINITY,
+    maxInputStartTs: companion?.lastInputStartTs ?? Number.NEGATIVE_INFINITY,
     companion: companion
       ? {
           startTs: companion.startTs,
@@ -156,8 +203,111 @@ async function ensureAccumulator(
         }
       : undefined,
   };
-  accMap.set(key, acc);
-  return acc;
+}
+
+async function processByMarket(opts: {
+  markets: Iterable<MarketRef>;
+  totalCandidates: number;
+  totalMarkets: number;
+  db: Db;
+  config: Config;
+  outRoot: string;
+  startAll: number;
+  timeframeMs: number;
+  sparse: boolean;
+}): Promise<ProcessStats> {
+  const { markets, totalCandidates, totalMarkets, db, config, outRoot, startAll, timeframeMs, sparse } = opts;
+
+  let acc: Accumulator | null = null;
+  let totalLines = 0;
+  let totalTradesKept = 0;
+  let processedFiles = 0;
+  let processedMarkets = 0;
+  let maxBuckets = 0;
+
+  const heartbeatTimer = setInterval(() => {
+    const elapsed = ((Date.now() - startAll) / 1000).toFixed(1);
+    console.log(
+      `[process] heartbeat markets=${processedMarkets}/${totalMarkets} files=${processedFiles}/${totalCandidates} buckets=${maxBuckets} current=${acc ? makeMarketKey(acc.collector, acc.exchange, acc.symbol) : "idle"} elapsed=${elapsed}s`,
+    );
+  }, 10_000);
+
+  for (const market of markets) {
+    acc = await startAccumulatorForMarket(outRoot, market.collector, market.exchange, market.symbol);
+
+    const minStartTs =
+      !config.force && acc.companion?.lastInputStartTs !== undefined ? acc.companion.lastInputStartTs : undefined;
+    const files = iterateFilesForMarket(db, market, minStartTs);
+    const resumeCutoff = !config.force && acc.companion ? acc.companion.endTs : undefined;
+
+    for (const file of files) {
+      const { linesRead, tradesKept, newBuckets } = await streamFile({
+        file,
+        acc,
+        root: config.root,
+        timeframeMs,
+        resumeCutoff,
+      });
+
+      processedFiles += 1;
+      totalLines += linesRead;
+      totalTradesKept += tradesKept;
+      if (newBuckets && acc.bucketCount > maxBuckets) {
+        maxBuckets = acc.bucketCount;
+      }
+    }
+
+    await writeMarketOutput(acc, outRoot, timeframeMs, sparse);
+    processedMarkets += 1;
+    acc = null;
+  }
+
+  clearInterval(heartbeatTimer);
+
+  return { totalLines, totalTradesKept, processedFiles, processedMarkets, maxBuckets };
+}
+
+async function streamFile(opts: {
+  file: FileRow;
+  acc: Accumulator;
+  root: string;
+  timeframeMs: number;
+  resumeCutoff?: number;
+}): Promise<StreamResult> {
+  const { file, acc, root, timeframeMs, resumeCutoff } = opts;
+
+  const fullPath = path.join(root, file.relative_path);
+  const fileStartTs = file.start_ts;
+
+  const stream = await makeStream(fullPath);
+  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+
+  let linesRead = 0;
+  let tradesKept = 0;
+  let newBuckets = 0;
+
+  for await (const line of rl) {
+    linesRead += 1;
+
+    const trade = parseTradeLine(line, acc.exchange, acc.symbol);
+    if (!trade) continue;
+
+    if (resumeCutoff !== undefined && trade.ts < resumeCutoff) continue;
+
+    const created = accumulate(acc, trade, timeframeMs);
+    if (created) {
+      acc.bucketCount += 1;
+      newBuckets += 1;
+    }
+    tradesKept += 1;
+  }
+  rl.close();
+
+  if (tradesKept > 0 && fileStartTs > acc.maxInputStartTs) {
+    acc.maxInputStartTs = fileStartTs;
+  }
+
+  return { linesRead, tradesKept, newBuckets };
 }
 
 async function makeStream(filePath: string) {
@@ -169,185 +319,48 @@ async function makeStream(filePath: string) {
   return stream;
 }
 
-interface ProcessResult {
-  accMap: Map<string, Accumulator>;
-  totalLines: number;
-  totalTradesKept: number;
-  heartbeatTimer: NodeJS.Timeout | null;
-  processedFiles: number;
-}
-
-async function processFiles(opts: {
-  files: Iterable<FileRow>;
-  totalCandidates?: number;
-  allowExchange?: string;
-  allowSymbol?: string;
-  config: Config;
-  outRoot: string;
-  startAll: number;
-  timeframeMs: number;
-}): Promise<ProcessResult> {
-  const { files, totalCandidates, allowExchange, allowSymbol, config, outRoot, startAll, timeframeMs } = opts;
-
-  const accMap = new Map<string, Accumulator>();
-  let totalLines = 0;
-  let totalTradesKept = 0;
-  let maxBuckets = 0;
-  let processedFiles = 0;
-
-  const heartbeatTimer = setInterval(() => {
-    console.log(
-      `[process] heartbeat files=${processedFiles}/${totalCandidates ?? "?"} accumulators=${accMap.size} maxBuckets=${maxBuckets} elapsed=${(
-        (Date.now() - startAll) /
-        1000
-      ).toFixed(1)}s`,
-    );
-  }, 10_000);
-
-  for (const file of files) {
-    if (allowExchange && file.exchange && file.exchange !== allowExchange) continue;
-    if (allowSymbol && file.symbol && file.symbol !== allowSymbol) continue;
-
-    processedFiles += 1;
-    const { linesRead, tradesKept } = await processSingleFile({
-      file,
-      allowExchange,
-      allowSymbol,
-      config,
-      outRoot,
-      accMap,
-      timeframeMs,
-    });
-
-    totalLines += linesRead;
-    totalTradesKept += tradesKept;
-    for (const acc of accMap.values()) {
-      if (acc.buckets.size > maxBuckets) maxBuckets = acc.buckets.size;
-    }
+async function writeMarketOutput(acc: Accumulator, outRoot: string, timeframeMs: number, sparse: boolean) {
+  if (!acc.bucketCount || !isFinite(acc.minMinute) || !isFinite(acc.maxMinute)) {
+    console.log(`[${acc.collector}/${acc.exchange}/${acc.symbol}] no trades; skipping output`);
+    return;
   }
 
-  return { accMap, totalLines, totalTradesKept, heartbeatTimer, processedFiles };
-}
+  const startBase =
+    acc.companion?.startTs !== undefined ? Math.min(acc.companion.startTs, acc.minMinute) : acc.minMinute;
+  const endBase =
+    acc.companion?.endTs !== undefined ? Math.max(acc.companion.endTs, acc.maxMinute + timeframeMs) : acc.maxMinute + timeframeMs;
+  const totalCandles = sparse ? acc.bucketCount : Math.max(0, Math.floor((endBase - startBase) / timeframeMs));
+  const estimatedMb = ((totalCandles * CANDLE_BYTES) / (1024 * 1024)).toFixed(2);
 
-async function processSingleFile(opts: {
-  file: FileRow;
-  allowExchange?: string;
-  allowSymbol?: string;
-  config: Config;
-  outRoot: string;
-  accMap: Map<string, Accumulator>;
-  timeframeMs: number;
-}): Promise<{ linesRead: number; tradesKept: number }> {
-  const { file, allowExchange, allowSymbol, config, outRoot, accMap, timeframeMs } = opts;
+  const outDir = path.join(outRoot, acc.collector, acc.exchange);
+  await fs.mkdir(outDir, { recursive: true });
+  const outBase = path.join(outDir, acc.symbol);
 
-  const fullPath = path.join(config.root, file.relative_path);
-  const pathExchange: string | null = file.exchange ?? null;
-  const pathSymbol: string | null = file.symbol ?? null;
-  const fileStartTs: number | null = typeof file.start_ts === "number" ? file.start_ts : null;
-
-  if (!pathExchange || !pathSymbol) {
-    console.warn(`[process] skipping ${file.relative_path} due to missing exchange/symbol metadata`);
-    return { linesRead: 0, tradesKept: 0 };
-  }
-
-  let linesRead = 0;
-  let tradesKept = 0;
-  let skippedWholeFile = false;
-
-  const stream = await makeStream(fullPath);
-  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
-  for await (const line of rl) {
-    linesRead += 1;
-    const trade = parseTradeLine(line, pathExchange, pathSymbol);
-    if (!trade) continue;
-
-    if (allowExchange && trade.exchange !== allowExchange) continue;
-    const normSym = normalizeSymbol(trade.exchange, trade.symbol, trade.ts) ?? trade.symbol;
-    if (allowSymbol && normSym !== allowSymbol) continue;
-
-    const acc = await ensureAccumulator(accMap, outRoot, file.collector, trade.exchange, normSym);
-    if (!acc) continue;
-
-    if (!config.force && acc.companion?.lastInputStartTs !== undefined && fileStartTs !== null) {
-      if (fileStartTs < acc.companion.lastInputStartTs) {
-        skippedWholeFile = true;
-        continue;
-      }
-    }
-    if (!config.force && acc.companion && trade.ts < acc.companion.endTs) continue;
-
-    const corrected = applyCorrections({ ...trade, symbol: normSym });
-    if (!corrected) continue;
-
-    accumulate(acc, corrected, timeframeMs);
-    if (fileStartTs !== null && fileStartTs > acc.maxInputStartTs) acc.maxInputStartTs = fileStartTs;
-    tradesKept += 1;
-  }
-  rl.close();
-  if (skippedWholeFile) {
-    // resume logic already applied
-  }
-
-  return { linesRead, tradesKept };
-}
-
-async function writeOutputs(accMap: Map<string, Accumulator>, outRoot: string, timeframeMs: number, sparse: boolean) {
-  let written = 0;
-  const accList = Array.from(accMap.values());
-  for (const acc of accList) {
-    if (!acc.buckets.size || !isFinite(acc.minMinute) || !isFinite(acc.maxMinute)) {
-      console.log(`[${acc.collector}/${acc.exchange}/${acc.symbol}] no trades; skipping output`);
-      continue;
-    }
-
-    const startBase =
-      acc.companion?.startTs !== undefined ? Math.min(acc.companion.startTs, acc.minMinute) : acc.minMinute;
-    const endBase =
-      acc.companion?.endTs !== undefined
-        ? Math.max(acc.companion.endTs, acc.maxMinute + timeframeMs)
-        : acc.maxMinute + timeframeMs;
-    const totalCandles = sparse
-      ? acc.buckets.size
-      : Math.max(0, Math.floor((endBase - startBase) / timeframeMs));
-    const estimatedMb = ((totalCandles * CANDLE_BYTES) / (1024 * 1024)).toFixed(2);
-
-    const outDir = path.join(outRoot, acc.collector, acc.exchange);
-    await fs.mkdir(outDir, { recursive: true });
-    const outBase = path.join(outDir, acc.symbol);
-
-    console.log(
-      `[${acc.collector}/${acc.exchange}/${acc.symbol}] writing ${totalCandles} candles (~${estimatedMb} MB) range ${new Date(
-        startBase,
-      ).toISOString()} -> ${new Date(endBase).toISOString()} sparse=${sparse}`,
-    );
-
-    await writeBinary(outBase + ".bin", acc.buckets, startBase, endBase - timeframeMs, timeframeMs, sparse);
-
-    const lastInputStartTs =
-      acc.maxInputStartTs > Number.NEGATIVE_INFINITY || acc.companion?.lastInputStartTs !== undefined
-        ? Math.max(acc.maxInputStartTs, acc.companion?.lastInputStartTs ?? Number.NEGATIVE_INFINITY)
-        : undefined;
-
-    await writeCompanion(
-      outBase + ".json",
-      acc.exchange,
-      acc.symbol,
-      totalCandles,
+  console.log(
+    `[${acc.collector}/${acc.exchange}/${acc.symbol}] writing ${totalCandles} candles (~${estimatedMb} MB) range ${new Date(
       startBase,
-      endBase,
-      timeframeMs,
-      sparse,
-      lastInputStartTs === Number.NEGATIVE_INFINITY ? undefined : lastInputStartTs,
-    );
+    ).toISOString()} -> ${new Date(endBase).toISOString()} sparse=${sparse}`,
+  );
 
-    console.log(
-      `[${acc.collector}/${acc.exchange}/${acc.symbol}] processed ${acc.buckets.size} populated candles into ${totalCandles} slots -> ${outBase}.bin`,
-    );
-    written += 1;
-    if (written % 25 === 0) {
-      console.log(`[process] output progress ${written}/${accList.length}`);
-    }
-  }
+  await writeBinary(outBase + ".bin", acc.buckets, startBase, endBase - timeframeMs, timeframeMs, sparse);
+
+  const lastInputStartTs = acc.maxInputStartTs === Number.NEGATIVE_INFINITY ? undefined : acc.maxInputStartTs;
+
+  await writeCompanion(
+    outBase + ".json",
+    acc.exchange,
+    acc.symbol,
+    totalCandles,
+    startBase,
+    endBase,
+    timeframeMs,
+    sparse,
+    lastInputStartTs,
+  );
+
+  console.log(
+    `[${acc.collector}/${acc.exchange}/${acc.symbol}] processed ${acc.bucketCount} populated candles into ${totalCandles} slots -> ${outBase}.bin`,
+  );
 }
 
 async function writeBinary(

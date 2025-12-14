@@ -57,9 +57,9 @@ function migrate(db: DatabaseSync): void {
       root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
       relative_path TEXT NOT NULL,
       collector TEXT NOT NULL,
-      exchange TEXT,
-      symbol TEXT,
-      start_ts INTEGER,
+      exchange TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      start_ts INTEGER NOT NULL,
       ext TEXT,
       created_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
       PRIMARY KEY (root_id, relative_path)
@@ -69,6 +69,27 @@ function migrate(db: DatabaseSync): void {
   db.exec("CREATE INDEX IF NOT EXISTS idx_files_exchange_symbol ON files(exchange, symbol);");
   db.exec("CREATE INDEX IF NOT EXISTS idx_files_start_ts ON files(start_ts);");
   db.exec("CREATE INDEX IF NOT EXISTS idx_files_collector ON files(collector);");
+
+  const columns = db.prepare("PRAGMA table_info(files);").all() as Array<{ name: string; notnull: number }>;
+  const missingNotNull = ["exchange", "symbol", "start_ts"].filter(
+    (col) => !columns.some((c) => c.name === col && c.notnull === 1),
+  );
+  if (missingNotNull.length) {
+    throw new Error(
+      `files table missing NOT NULL constraints for: ${missingNotNull.join(
+        ", ",
+      )}. Please rebuild the index (drop index.sqlite and rerun index).`,
+    );
+  }
+
+  const nullCountRow = db
+    .prepare("SELECT COUNT(*) as cnt FROM files WHERE exchange IS NULL OR symbol IS NULL OR start_ts IS NULL;")
+    .get() as { cnt?: number };
+  if (nullCountRow?.cnt && nullCountRow.cnt > 0) {
+    throw new Error(
+      `files table contains ${nullCountRow.cnt} rows with NULL exchange/symbol/start_ts. Please rebuild the index.`,
+    );
+  }
 }
 
 function insertMany(
@@ -81,13 +102,16 @@ function insertMany(
   db.exec("BEGIN");
   try {
     for (const row of rows) {
+      if (!row.exchange || !row.symbol || !Number.isFinite(row.startTs)) {
+        throw new Error(`Invalid indexed row ${row.relativePath}: missing exchange/symbol/startTs`);
+      }
       const res = stmt.run({
         rootId: row.rootId,
         relativePath: row.relativePath,
         collector: row.collector,
-        exchange: row.exchange ?? null,
-        symbol: row.symbol ?? null,
-        startTs: row.startTs ?? null,
+        exchange: row.exchange,
+        symbol: row.symbol,
+        startTs: row.startTs,
         ext: row.ext ?? null,
       });
       const delta = Number(res.changes ?? 0);

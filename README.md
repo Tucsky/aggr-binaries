@@ -162,9 +162,9 @@ CREATE TABLE files (
   root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
   relative_path TEXT NOT NULL,
   collector TEXT NOT NULL,
-  exchange TEXT,
-  symbol TEXT,
-  start_ts INTEGER,
+  exchange TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  start_ts INTEGER NOT NULL,
   ext TEXT,
   created_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
   PRIMARY KEY (root_id, relative_path)
@@ -189,19 +189,13 @@ CREATE INDEX idx_files_collector ON files(collector);
 
 ### Core logic
 
-* Load candidate files from SQLite ordered by:
+* Load **markets** from SQLite ordered by `collector, exchange, symbol` (filters: `--collector`, `--exchange`, `--symbol`).
+* For each market:
 
-  * collector
-  * `start_ts`
-  * path
-* Optional filters:
-
-  * `--collector`
-  * `--exchange`
-  * `--symbol`
-* Stream each file **once** (gzip if needed).
-* Apply normalization + corrections per trade.
-* Dispatch trades into per-market accumulators created on demand.
+  * Read companion once (resume bounds, metadata).
+  * Query that market’s files ordered by `start_ts, path`, applying resume guard in SQL (`start_ts >= lastInputStartTs` when present).
+  * Stream each file **once** (gzip if needed), apply trade-level resume guard (`ts < endTs`), and accumulate.
+* Single in-memory accumulator per market; flush outputs before moving to the next market.
 * Write:
 
   ```
@@ -224,7 +218,7 @@ CREATE INDEX idx_files_collector ON files(collector);
 * Batched SQLite writes during indexing.
 * No per-trade DB I/O.
 * Binary writes chunked in **4096-candle blocks** to avoid millions of syscalls.
-* Accumulators are in-memory maps keyed by `(collector, exchange, symbol)`.
+* One accumulator at a time (per market) → predictable memory use even across many markets.
 
 ---
 

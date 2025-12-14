@@ -35,9 +35,9 @@ export interface IndexedFile {
   rootId: number;
   relativePath: string; // POSIX separators
   collector: Collector;
-  exchange?: string;
-  symbol?: string;
-  startTs?: number;
+  exchange: string;
+  symbol: string;
+  startTs: number;
   ext?: string;
 }
 
@@ -62,8 +62,8 @@ export interface FileRow {
   root_id: number;
   relative_path: string;
   collector: Collector;
-  exchange?: string | null;
-  symbol?: string | null;
-  start_ts?: number | null;
+  exchange: string;
+  symbol: string;
+  start_ts: number;
   ext?: string | null;
 }
