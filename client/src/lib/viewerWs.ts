@@ -1,7 +1,7 @@
 import type { ToastLevel } from "./toastStore.js";
 import { addToast } from "./toastStore.js";
 import type { Candle, Market, Meta, Prefs } from "./types.js";
-import { markets as marketsStore, meta, status, timeframes as timeframesStore } from "./viewerStore.js";
+import { markets as marketsStore, meta, status, setServerTimeframes } from "./viewerStore.js";
 
 type CandlesHandler = (fromIndex: number, candles: Candle[]) => void;
 
@@ -122,7 +122,7 @@ export function setTarget(target: Market, options: { clearMeta?: boolean; force?
   currentTarget = normalized;
   if (clearMeta) {
     resetSlices();
-    timeframesStore.set([]);
+    setServerTimeframes([]);
   }
   sendMessage({ type: "setTarget", ...currentTarget });
   requestTimeframes(currentTarget);
@@ -159,7 +159,7 @@ export function requestTimeframes(target?: Market | null): void {
   if (!tgt) return;
   const key = targetKey(tgt);
   lastTimeframeRequestKey = key;
-  timeframesStore.set([]);
+  setServerTimeframes([]);
   sendMessage({ type: "listTimeframes", ...tgt });
 }
 
@@ -258,5 +258,6 @@ function handleTimeframes(msg: any): void {
   const msgKey = targetKey(msgTarget);
   if (currentTarget && msgKey && msgKey !== targetKey(currentTarget)) return;
   if (lastTimeframeRequestKey && msgKey && msgKey !== lastTimeframeRequestKey) return;
-  timeframesStore.set((msg.timeframes as string[]) ?? []);
+  const received: string[] = Array.isArray(msg.timeframes) ? msg.timeframes : [];
+  setServerTimeframes(received);
 }

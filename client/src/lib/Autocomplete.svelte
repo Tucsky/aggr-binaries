@@ -19,7 +19,7 @@
 
 <div class="w-full">
   <input
-    class="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-100 w-full"
+    class="bg-slate-900 px-2 py-2 border border-slate-800 rounded text-slate-100 w-full"
     type="text"
     {id}
     {placeholder}

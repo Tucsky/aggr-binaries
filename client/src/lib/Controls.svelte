@@ -2,8 +2,20 @@
   import { onDestroy, onMount } from "svelte";
   import { get } from "svelte/store";
   import Autocomplete from "./Autocomplete.svelte";
+  import TimeframeDropdown from "./TimeframeDropdown.svelte";
   import type { Market } from "./types.js";
-  import { collapsed, markets, meta, prefs, savePrefs, status, timeframes } from "./viewerStore.js";
+  import {
+      addTimeframe,
+      collapsed,
+      markets,
+      meta,
+      prefs,
+      removeTimeframe,
+      savePrefs,
+      serverTimeframes,
+      status,
+      timeframes,
+  } from "./viewerStore.js";
   import { connect, reconnect, requestMarkets, setStart, setTarget, setTimeframe } from "./viewerWs.js";
 
   let local = get(prefs);
@@ -11,13 +23,17 @@
   let collectorOptions: string[] = [];
   let marketOptions: string[] = [];
   let timeframeOptions: string[] = [];
+  let serverTf: string[] = get(serverTimeframes);
   const marketInputId = "market-input";
   let localMarket = combineMarket(local.exchange, local.symbol);
   let initialSyncDone = false;
+  let tfOpen = false;
+  let tfButton: HTMLButtonElement | null = null;
 
   const unsubPrefs = prefs.subscribe((v) => (local = v));
   const unsubMarkets = markets.subscribe((values) => syncFromMarkets(values ?? []));
   const unsubTimeframes = timeframes.subscribe((values) => syncTimeframes(values ?? []));
+  const unsubServerTf = serverTimeframes.subscribe((values) => (serverTf = values ?? []));
   const unsubStatus = status.subscribe(() => {});
 
   onMount(() => {
@@ -28,6 +44,7 @@
     unsubPrefs();
     unsubMarkets();
     unsubTimeframes();
+    unsubServerTf();
     unsubStatus();
   });
 
@@ -131,11 +148,22 @@
     sendSelections(true);
   }
 
-  function handleTimeframeChange(event: Event) {
-    const value = (event.target as HTMLSelectElement).value;
+  function handleTimeframeChange(value: string) {
+    if (!value) return;
     local = { ...local, timeframe: value };
     savePrefs(local);
     setTimeframe(local.timeframe, { force: true });
+    tfOpen = false;
+  }
+
+  function handleAddTimeframe(value: string) {
+    if (!value) return;
+    addTimeframe(value);
+    handleTimeframeChange(value);
+  }
+
+  function handleRemoveTimeframe(value: string) {
+    removeTimeframe(value);
   }
 
   function handleStartChange(event: Event) {
@@ -161,6 +189,11 @@
     collapsed.update((v) => !v);
   }
 
+  function toggleTfDropdown() {
+    if (!tfButton) return;
+    tfOpen = !tfOpen;
+  }
+
   function refreshMarkets() {
     requestMarkets();
   }
@@ -175,7 +208,7 @@
   </button>
 
   <div
-    class={`bg-slate-900/90 border border-slate-700 rounded-md p-3 flex flex-col gap-3 text-xs ${
+    class={`bg-gray-900/80 backdrop-blur-sm border border-slate-800 rounded-md p-3 flex flex-col gap-3 text-xs ${
       $collapsed ? "hidden" : "flex"
     }`}
   >
@@ -183,7 +216,7 @@
       <label class="flex items-center gap-2">
         <span class="w-24 text-slate-300">Collector</span>
         <select
-          class="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-100"
+          class="bg-slate-900 border border-slate-800 rounded px-2 py-1 text-slate-100"
           on:change={handleCollectorChange}
           value={local.collector}
         >
@@ -212,26 +245,45 @@
 
       <label class="flex items-center gap-2">
         <span class="w-24 text-slate-300">Timeframe</span>
-        <select
-          class="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-100"
-          on:change={handleTimeframeChange}
-          value={local.timeframe}
-          disabled={timeframeOptions.length === 0}
-        >
-          {#if timeframeOptions.length === 0}
-            <option disabled selected>Load timeframes</option>
-          {:else}
-            {#each timeframeOptions as option}
-              <option value={option} selected={option === local.timeframe}>{option}</option>
-            {/each}
-          {/if}
-        </select>
+        <div class="relative flex-1">
+          <button
+            class="w-full bg-slate-900 border border-slate-800 rounded px-2 py-2 text-slate-100 flex items-center justify-between"
+            on:click={toggleTfDropdown}
+            type="button"
+            bind:this={tfButton}
+          >
+            <span class="font-mono">{local.timeframe || "Select TF"}</span>
+            <svg
+              class={`w-4 h-4 transition-transform ${tfOpen ? "rotate-180" : ""}`}
+              viewBox="0 0 20 20"
+              fill="currentColor"
+            >
+              <path
+                fill-rule="evenodd"
+                d="M5.23 7.21a.75.75 0 011.06.02L10 10.939l3.71-3.71a.75.75 0 111.06 1.062l-4.24 4.24a.75.75 0 01-1.06 0l-4.24-4.24a.75.75 0 01.02-1.06z"
+                clip-rule="evenodd"
+              />
+            </svg>
+          </button>
+          <TimeframeDropdown
+            bind:open={tfOpen}
+            timeframes={timeframeOptions}
+            value={local.timeframe}
+            removable={new Set(timeframeOptions)}
+            serverSet={new Set(serverTf)}
+            on:select={(e) => handleTimeframeChange(e.detail)}
+            on:remove={(e) => handleRemoveTimeframe(e.detail)}
+            on:add={(e) => handleAddTimeframe(e.detail)}
+            on:close={() => (tfOpen = false)}
+            anchorEl={tfButton}
+          />
+        </div>
       </label>
 
       <label class="flex items-center gap-2">
         <span class="w-24 text-slate-300">Start (UTC)</span>
         <input
-          class="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-100 w-full"
+          class="bg-slate-900 border border-slate-800 rounded px-2 py-1 text-slate-100 w-full"
           type="datetime-local"
           value={local.start}
           on:change={handleStartChange}

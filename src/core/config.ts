@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { parseTimeframeMs } from "../shared/timeframes.js";
 
 export interface Config {
   root: string;
@@ -101,20 +102,4 @@ Options (override config file):
   console.log(help.trim());
 }
 
-export function parseTimeframeMs(tf: string): number | undefined {
-  const m = tf.trim().toLowerCase().match(/^(\d+)([smhd])$/);
-  if (!m) return undefined;
-  const n = Number(m[1]);
-  switch (m[2]) {
-    case "s":
-      return n * 1000;
-    case "m":
-      return n * 60_000;
-    case "h":
-      return n * 3_600_000;
-    case "d":
-      return n * 86_400_000;
-    default:
-      return undefined;
-  }
-}
+export { parseTimeframeMs };

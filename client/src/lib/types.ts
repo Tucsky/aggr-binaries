@@ -19,6 +19,7 @@ export interface Prefs {
   exchange: string;
   symbol: string;
   timeframe: string;
+  timeframes: string[];
   start: string;
 }
 

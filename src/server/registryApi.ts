@@ -1,4 +1,5 @@
 import type { Db } from "../core/db.js";
+import { sortTimeframes } from "../shared/timeframes.js";
 
 export interface MarketEntry {
   collector: string;
@@ -25,5 +26,5 @@ export function listTimeframes(db: Db, collector: string, exchange: string, symb
         "SELECT timeframe FROM registry WHERE collector = :collector AND exchange = :exchange AND symbol = :symbol ORDER BY timeframe;",
       )
       .all({ collector, exchange, symbol }) as Array<{ timeframe: string }>) ?? [];
-  return rows.map((r) => r.timeframe);
+  return sortTimeframes(rows.map((r) => r.timeframe));
 }

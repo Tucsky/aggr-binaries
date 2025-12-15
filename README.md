@@ -337,10 +337,18 @@ npm run serve
   * `markets`, `timeframes`, `error`
 * Works with dense (gap-filled) and sparse binaries; no reconnects required for target/timeframe/start changes.
 
+### Preview resampling (on-demand, registry + binaries)
+
+* When the client requests a timeframe, the server ensures the binary exists and is fresh before serving slices.
+* Freshness: for each timeframe `tfMs`, `maxEnd = floor(rootEnd / tfMs) * tfMs` using the smallest dense timeframe (`root`) in the registry; a timeframe is fresh if its `endTs === maxEnd`.
+* Source selection: among dense timeframes where `dst % src === 0`, pick the largest fresh candidate (fallback to root); skip missing binaries and purge their registry rows.
+* Updates are append-only: compute missing `[from = dst.endTs, to = maxEnd]`; aggregate source candles into dst buckets and append to `dst.bin` and companion, then upsert registry.
+* Sparse binaries are not used for resampling; gaps (zero OHLC) are ignored for price aggregation so resampled OHLCs are not flattened by holes.
+
 ### Preview UI (registry-backed controls)
 
 * Single WS connection; no URL params.
-* Collector select, market autocomplete (`EXCHANGE:SYMBOL` from registry), timeframe select (per-market), start datetime.
+* Collector select, market autocomplete (`EXCHANGE:SYMBOL` from registry), timeframe dropdown (user-managed list seeded by common TFs, highlights server-available TFs), start datetime.
 * Registry-driven discovery populates controls; changing selections sends messages instead of reconnecting.
 
 ---

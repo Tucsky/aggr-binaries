@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { Db } from "../core/db.js";
 import type { CompanionMetadata } from "../core/model.js";
+import { ensurePreviewTimeframe } from "./resample.js";
 
 export interface PreviewContext {
   db: Db;
@@ -36,20 +37,7 @@ export async function loadCompanion(
   symbol: string,
   timeframe: string,
 ): Promise<Companion> {
-  const entry = ctx.db.getRegistryEntry({ collector, exchange, symbol, timeframe });
-  if (!entry) {
-    throw new Error(`Registry entry not found for ${collector}/${exchange}/${symbol}/${timeframe}`);
-  }
-  const companionPath = path.join(ctx.outputRoot, collector, exchange, symbol, `${timeframe}.json`);
-  const raw = await fs.readFile(companionPath, "utf8");
-  const parsed = JSON.parse(raw) as Companion;
-  return {
-    ...parsed,
-    timeframe: parsed.timeframe ?? timeframe,
-    sparse: parsed.sparse ?? entry.sparse,
-    startTs: parsed.startTs ?? entry.startTs,
-    endTs: parsed.endTs ?? entry.endTs,
-  };
+  return ensurePreviewTimeframe(ctx, collector, exchange, symbol, timeframe);
 }
 
 export async function readCandles(
