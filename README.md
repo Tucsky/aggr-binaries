@@ -306,7 +306,7 @@ npm start -- process
 ### Structure
 
 * Core pipeline: `src/core`
-* WebSocket server: `src/server.ts`
+* WebSocket server: `src/server.ts` (split into `server/` helpers)
 * Frontend: `client/` (Svelte + Vite + Tailwind)
 
 ### Commands
@@ -319,16 +319,29 @@ npm run serve
 
 * `serve` builds everything and starts the WS + static server from `dist/server.js`.
 
-### WebSocket API
+### WebSocket API (message-driven, single connection)
 
 * `GET /` → serves built frontend
-* `WS /ws?collector=...&exchange=...&symbol=...&timeframe=1m&start=ms`
+* `WS /ws` → no query params; all control uses JSON messages
+* Per-connection state: collector, exchange, symbol, timeframe, startMs, companion, anchorIndex
+* Client → server messages:
+  * `setTarget {collector,exchange,symbol}` → loads companion + anchor and replies with `meta`
+  * `setTimeframe {timeframe}` → reloads companion for same market, replies with `meta`
+  * `setStart {startTs}` → recomputes anchor, replies with `meta`
+  * `slice {fromIndex,toIndex}` → replies with `candles` slice
+  * `listMarkets {}` → replies with `markets` (registry-backed)
+  * `listTimeframes {collector,exchange,symbol}` → replies with `timeframes` (registry-backed)
+* Server → client messages:
+  * `meta` (timeframe/timeframeMs, sparse, records, anchorIndex, startTs/endTs, priceScale/volumeScale)
+  * `candles` (slice response)
+  * `markets`, `timeframes`, `error`
+* Works with dense (gap-filled) and sparse binaries; no reconnects required for target/timeframe/start changes.
 
-Server responds with:
+### Preview UI (registry-backed controls)
 
-* `meta` (timeframe, sparse, records, anchorIndex)
-* Supports `slice` requests by candle index
-* Works with dense (gap-filled) and sparse binaries
+* Single WS connection; no URL params.
+* Collector select, market autocomplete (`EXCHANGE:SYMBOL` from registry), timeframe select (per-market), start datetime.
+* Registry-driven discovery populates controls; changing selections sends messages instead of reconnecting.
 
 ---
 

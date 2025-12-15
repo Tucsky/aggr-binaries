@@ -1,5 +1,14 @@
 <script lang="ts">
-  import { createChart, type IChartApi, type ISeriesApi } from "lightweight-charts";
+  import {
+      createChart,
+      CrosshairMode,
+      PriceScaleMode,
+      type CandlestickData,
+      type IChartApi,
+      type ISeriesApi,
+      type Time,
+      type WhitespaceData,
+  } from "lightweight-charts";
   import { onDestroy, onMount } from "svelte";
   import type { Candle, Meta } from "./types.js";
   import { meta as metaStore, status as statusStore } from "./viewerStore.js";
@@ -8,17 +17,21 @@
   let chartEl: HTMLDivElement;
   let chart: IChartApi | null = null;
   let series: ISeriesApi<"Candlestick"> | null = null;
-  let cache = new Map<number, Candle>();
-  let loadedIndex = { min: null as number | null, max: null as number | null };
+  let baseIndex: number | null = null;
+  let bars: Bar[] = [];
   let suppressRangeEvent = false;
   let currentMeta: Meta | null = null;
   let unsubCandles: (() => void) | null = null;
   let unsubMeta: (() => void) | null = null;
   let unsubStatus: (() => void) | null = null;
 
+  type Bar = CandlestickData<Time> | WhitespaceData<Time>;
+
   onMount(() => {
     setupChart();
-    unsubCandles = onCandles((fromIndex, candles) => ingest(fromIndex, candles));
+    unsubCandles = onCandles((fromIndex, candles) =>
+      ingest(fromIndex, candles),
+    );
     unsubMeta = metaStore.subscribe((m) => {
       currentMeta = m;
       reset();
@@ -42,10 +55,18 @@
   function setupChart() {
     chart = createChart(chartEl, {
       layout: { background: { color: "#0d1117" }, textColor: "#e6edf3" },
-      grid: { vertLines: { color: "#161b22" }, horzLines: { color: "#161b22" } },
-      timeScale: { rightOffset: 1, barSpacing: 6, timeVisible: true, secondsVisible: false },
-      crosshair: { mode: 1 },
-      rightPriceScale: { mode: 2 },
+      grid: {
+        vertLines: { color: "#161b22" },
+        horzLines: { color: "#161b22" },
+      },
+      timeScale: {
+        rightOffset: 1,
+        barSpacing: 6,
+        timeVisible: true,
+        secondsVisible: false,
+      },
+      crosshair: { mode: CrosshairMode.Normal },
+      rightPriceScale: { mode: PriceScaleMode.Logarithmic },
     });
     series = chart.addCandlestickSeries({
       upColor: "#16a34a",
@@ -55,28 +76,41 @@
       borderVisible: false,
     });
     chart.timeScale().subscribeVisibleTimeRangeChange((range) => {
-      if (suppressRangeEvent || !range || !range.from || !range.to || !currentMeta) return;
-      if (loadedIndex.min === null || loadedIndex.max === null || cache.size === 0) return;
-      const sorted = Array.from(cache.values()).sort((a, b) => Number(a.time) - Number(b.time));
-      const minTime = Number(sorted[0].time) * 1000;
-      const maxTime = Number(sorted[sorted.length - 1].time) * 1000;
+      if (
+        suppressRangeEvent ||
+        !range ||
+        range.from == null ||
+        range.to == null ||
+        !currentMeta
+      )
+        return;
+      if (bars.length === 0 || baseIndex === null) return;
+      const minTime = Number(bars[0].time) * 1000;
+      const maxTime = Number(bars[bars.length - 1].time) * 1000;
       const fromMs = Number(range.from) * 1000;
       const toMs = Number(range.to) * 1000;
       const margin = currentMeta.timeframeMs * 2;
-      if (fromMs < minTime + margin && loadedIndex.min! > 0) {
-        const nextFrom = Math.max(0, loadedIndex.min! - 500);
-        requestSlice(nextFrom, loadedIndex.min! - 1, "scroll left");
+      const minIdx = loadedMin();
+      const maxIdx = loadedMax();
+      if (fromMs < minTime + margin && minIdx !== null && minIdx > 0) {
+        const nextFrom = Math.max(0, minIdx - 500);
+        requestSlice(nextFrom, minIdx - 1, "scroll left");
       }
-      if (toMs > maxTime - margin && loadedIndex.max! < currentMeta.records - 1) {
-        const nextTo = Math.min(currentMeta.records - 1, loadedIndex.max! + 500);
-        requestSlice(loadedIndex.max! + 1, nextTo, "scroll right");
+      if (
+        toMs > maxTime - margin &&
+        maxIdx !== null &&
+        maxIdx < currentMeta.records - 1
+      ) {
+        const nextTo = Math.min(currentMeta.records - 1, maxIdx + 500);
+        requestSlice(maxIdx + 1, nextTo, "scroll right");
+        suppressRangeEvent = true;
       }
     });
   }
 
   function reset() {
-    cache.clear();
-    loadedIndex = { min: null, max: null };
+    baseIndex = null;
+    bars = [];
     suppressRangeEvent = false;
     series?.setData([]);
   }
@@ -84,32 +118,103 @@
   function ingest(fromIndex: number, candles: Candle[]) {
     if (!currentMeta) return;
     if (!candles.length) return;
-    let newMin = loadedIndex.min;
-    let newMax = loadedIndex.max;
-    candles.forEach((c, i) => {
-      const idx = fromIndex + i;
-      cache.set(idx, { ...c, index: idx });
-      if (newMin === null || idx < newMin) newMin = idx;
-      if (newMax === null || idx > newMax) newMax = idx;
-    });
-    loadedIndex = { min: newMin, max: newMax };
-    const sorted = Array.from(cache.entries())
-      .sort((a, b) => a[0] - b[0])
-      .map(([, c]) => c);
-    suppressRangeEvent = true;
-    series?.setData(sorted.map((c) => {
-      if (!c.open || !c.high || !c.low || !c.close) {
-        return ({ time: c.time }) // gap candle
+    const slice = candles.map(toBar);
+    const sliceLen = slice.length;
+    const sliceMax = fromIndex + sliceLen - 1;
+
+    if (baseIndex === null || bars.length === 0) {
+      baseIndex = fromIndex;
+      bars = slice;
+      suppressRangeEvent = true;
+      series?.setData(bars);
+      suppressRangeEvent = false;
+      return;
+    }
+
+    const min = loadedMin()!;
+    const max = loadedMax()!;
+    const isAppendRight = fromIndex === max + 1;
+    const isPrependLeft = sliceMax === min - 1;
+
+    if (isAppendRight) {
+      const ts = chart?.timeScale();
+      const prevPos = ts?.scrollPosition() ?? 0;
+
+      for (const b of slice) {
+        bars.push(b);
+        series?.update(b);
       }
-      return ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close })
-    }));
+
+      if (prevPos > 0) {
+        ts?.scrollToPosition(prevPos - sliceLen, false);
+      }
+
+      setTimeout(() => {
+        suppressRangeEvent = false;
+      }, 100)
+      return;
+    }
+
+    if (isPrependLeft) {
+      baseIndex = fromIndex;
+      bars = slice.concat(bars);
+      suppressRangeEvent = true;
+      series?.setData(bars);
+      suppressRangeEvent = false;
+      return;
+    }
+
+    const newMin = Math.min(min, fromIndex);
+    const newMax = Math.max(max, sliceMax);
+    const merged: Array<Bar | undefined> = Array(newMax - newMin + 1);
+
+    for (let i = 0; i < bars.length; i++) {
+      merged[min - newMin + i] = bars[i];
+    }
+    for (let i = 0; i < sliceLen; i++) {
+      merged[fromIndex - newMin + i] = slice[i];
+    }
+
+    let first = merged.findIndex(Boolean);
+    let last = merged.length - 1;
+    while (last >= 0 && !merged[last]) last -= 1;
+    if (first === -1 || last < first) return;
+
+    baseIndex = newMin + first;
+    bars = merged.slice(first, last + 1).filter(Boolean) as Bar[];
+    suppressRangeEvent = true;
+    series?.setData(bars);
     suppressRangeEvent = false;
-    /* if (sorted.length) {
-      const last = sorted[sorted.length - 1];
-      const first = sorted[Math.max(0, sorted.length - 500)];
-      console.log('Setting visible range:', new Date(first.time * 1000).toISOString(), 'to', new Date(last.time * 1000).toISOString()); 
-      chart?.timeScale().setVisibleRange({ from: first.time, to: last.time });
-    }*/ 
+  }
+
+  function toBar(c: Candle): Bar {
+    const timeSec: Time = Math.floor(Number(c.time) / 1000) as Time;
+    const gap =
+      c.open === undefined ||
+      c.high === undefined ||
+      c.low === undefined ||
+      c.close === undefined ||
+      c.open === 0 ||
+      c.high === 0 ||
+      c.low === 0 ||
+      c.close === 0;
+    if (gap) return { time: timeSec };
+    return {
+      time: timeSec,
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+    };
+  }
+
+  function loadedMin(): number | null {
+    return baseIndex;
+  }
+
+  function loadedMax(): number | null {
+    if (baseIndex === null) return null;
+    return baseIndex + bars.length - 1;
   }
 </script>
 

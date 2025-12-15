@@ -31,3 +31,9 @@ export type Candle = CandlestickData & {
   liqSell: number;
   index: number;
 };
+
+export interface Market {
+  collector: string;
+  exchange: string;
+  symbol: string;
+}

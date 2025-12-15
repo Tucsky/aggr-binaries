@@ -1,5 +1,5 @@
 import { writable, type Writable } from "svelte/store";
-import type { Meta, Prefs, Status } from "./types.js";
+import type { Market, Meta, Prefs, Status } from "./types.js";
 
 const PREF_KEY = "aggr-viewer-prefs";
 
@@ -15,6 +15,8 @@ export const prefs: Writable<Prefs> = writable(loadPrefs());
 export const status: Writable<Status> = writable("idle");
 export const meta: Writable<Meta | null> = writable(null);
 export const collapsed = writable(false);
+export const markets: Writable<Market[]> = writable([]);
+export const timeframes: Writable<string[]> = writable([]);
 
 export function savePrefs(value: Prefs): void {
   prefs.set(value);
