@@ -7,8 +7,12 @@
   loadPrefs();
 </script>
 
-<main class="w-full h-screen relative text-sm text-slate-100">
+<main
+  class="flex h-screen min-h-screen flex-col bg-slate-950 text-sm text-slate-100 overflow-hidden"
+>
   <Controls />
-  <CandleChart />
+  <div class="flex-1 min-h-0">
+    <CandleChart />
+  </div>
   <Toasts />
 </main>

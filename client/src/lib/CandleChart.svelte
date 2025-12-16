@@ -24,6 +24,7 @@
   let unsubCandles: (() => void) | null = null;
   let unsubMeta: (() => void) | null = null;
   let unsubStatus: (() => void) | null = null;
+  let resizeObserver: ResizeObserver | null = null;
 
   type Bar = CandlestickData<Time> | WhitespaceData<Time>;
 
@@ -49,6 +50,7 @@
     unsubCandles?.();
     unsubMeta?.();
     unsubStatus?.();
+    resizeObserver?.disconnect();
     chart?.remove();
   });
 
@@ -56,8 +58,8 @@
     chart = createChart(chartEl, {
       layout: { background: { color: "#0d1117" }, textColor: "#e6edf3" },
       grid: {
-        vertLines: { color: "#161b22" },
-        horzLines: { color: "#161b22" },
+        vertLines: { color: "#161b22", visible: false },
+        horzLines: { color: "#161b22", visible: false },
       },
       timeScale: {
         rightOffset: 1,
@@ -69,12 +71,13 @@
       rightPriceScale: { mode: PriceScaleMode.Logarithmic },
     });
     series = chart.addCandlestickSeries({
-      upColor: "#16a34a",
-      downColor: "#ef4444",
-      wickUpColor: "#16a34a",
-      wickDownColor: "#ef4444",
+      upColor: "#3bca6d",
+      downColor: "#d62828",
+      wickUpColor: "#41f07b",
+      wickDownColor: "#ff5253",
       borderVisible: false,
     });
+    startResizeObserver();
     chart.timeScale().subscribeVisibleTimeRangeChange((range) => {
       if (
         suppressRangeEvent ||
@@ -216,6 +219,18 @@
     if (baseIndex === null) return null;
     return baseIndex + bars.length - 1;
   }
+
+  function startResizeObserver() {
+    resizeObserver?.disconnect();
+    resizeObserver = new ResizeObserver(() => {
+      if (!chart) return;
+      const { clientWidth, clientHeight } = chartEl;
+      chart.resize(clientWidth, clientHeight);
+    });
+    resizeObserver.observe(chartEl);
+    const { clientWidth, clientHeight } = chartEl;
+    chart?.resize(clientWidth, clientHeight);
+  }
 </script>
 
-<div bind:this={chartEl} class="absolute inset-0"></div>
+<div bind:this={chartEl} class="h-full w-full"></div>

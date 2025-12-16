@@ -2,39 +2,37 @@
   import { onDestroy, onMount } from "svelte";
   import { get } from "svelte/store";
   import Autocomplete from "./Autocomplete.svelte";
+  import Dropdown from "./Dropdown.svelte";
   import TimeframeDropdown from "./TimeframeDropdown.svelte";
   import type { Market } from "./types.js";
   import {
-      addTimeframe,
-      collapsed,
       markets,
       meta,
       prefs,
-      removeTimeframe,
       savePrefs,
-      serverTimeframes,
       status,
-      timeframes,
   } from "./viewerStore.js";
-  import { connect, reconnect, requestMarkets, setStart, setTarget, setTimeframe } from "./viewerWs.js";
+  import {
+      connect,
+      reconnect,
+      requestMarkets,
+      setStart,
+      setTarget,
+  } from "./viewerWs.js";
 
   let local = get(prefs);
   let currentMarkets: Market[] = [];
   let collectorOptions: string[] = [];
   let marketOptions: string[] = [];
-  let timeframeOptions: string[] = [];
-  let serverTf: string[] = get(serverTimeframes);
-  const marketInputId = "market-input";
   let localMarket = combineMarket(local.exchange, local.symbol);
   let initialSyncDone = false;
-  let tfOpen = false;
-  let tfButton: HTMLButtonElement | null = null;
+  let settingsDropdownOpened = false;
+  let settingsDropdownButton: HTMLButtonElement | null = null;
 
   const unsubPrefs = prefs.subscribe((v) => (local = v));
-  const unsubMarkets = markets.subscribe((values) => syncFromMarkets(values ?? []));
-  const unsubTimeframes = timeframes.subscribe((values) => syncTimeframes(values ?? []));
-  const unsubServerTf = serverTimeframes.subscribe((values) => (serverTf = values ?? []));
-  const unsubStatus = status.subscribe(() => {});
+  const unsubMarkets = markets.subscribe((values) =>
+    syncFromMarkets(values ?? []),
+  );
 
   onMount(() => {
     connect(local);
@@ -43,9 +41,6 @@
   onDestroy(() => {
     unsubPrefs();
     unsubMarkets();
-    unsubTimeframes();
-    unsubServerTf();
-    unsubStatus();
   });
 
   $: prefs.set(local);
@@ -65,7 +60,9 @@
     return `${exchange}:${symbol}`;
   }
 
-  function parseMarket(value: string): { exchange: string; symbol: string } | null {
+  function parseMarket(
+    value: string,
+  ): { exchange: string; symbol: string } | null {
     const [exchange, ...rest] = value.split(":");
     const symbol = rest.join(":");
     const ex = exchange?.trim().toUpperCase();
@@ -76,14 +73,25 @@
 
   function syncFromMarkets(marketsList: Market[], force = false) {
     currentMarkets = marketsList;
+    if (!marketsList.length) {
+      collectorOptions = [];
+      marketOptions = [];
+      return;
+    }
+
     collectorOptions = uniq(marketsList.map((m) => m.collector));
-    const collector = pick(local.collector, collectorOptions);
+    const collector = collectorOptions.includes(local.collector)
+      ? local.collector
+      : pick(local.collector, collectorOptions);
 
     marketOptions = uniq(
-      marketsList.filter((m) => m.collector === collector).map((m) => combineMarket(m.exchange, m.symbol)),
+      marketsList
+        .filter((m) => m.collector === collector)
+        .map((m) => combineMarket(m.exchange, m.symbol)),
     );
 
-    const desiredMarket = localMarket || combineMarket(local.exchange, local.symbol);
+    const desiredMarket =
+      localMarket || combineMarket(local.exchange, local.symbol);
     const market = pick(desiredMarket, marketOptions);
     const parsed = parseMarket(market);
     local = {
@@ -98,37 +106,36 @@
     initialSyncDone = true;
   }
 
-  function syncTimeframes(options: string[], force = false) {
-    timeframeOptions = options.slice();
-    if (!timeframeOptions.length) return;
-    const timeframe = pick(local.timeframe, timeframeOptions);
-    if (timeframe !== local.timeframe) {
-      local = { ...local, timeframe };
-      savePrefs(local);
-    }
-    sendSelections(force || !initialSyncDone);
-  }
-
   function sendSelections(force = false) {
-    const parsed = parseMarket(localMarket || combineMarket(local.exchange, local.symbol));
+    const parsed = parseMarket(
+      localMarket || combineMarket(local.exchange, local.symbol),
+    );
     if (!local.collector || !parsed) return;
     const exists = currentMarkets.some(
-      (m) => m.collector === local.collector && m.exchange === parsed.exchange && m.symbol === parsed.symbol,
+      (m) =>
+        m.collector === local.collector &&
+        m.exchange === parsed.exchange &&
+        m.symbol === parsed.symbol,
     );
     if (!exists) return;
     setTarget(
-      { collector: local.collector, exchange: parsed.exchange, symbol: parsed.symbol },
-      { force, clearMeta: true },
+      {
+        collector: local.collector,
+        exchange: parsed.exchange,
+        symbol: parsed.symbol,
+      },
+      {
+        force,
+        clearMeta: true,
+        timeframe: local.timeframe,
+        startMs:
+          local.start === ""
+            ? null
+            : Number.isNaN(Date.parse(local.start))
+              ? undefined
+              : Date.parse(local.start),
+      },
     );
-    if (timeframeOptions.length) {
-      setTimeframe(local.timeframe, { force });
-    }
-    if (local.start) {
-      const ts = Date.parse(local.start);
-      if (!Number.isNaN(ts)) {
-        setStart(ts, { force });
-      }
-    }
   }
 
   function handleCollectorChange(event: Event) {
@@ -146,24 +153,6 @@
     local = { ...local, exchange: parsed.exchange, symbol: parsed.symbol };
     savePrefs(local);
     sendSelections(true);
-  }
-
-  function handleTimeframeChange(value: string) {
-    if (!value) return;
-    local = { ...local, timeframe: value };
-    savePrefs(local);
-    setTimeframe(local.timeframe, { force: true });
-    tfOpen = false;
-  }
-
-  function handleAddTimeframe(value: string) {
-    if (!value) return;
-    addTimeframe(value);
-    handleTimeframeChange(value);
-  }
-
-  function handleRemoveTimeframe(value: string) {
-    removeTimeframe(value);
   }
 
   function handleStartChange(event: Event) {
@@ -185,128 +174,91 @@
     sendSelections(true);
   }
 
-  function toggleControls() {
-    collapsed.update((v) => !v);
-  }
-
-  function toggleTfDropdown() {
-    if (!tfButton) return;
-    tfOpen = !tfOpen;
-  }
-
   function refreshMarkets() {
     requestMarkets();
   }
+
+  function toggleSettings() {
+    console.log("toggling settings dropdown");
+    settingsDropdownOpened = !settingsDropdownOpened;
+  }
 </script>
 
-<div class="absolute top-2 left-2 z-20 flex flex-col gap-2">
-  <button
-    class="bg-slate-800/90 border border-slate-700 rounded px-3 py-1 text-xs w-fit"
-    on:click={toggleControls}
-  >
-    {$collapsed ? "Show controls" : "Hide controls"}
-  </button>
+<header class="border-b border-slate-800 bg-slate-900">
+  <div class="flex flex-wrap items-stretch justify-between text-sm">
+    <Autocomplete
+      options={marketOptions}
+      value={localMarket}
+      placeholder="EXCHANGE:SYMBOL"
+      on:change={(e) => handleMarketChange(e.detail)}
+    />
 
-  <div
-    class={`bg-gray-900/80 backdrop-blur-sm border border-slate-800 rounded-md p-3 flex flex-col gap-3 text-xs ${
-      $collapsed ? "hidden" : "flex"
-    }`}
-  >
-    <div class="flex flex-col gap-2">
-      <label class="flex items-center gap-2">
-        <span class="w-24 text-slate-300">Collector</span>
-        <select
-          class="bg-slate-900 border border-slate-800 rounded px-2 py-1 text-slate-100"
-          on:change={handleCollectorChange}
-          value={local.collector}
-        >
-          {#if collectorOptions.length === 0}
-            <option disabled selected>Loading...</option>
-          {:else}
-            {#each collectorOptions as option}
-              <option value={option} selected={option === local.collector}>{option}</option>
-            {/each}
-          {/if}
-        </select>
-      </label>
+    <TimeframeDropdown />
 
-      <label class="flex items-center gap-2" for={marketInputId}>
-        <span class="w-24 text-slate-300">Market</span>
-        <div class="flex-1">
-          <Autocomplete
-            id={marketInputId}
-            options={marketOptions}
-            value={localMarket}
-            placeholder="EXCHANGE:SYMBOL"
-            on:change={(e) => handleMarketChange(e.detail)}
-          />
-        </div>
-      </label>
+    <input
+      class="border-none bg-slate-900 outline-none px-2 py-1.5 text-slate-100 placeholder:text-slate-500"
+      type="datetime-local"
+      value={local.start}
+      on:change={handleStartChange}
+    />
 
-      <label class="flex items-center gap-2">
-        <span class="w-24 text-slate-300">Timeframe</span>
-        <div class="relative flex-1">
-          <button
-            class="w-full bg-slate-900 border border-slate-800 rounded px-2 py-2 text-slate-100 flex items-center justify-between"
-            on:click={toggleTfDropdown}
-            type="button"
-            bind:this={tfButton}
-          >
-            <span class="font-mono">{local.timeframe || "Select TF"}</span>
-            <svg
-              class={`w-4 h-4 transition-transform ${tfOpen ? "rotate-180" : ""}`}
-              viewBox="0 0 20 20"
-              fill="currentColor"
+    <button
+      class="ml-auto flex items-center gap-2 px-2 py-1.5 text-slate-100 hover:bg-slate-900/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-slate-600"
+      on:click={toggleSettings}
+      type="button"
+      bind:this={settingsDropdownButton}
+    >
+      Settings
+    </button>
+  </div>
+</header>
+
+<Dropdown
+  open={settingsDropdownOpened}
+  anchorEl={settingsDropdownButton}
+  on:close={() => (settingsDropdownOpened = false)}
+  margin={10}
+>
+  <div class="w-72 space-y-2 p-4 text-sm">
+    <div class="space-y-2">
+      <div class="text-[11px] uppercase tracking-[0.08em] text-slate-400">
+        Collector
+      </div>
+      <select
+        class="w-full rounded-md border border-slate-800 bg-slate-900/80 px-3 py-2 text-slate-100"
+        on:change={handleCollectorChange}
+        value={local.collector}
+      >
+        {#if collectorOptions.length === 0}
+          <option disabled selected>Loading...</option>
+        {:else}
+          {#each collectorOptions as option}
+            <option value={option} selected={option === local.collector}
+              >{option}</option
             >
-              <path
-                fill-rule="evenodd"
-                d="M5.23 7.21a.75.75 0 011.06.02L10 10.939l3.71-3.71a.75.75 0 111.06 1.062l-4.24 4.24a.75.75 0 01-1.06 0l-4.24-4.24a.75.75 0 01.02-1.06z"
-                clip-rule="evenodd"
-              />
-            </svg>
-          </button>
-          <TimeframeDropdown
-            bind:open={tfOpen}
-            timeframes={timeframeOptions}
-            value={local.timeframe}
-            removable={new Set(timeframeOptions)}
-            serverSet={new Set(serverTf)}
-            on:select={(e) => handleTimeframeChange(e.detail)}
-            on:remove={(e) => handleRemoveTimeframe(e.detail)}
-            on:add={(e) => handleAddTimeframe(e.detail)}
-            on:close={() => (tfOpen = false)}
-            anchorEl={tfButton}
-          />
-        </div>
-      </label>
-
-      <label class="flex items-center gap-2">
-        <span class="w-24 text-slate-300">Start (UTC)</span>
-        <input
-          class="bg-slate-900 border border-slate-800 rounded px-2 py-1 text-slate-100 w-full"
-          type="datetime-local"
-          value={local.start}
-          on:change={handleStartChange}
-        />
-      </label>
+          {/each}
+        {/if}
+      </select>
     </div>
 
-    <div class="flex gap-2">
+    <div class="flex items-center gap-2">
       <button
-        class="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold px-3 py-2 rounded"
+        class="flex-1 rounded-md bg-emerald-600 px-3 py-2 font-semibold text-white transition hover:bg-emerald-500"
         on:click={handleReconnect}
       >
         Reconnect
       </button>
       <button
-        class="bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 px-3 py-2 rounded"
+        class="flex-1 rounded-md border border-slate-700 bg-slate-800 px-3 py-2 text-slate-100 transition hover:bg-slate-700"
         on:click={refreshMarkets}
       >
-        Reload markets
+        Fetch
       </button>
     </div>
 
-    <div class="text-xs space-y-1">
+    <div
+      class="space-y-2 rounded-lg border border-slate-800 bg-slate-900/70 p-3 text-xs"
+    >
       <div>
         Status:
         {#if $status === "connected"}
@@ -319,12 +271,17 @@
           <span class="text-slate-400">idle</span>
         {/if}
       </div>
+
       {#if $status === "connected" && $meta}
-        <div class="text-slate-300 space-y-1">
-          <div>Timeframe: {$meta.timeframe ?? `${($meta.timeframeMs ?? 0) / 1000}s`}</div>
+        <div class="space-y-1 text-slate-200">
+          <div>Collector: {local.collector}</div>
+          <div>
+            Timeframe: {$meta.timeframe ??
+              `${($meta.timeframeMs ?? 0) / 1000}s`}
+          </div>
           <div>Records: {$meta.records ?? "?"}</div>
         </div>
       {/if}
     </div>
   </div>
-</div>
+</Dropdown>

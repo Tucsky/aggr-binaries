@@ -17,20 +17,18 @@
   }
 </script>
 
-<div class="w-full">
-  <input
-    class="bg-slate-900 px-2 py-2 border border-slate-800 rounded text-slate-100 w-full"
-    type="text"
-    {id}
-    {placeholder}
-    list={listId}
-    {disabled}
-    value={value}
-    on:input={handleInput}
-  />
-  <datalist id={listId}>
-    {#each options as option}
-      <option value={option} />
-    {/each}
-  </datalist>
-</div>
+<input
+  class="border-none px-2 py-1.5 outline-none bg-slate-900 text-sm text-slate-100"
+  type="text"
+  {id}
+  {placeholder}
+  list={listId}
+  {disabled}
+  {value}
+  on:input={handleInput}
+/>
+<datalist id={listId}>
+  {#each options as option}
+    <option value={option} />
+  {/each}
+</datalist>

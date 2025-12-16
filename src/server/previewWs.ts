@@ -5,7 +5,14 @@ import { listMarkets, listTimeframes } from "./registryApi.js";
 import { decodeFrames, encodeFrame } from "./wsFrames.js";
 
 type IncomingMessage =
-  | { type: "setTarget"; collector?: string; exchange?: string; symbol?: string }
+  | {
+      type: "setTarget";
+      collector?: string;
+      exchange?: string;
+      symbol?: string;
+      timeframe?: string;
+      startTs?: number | null;
+    }
   | { type: "setTimeframe"; timeframe?: string }
   | { type: "setStart"; startTs?: number }
   | { type: "slice"; fromIndex?: number; toIndex?: number }
@@ -126,6 +133,8 @@ async function handleSetTarget(socket: any, ctx: PreviewContext, state: Connecti
   const collector = (payload.collector ?? "").trim().toUpperCase();
   const exchange = (payload.exchange ?? "").trim().toUpperCase();
   const symbol = (payload.symbol ?? "").trim();
+  const timeframe = (payload.timeframe ?? state.timeframe ?? "").trim();
+  const startTs = payload.startTs;
   if (!collector || !exchange || !symbol) {
     sendError(socket, "Missing collector/exchange/symbol");
     return;
@@ -133,6 +142,14 @@ async function handleSetTarget(socket: any, ctx: PreviewContext, state: Connecti
   state.collector = collector;
   state.exchange = exchange;
   state.symbol = symbol;
+  if (timeframe) {
+    state.timeframe = timeframe;
+  }
+  if (startTs === null || startTs === undefined) {
+    state.startMs = null;
+  } else if (typeof startTs === "number" && Number.isFinite(startTs)) {
+    state.startMs = startTs;
+  }
   await refreshCompanion(socket, ctx, state);
 }
 

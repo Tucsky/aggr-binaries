@@ -1,21 +1,19 @@
 <script lang="ts">
-  import { createEventDispatcher } from "svelte";
+  import { get } from "svelte/store";
   import { parseTimeframeMs } from "../../../src/shared/timeframes.js";
   import Dropdown from "./Dropdown.svelte";
+  import {
+      addTimeframe,
+      prefs,
+      removeTimeframe,
+      savePrefs,
+      serverTimeframes,
+      timeframes,
+  } from "./viewerStore.js";
+  import { setTimeframe } from "./viewerWs.js";
 
-  export let open = false;
-  export let anchorEl: HTMLElement | null = null;
-  export let timeframes: string[] = [];
-  export let value = "";
-  export let removable: Set<string> = new Set();
-  export let serverSet: Set<string> = new Set();
-
-  const dispatch = createEventDispatcher<{
-    select: string;
-    close: void;
-    remove: string;
-    add: string;
-  }>();
+  let open = false;
+  let anchorEl: HTMLElement | null = null;
 
   let input = "";
   let editing = false;
@@ -32,9 +30,21 @@
     },
   ];
 
-  $: normalized = normalizeTimeframes(timeframes);
+  $: normalized = normalizeTimeframes($timeframes);
   $: grouped = buildGroups(normalized);
   $: inputMs = parseTimeframeMs(input.trim());
+  $: currentValue = $prefs.timeframe || "";
+  $: removable = new Set($timeframes);
+  $: serverSet = new Set($serverTimeframes);
+
+  function toggle() {
+    open = !open;
+  }
+
+  function close() {
+    open = false;
+    editing = false;
+  }
 
   function normalizeTimeframes(list: string[]) {
     return Array.from(new Set(list))
@@ -53,14 +63,17 @@
   }
 
   function select(tf: string) {
-    dispatch("select", tf);
-    dispatch("close");
+    const trimmed = tf.trim();
+    if (!trimmed) return;
+    savePrefs({ ...get(prefs), timeframe: trimmed });
+    setTimeframe(trimmed, { force: true });
+    close();
   }
 
   function handleSubmit() {
     const tf = input.trim();
     if (!parseTimeframeMs(tf)) return;
-    dispatch("add", tf);
+    addTimeframe(tf);
     select(tf);
     input = "";
   }
@@ -71,11 +84,25 @@
 
   function remove(tf: string) {
     if (!removable.has(tf)) return;
-    dispatch("remove", tf);
+    const previous = get(prefs).timeframe;
+    removeTimeframe(tf);
+    const next = get(prefs).timeframe;
+    if (next !== previous) {
+      setTimeframe(next);
+    }
   }
 </script>
 
-<Dropdown {open} {anchorEl} on:close={() => dispatch("close")} margin={0}>
+<button
+  class="flex bg-slate-900 items-center gap-2 px-3 py-1.5 text-slate-100 hover:bg-slate-900/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-slate-600"
+  on:click={toggle}
+  type="button"
+  bind:this={anchorEl}
+>
+  {currentValue || "Select TF"}
+</button>
+
+<Dropdown {open} {anchorEl} on:close={close}>
   <div class="w-32">
     <div class="p-2 sticky top-0">
       <div
@@ -124,7 +151,7 @@
             <button
               type="button"
               class={`text-left px-3 py-2 rounded hover:bg-slate-800/80 text-sm flex items-center justify-between ${
-                tf.value === value
+                tf.value === currentValue
                   ? "bg-slate-800/80 text-slate-100"
                   : "text-slate-200"
               }`}

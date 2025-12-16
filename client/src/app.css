@@ -7,3 +7,8 @@ body {
   background: #0d1117;
   color: #e6edf3;
 }
+
+input::-webkit-calendar-picker-indicator {
+  display: none;
+  opacity: 0;
+}

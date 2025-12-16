@@ -63,18 +63,10 @@
     const resizeHandler = () => schedulePosition();
     window.addEventListener("resize", resizeHandler);
 
-    // IMPORTANT for real-world: reposition on scroll too (capture catches scroll in any container)
-    const scrollHandler = () => schedulePosition();
-    window.addEventListener("scroll", scrollHandler, {
-      passive: true,
-      capture: true,
-    });
-
     unregister = () => {
       document.removeEventListener("mousedown", handler);
       document.removeEventListener("touchstart", handler);
       window.removeEventListener("resize", resizeHandler);
-      window.removeEventListener("scroll", scrollHandler, true);
     };
   }
 
@@ -86,14 +78,17 @@
   }
 
   async function position() {
-    if (inFlight) return; // prevents tick()-chains if schedulePosition fires fast
+    if (inFlight) {
+      return; // prevents tick()-chains if schedulePosition fires fast
+    }
     inFlight = true;
 
     try {
-      if (!open || !anchorEl || !el) return;
+      if (!open || !anchorEl || !el) {
+        return;
+      }
 
       await tick();
-
       const a = anchorEl.getBoundingClientRect();
       const d = el.getBoundingClientRect();
       const vw = window.innerWidth;
@@ -164,9 +159,7 @@
 
 {#if open && anchorEl}
   <div
-    class={`fixed z-50 shadow-[0_18px_50px_-10px_rgba(0,0,0,0.6)] ${
-      hasPosition ? "opacity-100" : "opacity-0"
-    } transition-opacity duration-100`}
+    class={`fixed z-50 shadow-[0_18px_50px_-10px_rgba(0,0,0,0.6)]`}
     bind:this={el}
     style={`top:${top}px;left:${left}px;max-height:70vh;max-width:320px;`}
     transition:fade={{ duration: 120 }}

@@ -113,18 +113,35 @@ export function disconnect(showToast = true): void {
   if (showToast) notify("Disconnected", "info", 1500);
 }
 
-export function setTarget(target: Market, options: { clearMeta?: boolean; force?: boolean } = {}): void {
-  const { clearMeta = true, force = false } = options;
+export function setTarget(
+  target: Market,
+  options: { clearMeta?: boolean; force?: boolean; timeframe?: string; startMs?: number | null } = {},
+): void {
+  const { clearMeta = true, force = false, timeframe, startMs } = options;
   const normalized = normalizeTarget(target);
   if (!force && targetKey(normalized) === targetKey(currentTarget)) {
-    return;
+    const nextTf = timeframe?.trim();
+    const hasTfChange = nextTf && nextTf !== currentTimeframe;
+    const hasStartChange = startMs !== undefined && startMs !== currentStart;
+    if (!hasTfChange && !hasStartChange) return;
   }
   currentTarget = normalized;
+  if (timeframe?.trim()) {
+    currentTimeframe = timeframe.trim();
+  }
+  if (startMs !== undefined) {
+    currentStart = startMs;
+  }
   if (clearMeta) {
     resetSlices();
     setServerTimeframes([]);
   }
-  sendMessage({ type: "setTarget", ...currentTarget });
+  sendMessage({
+    type: "setTarget",
+    ...currentTarget,
+    timeframe: timeframe?.trim(),
+    startTs: startMs,
+  });
   requestTimeframes(currentTarget);
 }
 
