@@ -358,8 +358,8 @@ async function writeMarketOutput(
     exchange: acc.exchange,
     symbol: acc.symbol,
     timeframe,
-    startTs: metadata.startTs,
-    endTs: metadata.endTs,
+    startTs: metadata.startTs!,
+    endTs: metadata.endTs!,
     sparse: metadata.sparse ?? false,
   });
 

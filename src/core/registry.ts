@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Config } from "./config.js";
 import type { Db } from "./db.js";
 import type { CompanionMetadata, RegistryEntry, RegistryFilter } from "./model.js";
+import { normalizeCompanionRange } from "./model.js";
 
 export interface RegistryStats {
   scanned: number;
@@ -41,6 +42,7 @@ export async function runRegistry(config: Config, db: Db): Promise<RegistryStats
 
 async function* walkCompanions(outRoot: string, filter: RegistryFilter): AsyncGenerator<RegistryEntry> {
   const collectors = await fs.readdir(outRoot, { withFileTypes: true });
+  console.log(outRoot)
   for (const collectorDir of collectors) {
     if (!collectorDir.isDirectory()) continue;
     const collector = collectorDir.name.toUpperCase();
@@ -68,14 +70,14 @@ async function* walkCompanions(outRoot: string, filter: RegistryFilter): AsyncGe
           if (filter.timeframe && timeframe !== filter.timeframe) continue;
           const companionPath = path.join(symbolPath, file.name);
           const metadata = await readCompanion(companionPath);
-          const normalized: CompanionMetadata = {
+          
+          // Normalize to handle both monolithic and segmented formats
+          const normalized = normalizeCompanionRange({
             ...metadata,
             exchange,
             symbol,
             timeframe: metadata.timeframe ?? timeframe,
-          };
-
-          entriesValidate(normalized, companionPath);
+          });
 
           yield {
             collector,
@@ -98,14 +100,5 @@ async function readCompanion(filePath: string): Promise<CompanionMetadata> {
     return JSON.parse(raw) as CompanionMetadata;
   } catch (err) {
     throw new Error(`Failed to parse companion ${filePath}: ${String(err)}`);
-  }
-}
-
-function entriesValidate(meta: CompanionMetadata, companionPath: string): void {
-  if (!Number.isFinite(meta.startTs) || !Number.isFinite(meta.endTs)) {
-    throw new Error(`Companion missing range: ${companionPath}`);
-  }
-  if (!meta.timeframe) {
-    throw new Error(`Companion missing timeframe: ${companionPath}`);
   }
 }

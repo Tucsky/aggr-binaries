@@ -73,13 +73,47 @@ export interface CompanionMetadata {
   symbol: string;
   timeframe: string;
   timeframeMs?: number;
-  startTs: number;
-  endTs: number;
+  // Monolithic format (aggr-binaries)
+  startTs?: number;
+  endTs?: number;
+  // Segmented format (aggr-server)
+  segmentStartTs?: number;
+  segmentEndTs?: number;
+  segmentSpanMs?: number;
+  segmentRecords?: number;
   priceScale: number;
   volumeScale: number;
   records: number;
   sparse?: boolean;
   lastInputStartTs?: number;
+}
+
+/**
+ * Normalized companion metadata with guaranteed startTs/endTs.
+ * This is what the rest of the codebase should use after reading a companion.
+ */
+export interface NormalizedCompanionMetadata extends Omit<CompanionMetadata, 'startTs' | 'endTs' | 'segmentStartTs' | 'segmentEndTs'> {
+  startTs: number;
+  endTs: number;
+}
+
+/**
+ * Normalize companion metadata from either monolithic or segmented format.
+ * Ensures startTs and endTs are always present.
+ */
+export function normalizeCompanionRange(meta: CompanionMetadata): NormalizedCompanionMetadata {
+  const startTs = meta.startTs ?? meta.segmentStartTs;
+  const endTs = meta.endTs ?? meta.segmentEndTs;
+  
+  if (!Number.isFinite(startTs) || !Number.isFinite(endTs)) {
+    throw new Error('Companion missing valid range fields (startTs/endTs or segmentStartTs/segmentEndTs)');
+  }
+  
+  return {
+    ...meta,
+    startTs: startTs!,
+    endTs: endTs!,
+  };
 }
 
 export interface RegistryEntry {

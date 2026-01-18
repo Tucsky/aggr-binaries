@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Db } from "../core/db.js";
-import type { CompanionMetadata } from "../core/model.js";
+import type { NormalizedCompanionMetadata } from "../core/model.js";
 import { ensurePreviewTimeframe } from "./resample.js";
 
 export interface PreviewContext {
@@ -9,7 +9,7 @@ export interface PreviewContext {
   outputRoot: string;
 }
 
-export type Companion = CompanionMetadata;
+export type Companion = NormalizedCompanionMetadata;
 
 export interface CandleMsg {
   type: "candles";

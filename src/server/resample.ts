@@ -1,7 +1,8 @@
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import type { Db } from "../core/db.js";
-import type { CompanionMetadata, RegistryEntry, RegistryKey } from "../core/model.js";
+import type { CompanionMetadata, NormalizedCompanionMetadata, RegistryEntry, RegistryKey } from "../core/model.js";
+import { normalizeCompanionRange } from "../core/model.js";
 import { CANDLE_BYTES, PRICE_SCALE, VOL_SCALE, type Candle } from "../core/trades.js";
 import { parseTimeframeMs } from "../shared/timeframes.js";
 
@@ -10,7 +11,7 @@ export interface ResampleContext {
   outputRoot: string;
 }
 
-type Companion = CompanionMetadata & { timeframe: string; timeframeMs: number };
+type Companion = NormalizedCompanionMetadata & { timeframe: string; timeframeMs: number };
 
 type AggBucket = Candle & { hasPrice: boolean };
 
@@ -305,7 +306,7 @@ async function resampleRange(params: ResampleRangeParams): Promise<void> {
     `${collector}/${exchange}/${symbol}/${dstTimeframe}`,
     `appended=${appendedRecords}`,
     `records=${companion.records}`,
-    `range=${new Date(companion.startTs).toISOString()} -> ${new Date(companion.endTs).toISOString()}`,
+    `range=${new Date(companion.startTs!).toISOString()} -> ${new Date(companion.endTs!).toISOString()}`,
   );
 }
 
@@ -484,7 +485,9 @@ async function readCompanion(
   let parsed: CompanionMetadata | null = null;
   try {
     const raw = await fs.readFile(companionPath, "utf8");
-    parsed = JSON.parse(raw) as CompanionMetadata;
+    const rawParsed = JSON.parse(raw) as CompanionMetadata;
+    // Normalize segmented vs monolithic format
+    parsed = normalizeCompanionRange(rawParsed);
   } catch (err) {
     const code = (err as { code?: string }).code;
     if (code && code !== "ENOENT") {
