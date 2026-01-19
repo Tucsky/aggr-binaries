@@ -35,7 +35,7 @@ const DEFAULTS: Config = {
 
 export async function loadConfig(overrides: CliOverrides = {}): Promise<Config> {
   const useConfig = overrides.useConfig !== false;
-  const configPath = overrides.configPath ?? "indexer.config.json";
+  const configPath = overrides.configPath ?? "config.json";
   let fileConfig: Partial<Config> = {};
 
   if (useConfig) {
@@ -95,7 +95,7 @@ Options (override config file):
   --force                   Processing: ignore processed-files cache
   --timeframe <tf>          Processing: timeframe string (e.g., 1m, 5m, 1h) (default: ${DEFAULTS.timeframe})
   --sparse                  Processing: write sparse binaries (only populated candles)
-  --config <path>           Path to JSON config (default: ./indexer.config.json if present)
+  --config <path>           Path to JSON config (default: ./config.json if present)
   --no-config               Skip loading any config file
   -h, --help                Show this help
 `;

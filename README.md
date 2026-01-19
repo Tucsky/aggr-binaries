@@ -235,8 +235,8 @@ Install:
 npm install
 ```
 
-Config file: `indexer.config.json`
-(copy from `indexer.config.example.json`)
+Config file: `config.json`
+(copy from `config.example.json`)
 
 ```json
 {
