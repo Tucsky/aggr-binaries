@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
+import { finished } from "node:stream/promises";
 import zlib from "node:zlib";
 import type { Config } from "./config.js";
 import type { Db } from "./db.js";
@@ -298,10 +299,11 @@ async function streamFile(opts: {
 async function makeStream(filePath: string) {
   const file = await fs.open(filePath, "r");
   const stream = file.createReadStream();
-  if (filePath.endsWith(".gz")) {
-    return stream.pipe(zlib.createGunzip());
-  }
-  return stream;
+  const out = filePath.endsWith(".gz") ? stream.pipe(zlib.createGunzip()) : stream;
+  void finished(out).finally(() => {
+    return file.close().catch(() => {});
+  });
+  return out;
 }
 
 async function writeMarketOutput(
