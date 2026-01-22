@@ -11,6 +11,7 @@ export async function runIndex(config: Config, db: Db): Promise<IndexStats> {
 
   let batch: IndexedFile[] = [];
   const collectorHint = deriveCollectorHint(config.root);
+  let skipLogged = 0;
 
   for await (const entry of walkFiles(config.root, rootId, {
     includePaths: config.includePaths,
@@ -20,6 +21,10 @@ export async function runIndex(config: Config, db: Db): Promise<IndexStats> {
     const row = classifyPath(entry.rootId, entry.relativePath, collectorHint);
     if (!row) {
       stats.skipped += 1;
+      if (skipLogged < 50) {
+        console.log(`[skip] ${entry.relativePath}`);
+        skipLogged++;
+      }
       continue;
     }
 

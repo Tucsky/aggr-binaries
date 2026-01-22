@@ -7,5 +7,5 @@ node_modules/
 dist/
 output/
 convert-progress.json
-indexer.config.json
+config.json
 convert.log
