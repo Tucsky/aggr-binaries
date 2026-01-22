@@ -70,6 +70,12 @@ async function* walkCompanions(outRoot: string, filter: RegistryFilter): AsyncGe
           if (filter.timeframe && timeframe !== filter.timeframe) continue;
           const companionPath = path.join(symbolPath, file.name);
           const metadata = await readCompanion(companionPath);
+          if ((metadata as { sparse?: boolean }).sparse) {
+            console.warn(
+              `[registry] skipping legacy sparse companion ${collector}/${exchange}/${symbol}/${timeframe}`,
+            );
+            continue;
+          }
           
           // Normalize to handle both monolithic and segmented formats
           const normalized = normalizeCompanionRange({
@@ -86,7 +92,6 @@ async function* walkCompanions(outRoot: string, filter: RegistryFilter): AsyncGe
             timeframe: normalized.timeframe,
             startTs: normalized.startTs,
             endTs: normalized.endTs,
-            sparse: Boolean(normalized.sparse),
           };
         }
       }

@@ -232,7 +232,6 @@ function handleMeta(msg: any): void {
     priceScale: msg.priceScale,
     volumeScale: msg.volumeScale,
     timeframeMs: msg.timeframeMs ?? 60_000,
-    sparse: Boolean(msg.sparse),
     records: msg.records ?? 0,
     anchorIndex: msg.anchorIndex ?? (msg.records > 0 ? msg.records - 1 : 0),
   };
@@ -244,7 +243,6 @@ function handleMeta(msg: any): void {
     newMeta.records === currentMeta.records &&
     newMeta.anchorIndex === currentMeta.anchorIndex &&
     newMeta.timeframeMs === currentMeta.timeframeMs &&
-    newMeta.sparse === currentMeta.sparse &&
     newMeta.priceScale === currentMeta.priceScale &&
     newMeta.volumeScale === currentMeta.volumeScale;
   if (unchanged) return;
@@ -254,7 +252,7 @@ function handleMeta(msg: any): void {
   currentMeta = newMeta;
   meta.set(currentMeta);
   notify(
-    `Meta: ${currentMeta.records} records, ${currentMeta.sparse ? "sparse" : "dense"} @ ${currentMeta.timeframeMs / 1000}s`,
+    `Meta: ${currentMeta.records} records @ ${currentMeta.timeframeMs / 1000}s`,
     "info",
     2500,
   );

@@ -203,7 +203,7 @@ CREATE INDEX idx_files_collector ON files(collector);
   output/{collector}/{exchange}/{symbol}/{timeframe}.json
   ```
 
-* On successful write, registry is upserted (collector/exchange/symbol/timeframe + sparse/startTs/endTs).
+* On successful write, registry is upserted (collector/exchange/symbol/timeframe + startTs/endTs).
 
 ### Resume semantics
 
@@ -245,8 +245,7 @@ Config file: `config.json`
   "batchSize": 1000,
   "includePaths": [],
   "outDir": "output",
-  "timeframe": "1m",
-  "sparseOutput": false
+  "timeframe": "1m"
 }
 ```
 
@@ -286,7 +285,6 @@ npm start -- <subcommand> [flags]
 * `--exchange <EXCHANGE>`
 * `--symbol <SYMBOL>`
 * `--timeframe <tf>` (1m, 5m, 1h…)
-* `--sparse` write only populated candles
 * `--force` ignore resume guards
 
 ### Examples
@@ -332,18 +330,18 @@ npm run serve
   * `listMarkets {}` → replies with `markets` (registry-backed)
   * `listTimeframes {collector,exchange,symbol}` → replies with `timeframes` (registry-backed)
 * Server → client messages:
-  * `meta` (timeframe/timeframeMs, sparse, records, anchorIndex, startTs/endTs, priceScale/volumeScale)
+* `meta` (timeframe/timeframeMs, records, anchorIndex, startTs/endTs, priceScale/volumeScale)
   * `candles` (slice response)
   * `markets`, `timeframes`, `error`
-* Works with dense (gap-filled) and sparse binaries; no reconnects required for target/timeframe/start changes.
+* Works with dense (gap-filled) binaries; no reconnects required for target/timeframe/start changes.
 
 ### Preview resampling (on-demand, registry + binaries)
 
 * When the client requests a timeframe, the server ensures the binary exists and is fresh before serving slices.
-* Freshness: for each timeframe `tfMs`, `maxEnd = floor(rootEnd / tfMs) * tfMs` using the smallest dense timeframe (`root`) in the registry; a timeframe is fresh if its `endTs === maxEnd`.
-* Source selection: among dense timeframes where `dst % src === 0`, pick the largest fresh candidate (fallback to root); skip missing binaries and purge their registry rows.
+* Freshness: for each timeframe `tfMs`, `maxEnd = floor(rootEnd / tfMs) * tfMs` using the smallest timeframe (`root`) in the registry; a timeframe is fresh if its `endTs === maxEnd`.
+* Source selection: among timeframes where `dst % src === 0`, pick the largest fresh candidate (fallback to root); skip missing binaries and purge their registry rows.
 * Updates are append-only: compute missing `[from = dst.endTs, to = maxEnd]`; aggregate source candles into dst buckets and append to `dst.bin` and companion, then upsert registry.
-* Sparse binaries are not used for resampling; gaps (zero OHLC) are ignored for price aggregation so resampled OHLCs are not flattened by holes.
+* Gaps (zero OHLC) are ignored for price aggregation so resampled OHLCs are not flattened by holes.
 
 ### Preview UI (registry-backed controls)
 

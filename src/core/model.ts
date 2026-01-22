@@ -84,7 +84,6 @@ export interface CompanionMetadata {
   priceScale: number;
   volumeScale: number;
   records: number;
-  sparse?: boolean;
   lastInputStartTs?: number;
 }
 
@@ -123,7 +122,6 @@ export interface RegistryEntry {
   timeframe: string;
   startTs: number;
   endTs: number;
-  sparse: boolean;
   created_at?: number;
   updated_at?: number;
 }

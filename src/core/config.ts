@@ -15,7 +15,6 @@ export interface Config {
   force?: boolean;
   timeframe: string; // e.g., "1m", "5m", "1h"
   timeframeMs: number;
-  sparseOutput?: boolean;
 }
 
 export interface CliOverrides extends Partial<Config> {
@@ -30,7 +29,6 @@ const DEFAULTS: Config = {
   outDir: "output",
   timeframe: "1m",
   timeframeMs: 60_000,
-  sparseOutput: false,
 };
 
 export async function loadConfig(overrides: CliOverrides = {}): Promise<Config> {
@@ -94,7 +92,6 @@ Options (override config file):
   --outdir <path>           Processing: output directory (default: ${DEFAULTS.outDir})
   --force                   Processing: ignore processed-files cache
   --timeframe <tf>          Processing: timeframe string (e.g., 1m, 5m, 1h) (default: ${DEFAULTS.timeframe})
-  --sparse                  Processing: write sparse binaries (only populated candles)
   --config <path>           Path to JSON config (default: ./config.json if present)
   --no-config               Skip loading any config file
   -h, --help                Show this help

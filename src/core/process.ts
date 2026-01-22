@@ -313,7 +313,6 @@ async function writeMarketOutput(
 ) {
   const timeframe = config.timeframe;
   const timeframeMs = config.timeframeMs;
-  const sparse = Boolean(config.sparseOutput);
 
   if (!acc.bucketCount || !isFinite(acc.minMinute) || !isFinite(acc.maxMinute)) {
     console.log(`[${acc.collector}/${acc.exchange}/${acc.symbol}] no trades; skipping output`);
@@ -324,7 +323,7 @@ async function writeMarketOutput(
     acc.companion?.startTs !== undefined ? Math.min(acc.companion.startTs, acc.minMinute) : acc.minMinute;
   const endBase =
     acc.companion?.endTs !== undefined ? Math.max(acc.companion.endTs, acc.maxMinute + timeframeMs) : acc.maxMinute + timeframeMs;
-  const totalCandles = sparse ? acc.bucketCount : Math.max(0, Math.floor((endBase - startBase) / timeframeMs));
+  const totalCandles = Math.max(0, Math.floor((endBase - startBase) / timeframeMs));
   const estimatedMb = ((totalCandles * CANDLE_BYTES) / (1024 * 1024)).toFixed(2);
 
   const outBase = path.join(config.outDir, acc.collector, acc.exchange, acc.symbol, timeframe);
@@ -333,10 +332,10 @@ async function writeMarketOutput(
   console.log(
     `[${acc.collector}/${acc.exchange}/${acc.symbol}/${timeframe}] writing ${totalCandles} candles (~${estimatedMb} MB) range ${new Date(
       startBase,
-    ).toISOString()} -> ${new Date(endBase).toISOString()} sparse=${sparse}`,
+    ).toISOString()} -> ${new Date(endBase).toISOString()}`,
   );
 
-  await writeBinary(outBase + ".bin", acc.buckets, startBase, endBase - timeframeMs, timeframeMs, sparse);
+  await writeBinary(outBase + ".bin", acc.buckets, startBase, endBase - timeframeMs, timeframeMs);
 
   const lastInputStartTs = acc.maxInputStartTs === Number.NEGATIVE_INFINITY ? undefined : acc.maxInputStartTs;
 
@@ -350,7 +349,6 @@ async function writeMarketOutput(
     priceScale: PRICE_SCALE,
     volumeScale: VOL_SCALE,
     records: totalCandles,
-    sparse,
     lastInputStartTs,
   };
 
@@ -362,7 +360,6 @@ async function writeMarketOutput(
     timeframe,
     startTs: metadata.startTs!,
     endTs: metadata.endTs!,
-    sparse: metadata.sparse ?? false,
   });
 
   console.log(
@@ -376,33 +373,8 @@ async function writeBinary(
   minSlot: number,
   maxSlot: number,
   timeframeMs: number,
-  sparse: boolean,
 ): Promise<void> {
   const fh = await fs.open(outPath, "w");
-  if (sparse) {
-    const sorted = Array.from(buckets.entries()).sort((a, b) => a[0] - b[0]);
-    const recordSize = 8 + CANDLE_BYTES; // ts + candle
-    const buf = Buffer.allocUnsafe(recordSize * sorted.length);
-    let idx = 0;
-    for (const [ts, c] of sorted) {
-      const base = idx * recordSize;
-      buf.writeBigInt64LE(BigInt(ts), base);
-      buf.writeInt32LE(c.open, base + 8);
-      buf.writeInt32LE(c.high, base + 12);
-      buf.writeInt32LE(c.low, base + 16);
-      buf.writeInt32LE(c.close, base + 20);
-      buf.writeBigInt64LE(c.buyVol, base + 24);
-      buf.writeBigInt64LE(c.sellVol, base + 32);
-      buf.writeUint32LE(c.buyCount >>> 0, base + 40);
-      buf.writeUint32LE(c.sellCount >>> 0, base + 44);
-      buf.writeBigInt64LE(c.liqBuy, base + 48);
-      buf.writeBigInt64LE(c.liqSell, base + 56);
-      idx += 1;
-    }
-    await fh.write(buf, 0, buf.length, 0);
-    await fh.close();
-    return;
-  }
 
   const empty = {
     open: 0,

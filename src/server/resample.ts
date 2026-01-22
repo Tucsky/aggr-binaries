@@ -55,15 +55,22 @@ export async function ensurePreviewTimeframe(
   const dstCompanionPath = getCompanionPath(ctx.outputRoot, collector, exchange, symbol, target);
 
   const marketEntries = loadMarketEntries(ctx.db, collector, exchange, symbol);
-  const denseEntries = marketEntries.filter((e) => !e.sparse);
-  if (!denseEntries.length) {
-    throw new Error(`No dense registry entries for ${collector}/${exchange}/${symbol}`);
+  if (!marketEntries.length) {
+    throw new Error(`No registry entries for ${collector}/${exchange}/${symbol}`);
   }
 
-  const rootEntry = denseEntries.reduce((min, entry) => (entry.timeframeMs < min.timeframeMs ? entry : min));
-  const rootCompanion = await readCompanion(ctx, collector, exchange, symbol, rootEntry.timeframe, rootEntry);
-  if (!rootCompanion || rootCompanion.sparse) {
-    throw new Error(`Missing dense root companion for ${collector}/${exchange}/${symbol}/${rootEntry.timeframe}`);
+  const rootEntry = marketEntries.reduce((min, entry) => (entry.timeframeMs < min.timeframeMs ? entry : min));
+  const rootCompanion = await readCompanion(
+    ctx,
+    collector,
+    exchange,
+    symbol,
+    rootEntry.timeframe,
+    rootEntry,
+    { requireDense: true },
+  );
+  if (!rootCompanion) {
+    throw new Error(`Missing root companion for ${collector}/${exchange}/${symbol}/${rootEntry.timeframe}`);
   }
 
   const maxEndFor = (tfMs: number): number => alignEnd(rootCompanion.endTs, tfMs);
@@ -88,7 +95,7 @@ export async function ensurePreviewTimeframe(
       existingCompanion = null;
     }
   }
-  if (existingCompanion && !existingCompanion.sparse && existingCompanion.endTs === targetMaxEnd) {
+  if (existingCompanion && existingCompanion.endTs === targetMaxEnd) {
     const normalized = normalizeCompanion(existingCompanion, target, targetMs);
     upsertRegistryFromCompanion(ctx.db, collector, normalized);
     console.log(
@@ -106,7 +113,7 @@ export async function ensurePreviewTimeframe(
     collector,
     exchange,
     symbol,
-    entries: denseEntries,
+    entries: marketEntries,
     targetMs,
     rootCompanion,
     maxEndFor,
@@ -140,7 +147,6 @@ export async function ensurePreviewTimeframe(
         priceScale: source.priceScale ?? PRICE_SCALE,
         volumeScale: source.volumeScale ?? VOL_SCALE,
         records: existingRecords,
-        sparse: false,
       },
       target,
       targetMs,
@@ -170,7 +176,6 @@ export async function ensurePreviewTimeframe(
     timeframe: target,
     startTs: dstStart,
     endTs: to,
-    sparse: false,
   });
   if (!updatedCompanion) {
     throw new Error(`Failed to read updated companion for ${collector}/${exchange}/${symbol}/${target}`);
@@ -197,9 +202,6 @@ async function resampleRange(params: ResampleRangeParams): Promise<void> {
 
   console.log('Resampling', `${collector}/${exchange}/${symbol}`, `from ${src.timeframe} to ${dstTimeframe}`, `for range ${new Date(from).toISOString()} - ${new Date(to).toISOString()}`);
 
-  if (src.sparse) {
-    throw new Error("Sparse sources are not supported for resampling");
-  }
   const srcMs = src.timeframeMs;
   if (!Number.isFinite(srcMs) || srcMs <= 0) {
     throw new Error(`Invalid source timeframe for resampling: ${src.timeframe}`);
@@ -230,7 +232,6 @@ async function resampleRange(params: ResampleRangeParams): Promise<void> {
       priceScale: src.priceScale ?? PRICE_SCALE,
       volumeScale: src.volumeScale ?? VOL_SCALE,
       records: existingRecords + Math.max(0, Math.floor((to - from) / dstTimeframeMs)),
-      sparse: false,
     });
     return;
   }
@@ -298,7 +299,6 @@ async function resampleRange(params: ResampleRangeParams): Promise<void> {
     priceScale: src.priceScale ?? PRICE_SCALE,
     volumeScale: src.volumeScale ?? VOL_SCALE,
     records: existingRecords + appendedRecords,
-    sparse: false,
   };
   await writeCompanion(ctx.outputRoot, collector, exchange, symbol, dstTimeframe, companion);
   console.log(
@@ -414,7 +414,7 @@ async function pickSource(opts: {
     } else {
       companion = await readCompanion(ctx, collector, exchange, symbol, entry.timeframe, entry);
     }
-    if (!companion || companion.sparse) continue;
+    if (!companion) continue;
     const binPath = getBinPath(ctx.outputRoot, collector, exchange, symbol, entry.timeframe);
     if (!(await fileExists(binPath))) {
       console.warn(
@@ -448,11 +448,11 @@ function loadMarketEntries(db: Db, collector: string, exchange: string, symbol: 
   const rows =
     (db.db
       .prepare(
-        `SELECT timeframe, start_ts, end_ts, sparse
+        `SELECT timeframe, start_ts, end_ts
          FROM registry
          WHERE collector = :collector AND exchange = :exchange AND symbol = :symbol;`,
       )
-      .all({ collector, exchange, symbol }) as Array<{ timeframe: string; start_ts: number; end_ts: number; sparse: number }>) ??
+      .all({ collector, exchange, symbol }) as Array<{ timeframe: string; start_ts: number; end_ts: number }>) ??
     [];
 
   return rows
@@ -466,7 +466,6 @@ function loadMarketEntries(db: Db, collector: string, exchange: string, symbol: 
         timeframe: row.timeframe,
         startTs: (row as any).startTs ?? row.start_ts,
         endTs: (row as any).endTs ?? row.end_ts,
-        sparse: Boolean((row as any).sparse),
         timeframeMs,
       };
     })
@@ -480,12 +479,19 @@ async function readCompanion(
   symbol: string,
   timeframe: string,
   fallback?: Partial<RegistryEntry>,
+  opts?: { requireDense?: boolean },
 ): Promise<Companion | null> {
   const companionPath = getCompanionPath(ctx.outputRoot, collector, exchange, symbol, timeframe);
   let parsed: CompanionMetadata | null = null;
   try {
     const raw = await fs.readFile(companionPath, "utf8");
     const rawParsed = JSON.parse(raw) as CompanionMetadata;
+    if ((rawParsed as { sparse?: boolean }).sparse) {
+      if (opts?.requireDense) {
+        throw new Error(`Sparse companions are no longer supported: ${companionPath}`);
+      }
+      return null;
+    }
     // Normalize segmented vs monolithic format
     parsed = normalizeCompanionRange(rawParsed);
   } catch (err) {
@@ -503,14 +509,14 @@ async function readCompanion(
     timeframe: parsed?.timeframe ?? timeframe,
     startTs: parsed?.startTs ?? (fallback as any)?.startTs ?? (fallback as any)?.start_ts,
     endTs: parsed?.endTs ?? (fallback as any)?.endTs ?? (fallback as any)?.end_ts,
-    sparse: parsed?.sparse ?? (fallback as any)?.sparse,
   };
 
   if (!Number.isFinite(merged.startTs) || !Number.isFinite(merged.endTs)) {
     return null;
   }
 
-  const resolved = normalizeCompanion(merged, timeframe);
+  const { sparse: _ignored, ...rest } = merged as Partial<CompanionMetadata> & { sparse?: boolean };
+  const resolved = normalizeCompanion(rest, timeframe);
   return resolved;
 }
 
@@ -529,11 +535,10 @@ function normalizeCompanion(meta: Partial<CompanionMetadata>, timeframe: string,
     throw new Error(`Companion is missing market information for ${meta.timeframe ?? timeframe}`);
   }
 
-  const records =
-    meta.records ??
-    (Number.isFinite(meta.startTs) && Number.isFinite(meta.endTs)
-      ? Math.max(0, Math.floor(((meta.endTs as number) - (meta.startTs as number)) / timeframeMs))
-      : 0);
+  const records = Math.max(
+    0,
+    Math.floor(((meta.endTs as number) - (meta.startTs as number)) / timeframeMs),
+  );
 
   return {
     ...meta,
@@ -545,7 +550,6 @@ function normalizeCompanion(meta: Partial<CompanionMetadata>, timeframe: string,
     timeframeMs,
     priceScale: meta.priceScale ?? PRICE_SCALE,
     volumeScale: meta.volumeScale ?? VOL_SCALE,
-    sparse: Boolean(meta.sparse),
     records,
   };
 }
@@ -571,7 +575,6 @@ function upsertRegistryFromCompanion(db: Db, collector: string, companion: Compa
     timeframe: companion.timeframe,
     startTs: companion.startTs,
     endTs: companion.endTs,
-    sparse: Boolean(companion.sparse),
   });
 }
 

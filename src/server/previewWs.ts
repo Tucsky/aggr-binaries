@@ -264,7 +264,6 @@ function sendMeta(socket: any, state: ConnectionState): void {
     volumeScale: companion.volumeScale,
     timeframeMs: companion.timeframeMs ?? 60_000,
     timeframe: companion.timeframe ?? state.timeframe,
-    sparse: companion.sparse ?? false,
     records: companion.records,
     anchorIndex: anchor,
   });

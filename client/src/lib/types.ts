@@ -9,7 +9,6 @@ export interface Meta {
   priceScale: number;
   volumeScale: number;
   timeframeMs: number;
-  sparse: boolean;
   records: number;
   anchorIndex: number;
 }

@@ -1,6 +1,0 @@
-{
-  "root": "/Volumes/AGGR/input",
-  "dbPath": "./index.sqlite",
-  "batchSize": 1000,
-  "includePaths": []
-}

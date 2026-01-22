@@ -31,13 +31,12 @@ export function openDatabase(dbPath: string): Db {
   const getRootIdStmt = db.prepare("SELECT id FROM roots WHERE path = :path;");
   const upsertRegistryStmt = db.prepare(
     `INSERT INTO registry
-      (collector, exchange, symbol, timeframe, start_ts, end_ts, sparse)
+      (collector, exchange, symbol, timeframe, start_ts, end_ts)
      VALUES
-      (:collector, :exchange, :symbol, :timeframe, :startTs, :endTs, :sparse)
+      (:collector, :exchange, :symbol, :timeframe, :startTs, :endTs)
      ON CONFLICT(collector, exchange, symbol, timeframe) DO UPDATE SET
       start_ts = excluded.start_ts,
       end_ts = excluded.end_ts,
-      sparse = excluded.sparse,
       updated_at = (unixepoch('subsec') * 1000);`,
   );
   const deleteRegistryStmt = db.prepare(
@@ -135,13 +134,18 @@ function migrateRegistry(db: DatabaseSync): void {
   const hasEnd = info.some((c) => c.name === "end_ts");
   const hasSparse = info.some((c) => c.name === "sparse");
 
-  if (!hasMetadata && hasStart && hasEnd && hasSparse) {
+  if (!hasMetadata && hasStart && hasEnd && !hasSparse) {
     db.exec("CREATE INDEX IF NOT EXISTS idx_registry_exchange_symbol ON registry(exchange, symbol);");
     return;
   }
 
   if (hasMetadata) {
     migrateRegistryFromMetadata(db);
+    return;
+  }
+
+  if (hasSparse) {
+    migrateRegistryDropSparse(db);
     return;
   }
 
@@ -156,7 +160,6 @@ function createRegistry(db: DatabaseSync, tableName = "registry"): void {
       exchange TEXT NOT NULL,
       symbol TEXT NOT NULL,
       timeframe TEXT NOT NULL,
-      sparse INTEGER NOT NULL DEFAULT 0,
       start_ts INTEGER NOT NULL,
       end_ts INTEGER NOT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
@@ -174,9 +177,9 @@ function migrateRegistryFromMetadata(db: DatabaseSync): void {
     .all() as Array<{ collector: string; exchange: string; symbol: string; timeframe: string; metadata: string; created_at?: number; updated_at?: number }>;
   const insert = db.prepare(
     `INSERT INTO registry_new
-      (collector, exchange, symbol, timeframe, start_ts, end_ts, sparse, created_at, updated_at)
+      (collector, exchange, symbol, timeframe, start_ts, end_ts, created_at, updated_at)
      VALUES
-      (:collector, :exchange, :symbol, :timeframe, :startTs, :endTs, :sparse, :created_at, :updated_at);`,
+      (:collector, :exchange, :symbol, :timeframe, :startTs, :endTs, :created_at, :updated_at);`,
   );
 
   db.exec("BEGIN");
@@ -187,7 +190,6 @@ function migrateRegistryFromMetadata(db: DatabaseSync): void {
           Partial<{ start_ts: number; end_ts: number }>;
         const startTs = (parsed as any).startTs ?? (parsed as any).start_ts;
         const endTs = (parsed as any).endTs ?? (parsed as any).end_ts;
-        const sparse = Boolean((parsed as any).sparse);
         if (!Number.isFinite(startTs) || !Number.isFinite(endTs)) {
           continue;
         }
@@ -198,13 +200,58 @@ function migrateRegistryFromMetadata(db: DatabaseSync): void {
           timeframe: row.timeframe,
           startTs,
           endTs,
-          sparse: sparse ? 1 : 0,
           created_at: row.created_at ?? Date.now(),
           updated_at: row.updated_at ?? row.created_at ?? Date.now(),
         });
       } catch {
         // skip bad rows
       }
+    }
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+
+  db.exec("DROP TABLE registry;");
+  db.exec("ALTER TABLE registry_new RENAME TO registry;");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_registry_exchange_symbol ON registry(exchange, symbol);");
+}
+
+function migrateRegistryDropSparse(db: DatabaseSync): void {
+  createRegistry(db, "registry_new");
+  const rows = db
+    .prepare("SELECT collector, exchange, symbol, timeframe, start_ts, end_ts, created_at, updated_at FROM registry;")
+    .all() as Array<{
+      collector: string;
+      exchange: string;
+      symbol: string;
+      timeframe: string;
+      start_ts: number;
+      end_ts: number;
+      created_at?: number;
+      updated_at?: number;
+    }>;
+  const insert = db.prepare(
+    `INSERT INTO registry_new
+      (collector, exchange, symbol, timeframe, start_ts, end_ts, created_at, updated_at)
+     VALUES
+      (:collector, :exchange, :symbol, :timeframe, :startTs, :endTs, :created_at, :updated_at);`,
+  );
+
+  db.exec("BEGIN");
+  try {
+    for (const row of rows) {
+      insert.run({
+        collector: row.collector,
+        exchange: row.exchange,
+        symbol: row.symbol,
+        timeframe: row.timeframe,
+        startTs: row.start_ts,
+        endTs: row.end_ts,
+        created_at: row.created_at ?? Date.now(),
+        updated_at: row.updated_at ?? row.created_at ?? Date.now(),
+      });
     }
     db.exec("COMMIT");
   } catch (err) {
@@ -259,7 +306,6 @@ function upsertRegistry(stmt: StatementSync, entry: RegistryEntry): void {
     timeframe: entry.timeframe,
     startTs: entry.startTs,
     endTs: entry.endTs,
-    sparse: entry.sparse ? 1 : 0,
   };
   stmt.run(payload);
 }
@@ -310,7 +356,6 @@ function getRegistry(stmt: StatementSync, key: RegistryKey): RegistryEntry | nul
         timeframe: string;
         start_ts: number;
         end_ts: number;
-        sparse: number;
         created_at?: number;
         updated_at?: number;
       }
@@ -323,7 +368,6 @@ function getRegistry(stmt: StatementSync, key: RegistryKey): RegistryEntry | nul
     timeframe: row.timeframe,
     startTs: (row as any).startTs ?? (row as any).start_ts ?? row.start_ts,
     endTs: (row as any).endTs ?? (row as any).end_ts ?? row.end_ts,
-    sparse: Boolean((row as any).sparse),
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
