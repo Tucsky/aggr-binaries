@@ -194,7 +194,7 @@ CREATE INDEX idx_files_collector ON files(collector);
 
   * Read companion once (resume bounds, metadata).
   * Query that market’s files ordered by `start_ts, path`, applying resume guard in SQL (`start_ts >= lastInputStartTs` when present).
-  * Stream each file **once** (gzip if needed), apply trade-level resume guard (`ts < endTs`), and accumulate.
+  * Stream each file **once** (gzip if needed), apply trade-level resume guard (`ts < endTs - timeframeMs`), and accumulate. The last candle is always rebuilt.
 * Single in-memory accumulator per market; flush outputs before moving to the next market.
 * Write:
 
@@ -210,8 +210,9 @@ CREATE INDEX idx_files_collector ON files(collector);
 * If companion exists:
 
   * Skip files with `start_ts < lastInputStartTs`
-  * Skip trades `< endTs`
-* `--force` bypasses both guards.
+  * Skip trades `< endTs - timeframeMs` (resumeSlot). Only the last candle is rebuilt; new candles are appended.
+  * Binary resume: truncate the existing `.bin` to the resumeSlot offset and append dense candles onward. If the companion exists but the binary is missing, fall back to a full rebuild for that market.
+* `--force` bypasses both guards and rebuilds from scratch.
 * No database state is used for resume.
 
 ### Performance characteristics

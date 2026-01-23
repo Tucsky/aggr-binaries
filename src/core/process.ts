@@ -47,6 +47,11 @@ interface MarketRef {
   symbol: string;
 }
 
+enum BinaryState {
+  Exists = "exists",
+  Missing = "missing",
+}
+
 export async function runProcess(config: Config, db: Db): Promise<void> {
   const collectors = await resolveCollectors(config, db);
   if (!collectors.length) {
@@ -202,6 +207,7 @@ async function processByMarket(opts: {
     startAll,
   } = opts;
 
+  const timeframe = config.timeframe;
   const timeframeMs = config.timeframeMs;
 
   let acc: Accumulator | null = null;
@@ -221,10 +227,25 @@ async function processByMarket(opts: {
   for (const market of markets) {
     acc = await startAccumulatorForMarket(config, market.collector, market.exchange, market.symbol);
 
+    if (!config.force && acc.companion) {
+      const outBase = path.join(config.outDir, market.collector, market.exchange, market.symbol, timeframe);
+      const binaryState = await getBinaryState(outBase + ".bin");
+      if (binaryState === BinaryState.Missing) {
+        console.log(
+          `[${acc.collector}/${acc.exchange}/${acc.symbol}/${timeframe}] companion present but binary missing; rebuilding full output`,
+        );
+        acc.companion = undefined;
+        acc.maxInputStartTs = Number.NEGATIVE_INFINITY;
+      }
+    }
+
     const minStartTs =
       !config.force && acc.companion?.lastInputStartTs !== undefined ? acc.companion.lastInputStartTs : undefined;
+    const resumeSlot =
+      !config.force && acc.companion && acc.companion.endTs !== undefined
+        ? acc.companion.endTs - timeframeMs
+        : undefined;
     const files = iterateFilesForMarket(db, market, minStartTs);
-    const resumeCutoff = !config.force && acc.companion ? acc.companion.endTs : undefined;
 
     for (const file of files) {
       const { linesRead, tradesKept, newBuckets } = await streamFile({
@@ -232,7 +253,7 @@ async function processByMarket(opts: {
         acc,
         root: config.root,
         timeframeMs,
-        resumeCutoff,
+        skipBeforeTs: resumeSlot,
       });
 
       processedFiles += 1;
@@ -243,7 +264,7 @@ async function processByMarket(opts: {
       }
     }
 
-    await writeMarketOutput(acc, config, db);
+    await writeMarketOutput(acc, config, db, resumeSlot);
     processedMarkets += 1;
     acc = null;
   }
@@ -258,9 +279,9 @@ async function streamFile(opts: {
   acc: Accumulator;
   root: string;
   timeframeMs: number;
-  resumeCutoff?: number;
+  skipBeforeTs?: number;
 }): Promise<StreamResult> {
-  const { file, acc, root, timeframeMs, resumeCutoff } = opts;
+  const { file, acc, root, timeframeMs, skipBeforeTs } = opts;
 
   const fullPath = path.join(root, file.relative_path);
   const fileStartTs = file.start_ts;
@@ -278,7 +299,7 @@ async function streamFile(opts: {
     const trade = parseTradeLine(line, acc.exchange, acc.symbol);
     if (!trade) continue;
 
-    if (resumeCutoff !== undefined && trade.ts < resumeCutoff) continue;
+    if (skipBeforeTs !== undefined && trade.ts < skipBeforeTs) continue;
 
     const created = accumulate(acc, trade, timeframeMs);
     if (created) {
@@ -306,10 +327,21 @@ async function makeStream(filePath: string) {
   return out;
 }
 
+function computeResumeOffsetBytes(startTs: number, resumeSlot: number, timeframeMs: number): number {
+  const delta = resumeSlot - startTs;
+  if (delta < 0 || delta % timeframeMs !== 0) {
+    throw new Error(
+      `Invalid resume alignment: startTs=${startTs} resumeSlot=${resumeSlot} timeframeMs=${timeframeMs}`,
+    );
+  }
+  return (delta / timeframeMs) * CANDLE_BYTES;
+}
+
 async function writeMarketOutput(
   acc: Accumulator,
   config: Config,
   db: Db,
+  resumeSlot?: number,
 ) {
   const timeframe = config.timeframe;
   const timeframeMs = config.timeframeMs;
@@ -319,10 +351,12 @@ async function writeMarketOutput(
     return;
   }
 
+  const usingResume = resumeSlot !== undefined && acc.companion !== undefined;
   const startBase =
-    acc.companion?.startTs !== undefined ? Math.min(acc.companion.startTs, acc.minMinute) : acc.minMinute;
+    acc.companion?.startTs !== undefined ? acc.companion.startTs : acc.minMinute;
+  const computedEnd = acc.maxMinute + timeframeMs;
   const endBase =
-    acc.companion?.endTs !== undefined ? Math.max(acc.companion.endTs, acc.maxMinute + timeframeMs) : acc.maxMinute + timeframeMs;
+    acc.companion?.endTs !== undefined ? Math.max(acc.companion.endTs, computedEnd) : computedEnd;
   const totalCandles = Math.max(0, Math.floor((endBase - startBase) / timeframeMs));
   const estimatedMb = ((totalCandles * CANDLE_BYTES) / (1024 * 1024)).toFixed(2);
 
@@ -332,10 +366,30 @@ async function writeMarketOutput(
   console.log(
     `[${acc.collector}/${acc.exchange}/${acc.symbol}/${timeframe}] writing ${totalCandles} candles (~${estimatedMb} MB) range ${new Date(
       startBase,
-    ).toISOString()} -> ${new Date(endBase).toISOString()}`,
+    ).toISOString()} -> ${new Date(endBase).toISOString()}${usingResume ? " (resume)" : ""}`,
   );
 
-  await writeBinary(outBase + ".bin", acc.buckets, startBase, endBase - timeframeMs, timeframeMs);
+  const binaryPath = outBase + ".bin";
+
+  let writeFromTs = startBase;
+  let offsetBytes = 0;
+  let flag = "w";
+
+  if (usingResume && resumeSlot !== undefined && acc.companion?.startTs !== undefined) {
+    writeFromTs = resumeSlot;
+    offsetBytes = computeResumeOffsetBytes(acc.companion.startTs, resumeSlot, timeframeMs);
+    flag = "r+";
+    const offsetCandles = offsetBytes / CANDLE_BYTES;
+    console.log(
+      `[${acc.collector}/${acc.exchange}/${acc.symbol}/${timeframe}] resume slot=${new Date(resumeSlot).toISOString()} offsetCandles=${offsetCandles} offsetBytes=${offsetBytes}`,
+    );
+    await truncateBinaryTo(binaryPath, offsetBytes);
+  }
+
+  await writeBinaryRange(binaryPath, acc.buckets, writeFromTs, endBase - timeframeMs, timeframeMs, {
+    offsetBytes,
+    flag,
+  });
 
   const lastInputStartTs = acc.maxInputStartTs === Number.NEGATIVE_INFINITY ? undefined : acc.maxInputStartTs;
 
@@ -367,14 +421,30 @@ async function writeMarketOutput(
   );
 }
 
-async function writeBinary(
+async function getBinaryState(outPath: string): Promise<BinaryState> {
+  try {
+    await fs.stat(outPath);
+    return BinaryState.Exists;
+  } catch (err) {
+    if ((err as { code?: string }).code === "ENOENT") return BinaryState.Missing;
+    throw err;
+  }
+}
+
+async function truncateBinaryTo(outPath: string, offsetBytes: number): Promise<void> {
+  await fs.truncate(outPath, offsetBytes);
+}
+
+async function writeBinaryRange(
   outPath: string,
   buckets: Map<number, Candle>,
   minSlot: number,
   maxSlot: number,
   timeframeMs: number,
+  options?: { offsetBytes?: number; flag?: string },
 ): Promise<void> {
-  const fh = await fs.open(outPath, "w");
+  const { offsetBytes = 0, flag = "w" } = options ?? {};
+  const fh = await fs.open(outPath, flag);
 
   const empty = {
     open: 0,
@@ -393,7 +463,7 @@ async function writeBinary(
   const chunkCandles = 4096;
   const buf = Buffer.allocUnsafe(chunkCandles * CANDLE_BYTES);
   let ts = minSlot;
-  let fileOffset = 0;
+  let fileOffset = offsetBytes;
 
   while (ts <= maxSlot) {
     let count = 0;
