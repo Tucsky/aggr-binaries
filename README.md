@@ -366,3 +366,7 @@ npm run serve
 * Processing flushes at intervals (`--flush-interval`) to persist checkpoints mid-market, truncate/rewrite resume slots, and prune old buckets for bounded memory.
 * No legacy assumptions in code; historical complexity is captured here for correctness.
 * Designed to safely process millions of files with minimal memory and syscall overhead.
+
+## XIII. Development
+
+- `npm test` builds `dist-tests` via `tsconfig.tests.json` and runs `node --test dist-tests/tests/core/**/*.test.js`.

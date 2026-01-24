@@ -340,10 +340,17 @@ async function streamFile(opts: {
   const stream = await makeStream(fullPath);
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
   const reject: { reason?: ParseRejectReason } = {};
+  const rejectCounts: Record<ParseRejectReason, number> = {
+    parts_short: 0,
+    non_finite: 0,
+    invalid_ts_range: 0,
+    notional_too_large: 0,
+  };
 
   let linesRead = 0;
   let tradesKept = 0;
   let newBuckets = 0;
+  let rejectTotal = 0;
 
   for await (const line of rl) {
     linesRead += 1;
@@ -351,8 +358,23 @@ async function streamFile(opts: {
 
     const trade = parseTradeLine(line, reject);
     if (!trade) {
-      if (reject.reason) {
-        console.warn(`[parse-skip] reason=${reject.reason} path=${fullPath} line=${linesRead}`);
+      const reason = reject.reason;
+      if (reason !== undefined) {
+        switch (reason) {
+          case "parts_short":
+            rejectCounts.parts_short += 1;
+            break;
+          case "non_finite":
+            rejectCounts.non_finite += 1;
+            break;
+          case "invalid_ts_range":
+            rejectCounts.invalid_ts_range += 1;
+            break;
+          case "notional_too_large":
+            rejectCounts.notional_too_large += 1;
+            break;
+        }
+        rejectTotal += 1;
       }
       continue;
     }
@@ -370,6 +392,15 @@ async function streamFile(opts: {
 
   if (tradesKept > 0 && fileStartTs > acc.maxInputStartTs) {
     acc.maxInputStartTs = fileStartTs;
+  }
+
+  if (rejectTotal > 0) {
+    const summary: string[] = [];
+    if (rejectCounts.parts_short) summary.push(`parts_short=${rejectCounts.parts_short}`);
+    if (rejectCounts.non_finite) summary.push(`non_finite=${rejectCounts.non_finite}`);
+    if (rejectCounts.invalid_ts_range) summary.push(`invalid_ts_range=${rejectCounts.invalid_ts_range}`);
+    if (rejectCounts.notional_too_large) summary.push(`notional_too_large=${rejectCounts.notional_too_large}`);
+    console.warn(`[parse-skip] path=${fullPath} rejects=${rejectTotal} ${summary.join(" ")}`);
   }
 
   return { linesRead, tradesKept, newBuckets };
@@ -479,7 +510,15 @@ async function flushMarketOutput(
   } */
 
   if (flag !== "w") {
-    await truncateBinaryTo(state.binaryPath, offsetBytes);
+    let existingSize: number | undefined;
+    try {
+      existingSize = (await fs.stat(state.binaryPath)).size;
+    } catch (err) {
+      if ((err as { code?: string }).code !== "ENOENT") throw err;
+    }
+    if (usingResumeRewrite || (existingSize !== undefined && offsetBytes < existingSize)) {
+      await truncateBinaryTo(state.binaryPath, offsetBytes);
+    }
   }
 
   const newCandles = Math.max(0, Math.floor((flushEndExclusive - writeFrom) / timeframeMs));

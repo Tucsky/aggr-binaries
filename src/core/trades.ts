@@ -38,15 +38,45 @@ export interface ParseReject {
 }
 
 export function parseTradeLine(line: string, reject?: ParseReject): Trade | null {
-  const parts = line.trim().split(/\s+/);
-  if (parts.length < 4) {
+  let i = 0;
+  let start = 0;
+  let end = 0;
+  const len = line.length;
+
+  const readNext = (): boolean => {
+    while (i < len && line.charCodeAt(i) <= 32) i += 1;
+    start = i;
+    while (i < len && line.charCodeAt(i) > 32) i += 1;
+    end = i;
+    return end > start;
+  };
+
+  if (!readNext()) {
     if (reject) reject.reason = "parts_short";
     return null;
   }
+  const ts = Number(line.slice(start, end));
 
-  const ts = Number(parts[0]);
-  const price = Number(parts[1]);
-  const size = Number(parts[2]);
+  if (!readNext()) {
+    if (reject) reject.reason = "parts_short";
+    return null;
+  }
+  const price = Number(line.slice(start, end));
+
+  if (!readNext()) {
+    if (reject) reject.reason = "parts_short";
+    return null;
+  }
+  const size = Number(line.slice(start, end));
+
+  if (!readNext()) {
+    if (reject) reject.reason = "parts_short";
+    return null;
+  }
+  const side: Side = end - start === 1 && line.charCodeAt(start) === 49 ? "buy" : "sell";
+
+  const hasLiquidation = readNext();
+  const liquidation = hasLiquidation && end - start === 1 && line.charCodeAt(start) === 49;
 
   if (!Number.isFinite(ts) || !Number.isFinite(price) || !Number.isFinite(size)) {
     if (reject) reject.reason = "non_finite";
@@ -63,9 +93,6 @@ export function parseTradeLine(line: string, reject?: ParseReject): Trade | null
     if (reject) reject.reason = "notional_too_large";
     return null;
   }
-
-  const side = parts[3] === "1" ? "buy" : "sell";
-  const liquidation = parts[4] === "1";
 
   return { ts, price, size, side, liquidation };
 }

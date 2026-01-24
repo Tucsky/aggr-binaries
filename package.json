@@ -9,12 +9,16 @@
   "scripts": {
     "start": "npm run build:core && node dist/core/cli.js",
     "build": "npm run build:core && npm run build:client",
+    "test": "npm run build:tests && node --test dist-tests/tests/core/**/*.test.js",
     "build:core": "tsc -p tsconfig.json",
+    "build:tests": "tsc -p tsconfig.tests.json",
     "build:client": "vite build --config client/vite.config.ts",
     "lint": "tsc --noEmit",
     "serve": "npm run build && node dist/server.js",
     "dev:client": "vite dev --config client/vite.config.ts",
-    "check:client": "svelte-check --tsconfig client/tsconfig.json"
+    "check:client": "svelte-check --tsconfig client/tsconfig.json",
+    "build:bench": "tsc -p tsconfig.bench.json",
+    "bench:parse": "npm run build:bench && node dist-bench/bench/parse.js"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^3.1.2",
