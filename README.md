@@ -144,7 +144,7 @@ Example:
 ```
 
 * `lastInputStartTs`: used to skip already-processed files.
-* Trades `< endTs` are ignored on resume unless `--force`.
+* On resume, trades `< endTs - timeframeMs` are ignored (`endTs - timeframeMs` is rebuilt); `--force` disables this guard.
 
 ---
 
@@ -192,10 +192,11 @@ CREATE INDEX idx_files_collector ON files(collector);
 * Load **markets** from SQLite ordered by `collector, exchange, symbol` (filters: `--collector`, `--exchange`, `--symbol`).
 * For each market:
 
-  * Read companion once (resume bounds, metadata).
+  * Read companion once (resume bounds, metadata) and set resume slot if present.
   * Query that market’s files ordered by `start_ts, path`, applying resume guard in SQL (`start_ts >= lastInputStartTs` when present).
   * Stream each file **once** (gzip if needed), apply trade-level resume guard (`ts < endTs - timeframeMs`), and accumulate. The last candle is always rebuilt.
-* Single in-memory accumulator per market; flush outputs before moving to the next market.
+  * Checkpoint outputs + registry during processing (every `--flush-interval` seconds, default 10s) and on completion.
+* Single in-memory accumulator per market; buckets older than the latest slot are pruned after each flush to keep memory bounded.
 * Write:
 
   ```
@@ -209,10 +210,11 @@ CREATE INDEX idx_files_collector ON files(collector);
 
 * If companion exists:
 
-  * Skip files with `start_ts < lastInputStartTs`
-  * Skip trades `< endTs - timeframeMs` (resumeSlot). Only the last candle is rebuilt; new candles are appended.
-  * Binary resume: truncate the existing `.bin` to the resumeSlot offset and append dense candles onward. If the companion exists but the binary is missing, fall back to a full rebuild for that market.
-* `--force` bypasses both guards and rebuilds from scratch.
+  * Skip files with `start_ts < lastInputStartTs`.
+  * Skip trades `< endTs - timeframeMs` (resumeSlot). The first flush after a resume truncates the binary to the resumeSlot and rewrites that candle before appending new ones.
+  * Checkpoints update both companion and registry on every flush (interval + final) with the latest `endTs` and `lastInputStartTs` (most recent file that yielded trades).
+  * If the companion exists but the binary is missing, fall back to a full rebuild for that market.
+* `--force` bypasses both guards and rebuilds from scratch (fresh companion + binary).
 * No database state is used for resume.
 
 ### Performance characteristics
@@ -220,6 +222,7 @@ CREATE INDEX idx_files_collector ON files(collector);
 * Low-memory directory walk.
 * Batched SQLite writes during indexing.
 * No per-trade DB I/O.
+* Periodic checkpoint flushes keep outputs resumable mid-market and prune old buckets to cap memory.
 * Binary writes chunked in **4096-candle blocks** to avoid millions of syscalls.
 * One accumulator at a time (per market) → predictable memory use even across many markets.
 
@@ -244,11 +247,14 @@ Config file: `config.json`
   "root": "/Volumes/AGGR/input",
   "dbPath": "./index.sqlite",
   "batchSize": 1000,
+  "flushIntervalSeconds": 10,
   "includePaths": [],
   "outDir": "output",
   "timeframe": "1m"
 }
 ```
+
+`flushIntervalSeconds` controls checkpoint cadence during `process`.
 
 All values can be overridden via CLI flags.
 
@@ -286,6 +292,7 @@ npm start -- <subcommand> [flags]
 * `--exchange <EXCHANGE>`
 * `--symbol <SYMBOL>`
 * `--timeframe <tf>` (1m, 5m, 1h…)
+* `--flush-interval <s>` checkpoint every _s_ seconds (default 10)
 * `--force` ignore resume guards
 
 ### Examples
@@ -354,7 +361,8 @@ npm run serve
 
 ## XII. Summary
 
-* Append-only indexing, resumable processing, gap-aware outputs.
+* Append-only indexing, gap-aware outputs, checkpointed/resumable processing driven solely by companions/binaries.
 * Outputs are timeframe-scoped (`collector/exchange/symbol/<tf>.bin/.json`) and registered in SQLite (upsert during processing; `npm start -- registry` to rescan companions).
+* Processing flushes at intervals (`--flush-interval`) to persist checkpoints mid-market, truncate/rewrite resume slots, and prune old buckets for bounded memory.
 * No legacy assumptions in code; historical complexity is captured here for correctness.
 * Designed to safely process millions of files with minimal memory and syscall overhead.

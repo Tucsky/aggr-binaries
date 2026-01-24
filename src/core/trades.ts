@@ -6,8 +6,8 @@ export interface Trade {
   size: number;
   side: Side;
   liquidation: boolean;
-  exchange: string;
-  symbol: string;
+  exchange?: string;
+  symbol?: string;
 }
 
 export interface Candle {
@@ -26,20 +26,48 @@ export interface Candle {
 export const PRICE_SCALE = 1e4; // int32 safe for typical crypto prices
 export const VOL_SCALE = 1e6; // quote volume micro units
 export const CANDLE_BYTES = 56;
+// Timestamp bounds keep us in a sane ms-since-epoch range without heavy validation.
+const MIN_TS_MS = 1e11; // ~1973
+const MAX_TS_MS = 1e13; // ~2286
+const MAX_NOTIONAL = 1e9;
 
-export function parseTradeLine(line: string, pathExchange?: string | null, pathSymbol?: string | null): Trade | null {
+export type ParseRejectReason = "parts_short" | "non_finite" | "invalid_ts_range" | "notional_too_large";
+
+export interface ParseReject {
+  reason?: ParseRejectReason;
+}
+
+export function parseTradeLine(line: string, reject?: ParseReject): Trade | null {
   const parts = line.trim().split(/\s+/);
-  if (parts.length < 4) return null;
+  if (parts.length < 4) {
+    if (reject) reject.reason = "parts_short";
+    return null;
+  }
+
   const ts = Number(parts[0]);
   const price = Number(parts[1]);
   const size = Number(parts[2]);
+
+  if (!Number.isFinite(ts) || !Number.isFinite(price) || !Number.isFinite(size)) {
+    if (reject) reject.reason = "non_finite";
+    return null;
+  }
+
+  if (ts <= MIN_TS_MS || ts >= MAX_TS_MS) {
+    if (reject) reject.reason = "invalid_ts_range";
+    return null;
+  }
+
+  const notional = price * size;
+  if (!Number.isFinite(notional) || notional > MAX_NOTIONAL) {
+    if (reject) reject.reason = "notional_too_large";
+    return null;
+  }
+
   const side = parts[3] === "1" ? "buy" : "sell";
   const liquidation = parts[4] === "1";
-  if (!pathExchange || !pathSymbol) return null;
-  const exchange = pathExchange;
-  const symbol = pathSymbol;
-  if (!Number.isFinite(ts) || !Number.isFinite(price) || !Number.isFinite(size)) return null;
-  return { ts, price, size, side, liquidation, exchange, symbol };
+
+  return { ts, price, size, side, liquidation };
 }
 
 export function accumulate(

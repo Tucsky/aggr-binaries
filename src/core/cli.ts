@@ -19,6 +19,7 @@ interface ParsedArgs {
     outDir?: string;
     force?: boolean;
     timeframe?: string;
+    flushIntervalSeconds?: number;
   };
   showHelp: boolean;
 }
@@ -98,6 +99,9 @@ function parseArgs(argv: string[]): ParsedArgs {
         break;
       case "--timeframe":
         parsed.overrides.timeframe = normalized[++i];
+        break;
+      case "--flush-interval":
+        parsed.overrides.flushIntervalSeconds = Number(normalized[++i]);
         break;
       case "-h":
       case "--help":

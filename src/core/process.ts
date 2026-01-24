@@ -12,7 +12,8 @@ import {
   VOL_SCALE,
   accumulate,
   parseTradeLine,
-  type Candle
+  type Candle,
+  type ParseRejectReason,
 } from "./trades.js";
 
 interface Accumulator {
@@ -45,6 +46,17 @@ interface MarketRef {
   collector: string;
   exchange: string;
   symbol: string;
+}
+
+interface MarketFlushState {
+  outBase: string;
+  binaryPath: string;
+  startBase?: number;
+  resumeSlot?: number;
+  nextWriteFrom?: number;
+  lastFlushedEndTs?: number;
+  needsResumeRewrite: boolean;
+  hasFlushed: boolean;
 }
 
 enum BinaryState {
@@ -177,6 +189,9 @@ async function startAccumulatorForMarket(
 ): Promise<Accumulator> {
   const companionPath = path.join(config.outDir, collector, exchange, symbol, `${config.timeframe}.json`);
   const companion = await readCompanion(companionPath);
+  console.log(
+    `[${collector}/${exchange}/${symbol}] init accumulator companion=${companion ? "present" : "missing"} path=${companionPath}`,
+  );
   return {
     collector,
     exchange,
@@ -209,6 +224,7 @@ async function processByMarket(opts: {
 
   const timeframe = config.timeframe;
   const timeframeMs = config.timeframeMs;
+  const flushIntervalMs = Math.max(1_000, Math.floor(config.flushIntervalSeconds * 1000));
 
   let acc: Accumulator | null = null;
   let totalLines = 0;
@@ -216,19 +232,18 @@ async function processByMarket(opts: {
   let processedFiles = 0;
   let processedMarkets = 0;
   let maxBuckets = 0;
-
-  const heartbeatTimer = setInterval(() => {
+  const logHeartbeat = () => {
     const elapsed = ((Date.now() - startAll) / 1000).toFixed(1);
     console.log(
       `[process] heartbeat markets=${processedMarkets}/${totalMarkets} files=${processedFiles}/${totalCandidates} buckets=${maxBuckets} current=${acc ? makeMarketKey(acc.collector, acc.exchange, acc.symbol) : "idle"} elapsed=${elapsed}s`,
     );
-  }, 10_000);
+  };
 
   for (const market of markets) {
     acc = await startAccumulatorForMarket(config, market.collector, market.exchange, market.symbol);
+    const outBase = path.join(config.outDir, market.collector, market.exchange, market.symbol, timeframe);
 
     if (!config.force && acc.companion) {
-      const outBase = path.join(config.outDir, market.collector, market.exchange, market.symbol, timeframe);
       const binaryState = await getBinaryState(outBase + ".bin");
       if (binaryState === BinaryState.Missing) {
         console.log(
@@ -245,9 +260,26 @@ async function processByMarket(opts: {
       !config.force && acc.companion && acc.companion.endTs !== undefined
         ? acc.companion.endTs - timeframeMs
         : undefined;
+    console.log(
+      `[${acc.collector}/${acc.exchange}/${acc.symbol}/${timeframe}] start market companion=${Boolean(acc.companion)} minStartTs=${minStartTs} resumeSlot=${resumeSlot}`,
+    );
     const files = iterateFilesForMarket(db, market, minStartTs);
+    const flushState: MarketFlushState = {
+      outBase,
+      binaryPath: outBase + ".bin",
+      startBase: !config.force ? acc.companion?.startTs : undefined,
+      resumeSlot,
+      nextWriteFrom: resumeSlot ?? (!config.force ? acc.companion?.startTs : undefined),
+      lastFlushedEndTs: !config.force ? acc.companion?.endTs : undefined,
+      needsResumeRewrite: Boolean(resumeSlot && acc.companion),
+      hasFlushed: false,
+    };
+    let lastFlushAt = Date.now();
 
     for (const file of files) {
+      /*console.log(
+        `[${acc.collector}/${acc.exchange}/${acc.symbol}/${timeframe}] stream file=${file.relative_path} start_ts=${file.start_ts} skipBefore=${resumeSlot}`,
+      );*/
       const { linesRead, tradesKept, newBuckets } = await streamFile({
         file,
         acc,
@@ -255,21 +287,40 @@ async function processByMarket(opts: {
         timeframeMs,
         skipBeforeTs: resumeSlot,
       });
+      /*console.log(
+        `[${acc.collector}/${acc.exchange}/${acc.symbol}/${timeframe}] done file=${file.relative_path} lines=${linesRead} kept=${tradesKept} newBuckets=${newBuckets} bucketCount=${acc.bucketCount}`,
+      );*/
 
       processedFiles += 1;
       totalLines += linesRead;
       totalTradesKept += tradesKept;
-      if (newBuckets && acc.bucketCount > maxBuckets) {
-        maxBuckets = acc.bucketCount;
+      if (newBuckets) {
+        const currentBuckets = acc.buckets.size;
+        if (currentBuckets > maxBuckets) {
+          maxBuckets = currentBuckets;
+        }
+      }
+
+      const now = Date.now();
+      if (now - lastFlushAt >= flushIntervalMs) {
+        /* console.log(
+          `[${acc.collector}/${acc.exchange}/${acc.symbol}/${timeframe}] triggering interval flush elapsedMs=${now - lastFlushAt}`,
+        ); */
+        const flushed = await flushMarketOutput(acc, config, db, flushState, { final: false });
+        if (flushed) {
+          lastFlushAt = now;
+          logHeartbeat();
+        }
       }
     }
 
-    await writeMarketOutput(acc, config, db, resumeSlot);
+    const finalFlushed = await flushMarketOutput(acc, config, db, flushState, { final: true });
+    if (finalFlushed) {
+      logHeartbeat();
+    }
     processedMarkets += 1;
     acc = null;
   }
-
-  clearInterval(heartbeatTimer);
 
   return { totalLines, totalTradesKept, processedFiles, processedMarkets, maxBuckets };
 }
@@ -288,6 +339,7 @@ async function streamFile(opts: {
 
   const stream = await makeStream(fullPath);
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  const reject: { reason?: ParseRejectReason } = {};
 
   let linesRead = 0;
   let tradesKept = 0;
@@ -295,9 +347,15 @@ async function streamFile(opts: {
 
   for await (const line of rl) {
     linesRead += 1;
+    reject.reason = undefined;
 
-    const trade = parseTradeLine(line, acc.exchange, acc.symbol);
-    if (!trade) continue;
+    const trade = parseTradeLine(line, reject);
+    if (!trade) {
+      if (reject.reason) {
+        console.warn(`[parse-skip] reason=${reject.reason} path=${fullPath} line=${linesRead}`);
+      }
+      continue;
+    }
 
     if (skipBeforeTs !== undefined && trade.ts < skipBeforeTs) continue;
 
@@ -337,56 +395,106 @@ function computeResumeOffsetBytes(startTs: number, resumeSlot: number, timeframe
   return (delta / timeframeMs) * CANDLE_BYTES;
 }
 
-async function writeMarketOutput(
+async function flushMarketOutput(
   acc: Accumulator,
   config: Config,
   db: Db,
-  resumeSlot?: number,
-) {
+  state: MarketFlushState,
+  opts: { final: boolean },
+): Promise<boolean> {
   const timeframe = config.timeframe;
   const timeframeMs = config.timeframeMs;
 
   if (!acc.bucketCount || !isFinite(acc.minMinute) || !isFinite(acc.maxMinute)) {
-    console.log(`[${acc.collector}/${acc.exchange}/${acc.symbol}] no trades; skipping output`);
-    return;
+    if (opts.final) {
+      console.log(`[${acc.collector}/${acc.exchange}/${acc.symbol}] no trades; skipping output`);
+    }
+    return false;
   }
 
-  const usingResume = resumeSlot !== undefined && acc.companion !== undefined;
-  const startBase =
-    acc.companion?.startTs !== undefined ? acc.companion.startTs : acc.minMinute;
-  const computedEnd = acc.maxMinute + timeframeMs;
-  const endBase =
-    acc.companion?.endTs !== undefined ? Math.max(acc.companion.endTs, computedEnd) : computedEnd;
-  const totalCandles = Math.max(0, Math.floor((endBase - startBase) / timeframeMs));
-  const estimatedMb = ((totalCandles * CANDLE_BYTES) / (1024 * 1024)).toFixed(2);
+  if (state.startBase === undefined) {
+    state.startBase = acc.companion?.startTs !== undefined ? acc.companion.startTs : acc.minMinute;
+  }
+  /* console.log(
+    `[${acc.collector}/${acc.exchange}/${acc.symbol}/${timeframe}] flush start final=${opts.final} startBase=${state.startBase} resumeSlot=${state.resumeSlot} nextWriteFrom=${state.nextWriteFrom} lastFlushed=${state.lastFlushedEndTs}`,
+  ); */
 
-  const outBase = path.join(config.outDir, acc.collector, acc.exchange, acc.symbol, timeframe);
-  await fs.mkdir(path.dirname(outBase), { recursive: true });
+  const startBase = state.startBase;
+  if (!Number.isFinite(startBase)) {
+    return false;
+  }
+  if (startBase % timeframeMs !== 0) {
+    throw new Error(
+      `startBase misaligned with timeframe: startBase=${startBase} timeframeMs=${timeframeMs}`,
+    );
+  }
 
-  console.log(
-    `[${acc.collector}/${acc.exchange}/${acc.symbol}/${timeframe}] writing ${totalCandles} candles (~${estimatedMb} MB) range ${new Date(
-      startBase,
-    ).toISOString()} -> ${new Date(endBase).toISOString()}${usingResume ? " (resume)" : ""}`,
-  );
+  const lastClosedSlot = opts.final ? acc.maxMinute : acc.maxMinute - timeframeMs;
+  if (!Number.isFinite(lastClosedSlot)) {
+    return false;
+  }
 
-  const binaryPath = outBase + ".bin";
+  if (state.nextWriteFrom === undefined) {
+    state.nextWriteFrom = state.resumeSlot ?? startBase;
+  }
 
-  let writeFromTs = startBase;
-  let offsetBytes = 0;
-  let flag = "w";
+  const writeFrom = state.nextWriteFrom;
+  if (lastClosedSlot < writeFrom) {
+    return false;
+  }
 
-  if (usingResume && resumeSlot !== undefined && acc.companion?.startTs !== undefined) {
-    writeFromTs = resumeSlot;
-    offsetBytes = computeResumeOffsetBytes(acc.companion.startTs, resumeSlot, timeframeMs);
-    flag = "r+";
+  const flushEndExclusive = opts.final ? acc.maxMinute + timeframeMs : lastClosedSlot + timeframeMs;
+  const usingResumeRewrite = state.needsResumeRewrite && !state.hasFlushed;
+  if (state.lastFlushedEndTs !== undefined && flushEndExclusive <= state.lastFlushedEndTs && !usingResumeRewrite) {
+    if (opts.final && state.hasFlushed) {
+      console.log(
+        `[${acc.collector}/${acc.exchange}/${acc.symbol}/${timeframe}] final flush already persisted through ${new Date(
+          state.lastFlushedEndTs,
+        ).toISOString()}`,
+      );
+    }
+    return false;
+  }
+
+  if (flushEndExclusive <= writeFrom) {
+    return false;
+  }
+
+  const writeMaxSlot = flushEndExclusive - timeframeMs;
+  const offsetBytes = computeResumeOffsetBytes(startBase, writeFrom, timeframeMs);
+  const firstWrite = !state.hasFlushed && !usingResumeRewrite && writeFrom === startBase;
+  const flag = firstWrite ? "w" : "r+";
+
+  /* console.log(
+    `[${acc.collector}/${acc.exchange}/${acc.symbol}/${timeframe}] flush compute writeFrom=${writeFrom} flushEndExclusive=${flushEndExclusive} flag=${flag} offsetBytes=${offsetBytes} rewrite=${usingResumeRewrite}`,
+  ); */
+
+  await fs.mkdir(path.dirname(state.binaryPath), { recursive: true });
+
+  /* if (usingResumeRewrite) {
     const offsetCandles = offsetBytes / CANDLE_BYTES;
     console.log(
-      `[${acc.collector}/${acc.exchange}/${acc.symbol}/${timeframe}] resume slot=${new Date(resumeSlot).toISOString()} offsetCandles=${offsetCandles} offsetBytes=${offsetBytes}`,
+      `[${acc.collector}/${acc.exchange}/${acc.symbol}/${timeframe}] resume slot=${new Date(writeFrom).toISOString()} offsetCandles=${offsetCandles} offsetBytes=${offsetBytes}`,
     );
-    await truncateBinaryTo(binaryPath, offsetBytes);
+  } */
+
+  if (flag !== "w") {
+    await truncateBinaryTo(state.binaryPath, offsetBytes);
   }
 
-  await writeBinaryRange(binaryPath, acc.buckets, writeFromTs, endBase - timeframeMs, timeframeMs, {
+  const newCandles = Math.max(0, Math.floor((flushEndExclusive - writeFrom) / timeframeMs));
+  const totalCandles = Math.max(0, Math.floor((flushEndExclusive - startBase) / timeframeMs));
+  const estimatedMb = ((totalCandles * CANDLE_BYTES) / (1024 * 1024)).toFixed(2);
+  const modeLabel = usingResumeRewrite ? "resume" : state.hasFlushed ? "append" : "fresh";
+  const verb = opts.final ? "final" : "flush";
+
+  console.log(
+    `[${acc.collector}/${acc.exchange}/${acc.symbol}/${timeframe}] ${verb} +${newCandles} candles (total=${totalCandles}, ~${estimatedMb} MB) range ${new Date(
+      writeFrom,
+    ).toISOString()} -> ${new Date(flushEndExclusive).toISOString()} (${modeLabel})`,
+  );
+
+  await writeBinaryRange(state.binaryPath, acc.buckets, writeFrom, writeMaxSlot, timeframeMs, {
     offsetBytes,
     flag,
   });
@@ -399,14 +507,14 @@ async function writeMarketOutput(
     timeframe,
     timeframeMs,
     startTs: startBase,
-    endTs: endBase,
+    endTs: flushEndExclusive,
     priceScale: PRICE_SCALE,
     volumeScale: VOL_SCALE,
     records: totalCandles,
     lastInputStartTs,
   };
 
-  await writeCompanion(outBase + ".json", metadata);
+  await writeCompanion(state.outBase + ".json", metadata);
   db.upsertRegistry({
     collector: acc.collector,
     exchange: acc.exchange,
@@ -416,9 +524,34 @@ async function writeMarketOutput(
     endTs: metadata.endTs!,
   });
 
-  console.log(
-    `[${acc.collector}/${acc.exchange}/${acc.symbol}/${timeframe}] processed ${acc.bucketCount} populated candles into ${totalCandles} slots -> ${outBase}.bin`,
-  );
+  if (opts.final) {
+    console.log(
+      `[${acc.collector}/${acc.exchange}/${acc.symbol}/${timeframe}] processed ${acc.bucketCount} populated candles into ${totalCandles} slots -> ${state.outBase}.bin`,
+    );
+  }
+
+  state.hasFlushed = true;
+  state.needsResumeRewrite = false;
+  state.lastFlushedEndTs = flushEndExclusive;
+  state.nextWriteFrom = flushEndExclusive;
+  acc.companion = metadata;
+
+  pruneBucketsBefore(acc, flushEndExclusive - timeframeMs);
+
+  return true;
+}
+
+function pruneBucketsBefore(acc: Accumulator, cutoffTs: number): void {
+  let removed = 0;
+  for (const ts of acc.buckets.keys()) {
+    if (ts < cutoffTs) {
+      acc.buckets.delete(ts);
+      removed += 1;
+    }
+  }
+  /* console.log(
+    `[${acc.collector}/${acc.exchange}/${acc.symbol}/${acc.companion?.timeframe ?? "tf"}] prune buckets cutoff=${cutoffTs} removed=${removed} remaining=${acc.buckets.size}`,
+  ); */
 }
 
 async function getBinaryState(outPath: string): Promise<BinaryState> {

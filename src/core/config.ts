@@ -6,6 +6,7 @@ export interface Config {
   root: string;
   dbPath: string;
   batchSize: number;
+  flushIntervalSeconds: number;
   includePaths?: string[]; // relative to root
   // processing options (optional overrides from CLI)
   collector?: string;
@@ -26,6 +27,7 @@ const DEFAULTS: Config = {
   root: "/Volumes/AGGR/input",
   dbPath: "index.sqlite",
   batchSize: 1000,
+  flushIntervalSeconds: 10,
   outDir: "output",
   timeframe: "1m",
   timeframeMs: 60_000,
@@ -65,6 +67,10 @@ export async function loadConfig(overrides: CliOverrides = {}): Promise<Config> 
     merged.batchSize = DEFAULTS.batchSize;
   }
 
+  if (!Number.isFinite(merged.flushIntervalSeconds) || merged.flushIntervalSeconds <= 0) {
+    merged.flushIntervalSeconds = DEFAULTS.flushIntervalSeconds;
+  }
+
   if (merged.includePaths && !Array.isArray(merged.includePaths)) {
     merged.includePaths = undefined;
   }
@@ -92,6 +98,7 @@ Options (override config file):
   --outdir <path>           Processing: output directory (default: ${DEFAULTS.outDir})
   --force                   Processing: ignore processed-files cache
   --timeframe <tf>          Processing: timeframe string (e.g., 1m, 5m, 1h) (default: ${DEFAULTS.timeframe})
+  --flush-interval <s>      Processing: flush interval in seconds (default: ${DEFAULTS.flushIntervalSeconds})
   --config <path>           Path to JSON config (default: ./config.json if present)
   --no-config               Skip loading any config file
   -h, --help                Show this help
