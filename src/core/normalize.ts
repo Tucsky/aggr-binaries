@@ -68,7 +68,9 @@ export function classifyPath(
   }
 
   const fileName = segments[segments.length - 1];
-  const ext = path.extname(fileName) || undefined;
+  const rawExt = path.extname(fileName);
+  if (rawExt && rawExt.toLowerCase() !== ".gz") return null;
+  const ext = rawExt || undefined;
 
   // logical structure: {collector?}/{bucket}/{exchange}/{symbol}/{file}
   const exchangeDir = segments[offset + 1];

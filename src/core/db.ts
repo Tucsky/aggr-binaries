@@ -1,4 +1,5 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
+import type { EventRange } from "./events.js";
 import type { IndexedFile, RegistryEntry, RegistryFilter, RegistryKey } from "./model.js";
 
 export interface Db {
@@ -8,6 +9,8 @@ export interface Db {
   upsertRegistry(entry: RegistryEntry): void;
   replaceRegistry(entries: RegistryEntry[], filter?: RegistryFilter): { upserted: number; deleted: number };
   getRegistryEntry(key: RegistryKey): RegistryEntry | null;
+  insertEvents(rows: EventRange[]): void;
+  deleteEventsForFile(rootId: number, relativePath: string): void;
   close(): void;
 }
 
@@ -50,6 +53,15 @@ export function openDatabase(dbPath: string): Db {
     `SELECT * FROM registry
      WHERE collector = :collector AND exchange = :exchange AND symbol = :symbol AND timeframe = :timeframe;`,
   );
+  const insertEventStmt = db.prepare(
+    `INSERT INTO events
+      (root_id, relative_path, collector, exchange, symbol, event_type, start_line, end_line, gap_ms, gap_miss, gap_end_ts)
+     VALUES
+      (:rootId, :relativePath, :collector, :exchange, :symbol, :eventType, :startLine, :endLine, :gapMs, :gapMiss, :gapEndTs);`,
+  );
+  const deleteEventsForFileStmt = db.prepare(
+    `DELETE FROM events WHERE root_id = :rootId AND relative_path = :relativePath;`,
+  );
 
   const api: Db = {
     db,
@@ -66,6 +78,9 @@ export function openDatabase(dbPath: string): Db {
     replaceRegistry: (entries: RegistryEntry[], filter?: RegistryFilter) =>
       replaceRegistry(db, upsertRegistryStmt, deleteRegistryStmt, entries, filter),
     getRegistryEntry: (key: RegistryKey) => getRegistry(getRegistryStmt, key),
+    insertEvents: (rows: EventRange[]) => insertEvents(db, insertEventStmt, rows),
+    deleteEventsForFile: (rootId: number, relativePath: string) =>
+      deleteEventsForFileStmt.run({ rootId, relativePath }),
     close: () => db.close(),
   };
 
@@ -99,6 +114,7 @@ function migrate(db: DatabaseSync): void {
   db.exec("CREATE INDEX IF NOT EXISTS idx_files_collector ON files(collector);");
 
   migrateRegistry(db);
+  migrateEvents(db);
 
   const columns = db.prepare("PRAGMA table_info(files);").all() as Array<{ name: string; notnull: number }>;
   const missingNotNull = ["exchange", "symbol", "start_ts"].filter(
@@ -264,6 +280,41 @@ function migrateRegistryDropSparse(db: DatabaseSync): void {
   db.exec("CREATE INDEX IF NOT EXISTS idx_registry_exchange_symbol ON registry(exchange, symbol);");
 }
 
+function migrateEvents(db: DatabaseSync): void {
+  const info = db.prepare("PRAGMA table_info(events);").all() as Array<{ name: string }>;
+  const hasGapMiss = info.some((c) => c.name === "gap_miss");
+  const hasGapEndTs = info.some((c) => c.name === "gap_end_ts");
+
+  if (!info.length) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
+        relative_path TEXT NOT NULL,
+        collector TEXT NOT NULL,
+        exchange TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        start_line INTEGER NOT NULL,
+        end_line INTEGER NOT NULL,
+        gap_ms INTEGER,
+        gap_miss INTEGER,
+        gap_end_ts INTEGER,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000)
+      );
+    `);
+  } else {
+    if (!hasGapMiss) {
+      db.exec("ALTER TABLE events ADD COLUMN gap_miss INTEGER;");
+    }
+    if (!hasGapEndTs) {
+      db.exec("ALTER TABLE events ADD COLUMN gap_end_ts INTEGER;");
+    }
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_events_file ON events(root_id, relative_path);");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_events_market ON events(collector, exchange, symbol);");
+}
+
 function insertMany(
   db: DatabaseSync,
   stmt: StatementSync,
@@ -296,6 +347,32 @@ function insertMany(
     throw err;
   }
   return { inserted, existing };
+}
+
+function insertEvents(db: DatabaseSync, stmt: StatementSync, rows: EventRange[]): void {
+  if (!rows.length) return;
+  db.exec("BEGIN");
+  try {
+    for (const row of rows) {
+      stmt.run({
+        rootId: row.rootId,
+        relativePath: row.relativePath,
+        collector: row.collector,
+        exchange: row.exchange,
+        symbol: row.symbol,
+        eventType: row.type,
+        startLine: row.startLine,
+        endLine: row.endLine,
+        gapMs: row.gapMs ?? null,
+        gapMiss: row.gapMiss ?? null,
+        gapEndTs: row.gapEndTs ?? null,
+      });
+    }
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
 }
 
 function upsertRegistry(stmt: StatementSync, entry: RegistryEntry): void {

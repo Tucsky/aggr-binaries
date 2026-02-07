@@ -1,3 +1,6 @@
+import { EventType, type ParseRejectReason } from "./events.js";
+export type { ParseRejectReason } from "./events.js";
+
 export type Side = "buy" | "sell";
 
 export interface Trade {
@@ -31,8 +34,6 @@ const MIN_TS_MS = 1e11; // ~1973
 const MAX_TS_MS = 1e13; // ~2286
 const MAX_NOTIONAL = 1e9;
 
-export type ParseRejectReason = "parts_short" | "non_finite" | "invalid_ts_range" | "notional_too_large";
-
 export interface ParseReject {
   reason?: ParseRejectReason;
 }
@@ -52,25 +53,25 @@ export function parseTradeLine(line: string, reject?: ParseReject): Trade | null
   };
 
   if (!readNext()) {
-    if (reject) reject.reason = "parts_short";
+    if (reject) reject.reason = EventType.PartsShort;
     return null;
   }
   const ts = Number(line.slice(start, end));
 
   if (!readNext()) {
-    if (reject) reject.reason = "parts_short";
+    if (reject) reject.reason = EventType.PartsShort;
     return null;
   }
   const price = Number(line.slice(start, end));
 
   if (!readNext()) {
-    if (reject) reject.reason = "parts_short";
+    if (reject) reject.reason = EventType.PartsShort;
     return null;
   }
   const size = Number(line.slice(start, end));
 
   if (!readNext()) {
-    if (reject) reject.reason = "parts_short";
+    if (reject) reject.reason = EventType.PartsShort;
     return null;
   }
   const side: Side = end - start === 1 && line.charCodeAt(start) === 49 ? "buy" : "sell";
@@ -79,18 +80,18 @@ export function parseTradeLine(line: string, reject?: ParseReject): Trade | null
   const liquidation = hasLiquidation && end - start === 1 && line.charCodeAt(start) === 49;
 
   if (!Number.isFinite(ts) || !Number.isFinite(price) || !Number.isFinite(size)) {
-    if (reject) reject.reason = "non_finite";
+    if (reject) reject.reason = EventType.NonFinite;
     return null;
   }
 
   if (ts <= MIN_TS_MS || ts >= MAX_TS_MS) {
-    if (reject) reject.reason = "invalid_ts_range";
+    if (reject) reject.reason = EventType.InvalidTsRange;
     return null;
   }
 
   const notional = price * size;
   if (!Number.isFinite(notional) || notional > MAX_NOTIONAL) {
-    if (reject) reject.reason = "notional_too_large";
+    if (reject) reject.reason = EventType.NotionalTooLarge;
     return null;
   }
 

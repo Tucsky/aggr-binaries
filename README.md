@@ -228,7 +228,61 @@ CREATE INDEX idx_files_collector ON files(collector);
 
 ---
 
-## IX. Configuration
+## IX. Events & gap detection
+
+Processing also logs **events** into SQLite for later inspection and dashboarding.
+
+### What gets logged
+* **Parse rejects** (per-line):
+  * `parts_short` — malformed or truncated line
+  * `non_finite` — NaN/Inf in numeric fields
+  * `invalid_ts_range` — timestamp out of sane bounds
+  * `notional_too_large` — price × size exceeds guardrail
+* **Gaps** — significant time discontinuities in the trade stream
+
+Events are grouped into **contiguous line ranges** per file for efficiency (no per-line logs).
+
+### Schema (events table)
+```
+events(
+  id INTEGER PRIMARY KEY,
+  root_id INTEGER,
+  relative_path TEXT,
+  collector TEXT,
+  exchange TEXT,
+  symbol TEXT,
+  event_type TEXT,
+  start_line INTEGER,
+  end_line INTEGER,
+  gap_ms INTEGER,        -- max gap size within the grouped range (if gap)
+  gap_miss INTEGER,      -- estimated missing trades for the max gap (if gap)
+  gap_end_ts INTEGER,    -- timestamp of the trade after the max gap (if gap)
+  created_at INTEGER
+)
+```
+
+### Gap detection (adaptive, single state)
+The detector maintains a **single** adaptive average gap (`avgGapMs`) per market, updated in a time‑weighted way.
+* **Same‑timestamp trades** are handled by spreading the next observed time span across them.
+* **Threshold**: treat gaps as exponential tail events and log when:
+  ```
+  span_ms > avgGapMs * ln(window/avgGapMs)^2
+  ```
+  where `window = max(timeframeMs, avgGapMs * 64)` and `ln(·)` is clamped to ≥ 1.
+* **gap_miss** is estimated as:
+  ```
+  floor(span_ms / avgGapMs) - 1
+  ```
+* Each detected gap is logged with `gap_end_ts` (the timestamp after the gap) so it can be validated later.
+
+### Validation scripts
+Located in `scripts/`:
+* `verify_binance_gaps.py` — compare logged gaps to Binance Vision raw trades in the gap window.
+* `compare_binance_day.py` — compare **per‑day** local trade counts vs Binance Vision raw trades.
+
+---
+
+## X. Configuration
 
 Requires **Node ≥ 22**
 (uses built-in `node:sqlite` and `--experimental-strip-types`).

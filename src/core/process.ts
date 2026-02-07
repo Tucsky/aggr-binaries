@@ -7,6 +7,15 @@ import type { Config } from "./config.js";
 import type { Db } from "./db.js";
 import type { CompanionMetadata, FileRow } from "./model.js";
 import {
+  EventAccumulator,
+  EventType,
+  createGapTracker,
+  recordGap,
+  snapshotGapTracker,
+  type EventRange,
+  type GapTrackerState,
+} from "./events.js";
+import {
   CANDLE_BYTES,
   PRICE_SCALE,
   VOL_SCALE,
@@ -25,6 +34,7 @@ interface Accumulator {
   minMinute: number;
   maxMinute: number;
   maxInputStartTs: number;
+  gapTracker: GapTrackerState;
   companion?: CompanionMetadata;
 }
 
@@ -40,6 +50,7 @@ interface StreamResult {
   linesRead: number;
   tradesKept: number;
   newBuckets: number;
+  events: EventRange[];
 }
 
 interface MarketRef {
@@ -188,10 +199,11 @@ async function startAccumulatorForMarket(
   symbol: string,
 ): Promise<Accumulator> {
   const companionPath = path.join(config.outDir, collector, exchange, symbol, `${config.timeframe}.json`);
-  const companion = await readCompanion(companionPath);
+  const companion = config.force ? undefined : await readCompanion(companionPath);
   console.log(
     `[${collector}/${exchange}/${symbol}] init accumulator companion=${companion ? "present" : "missing"} path=${companionPath}`,
   );
+  const gapTracker = createGapTracker(companion);
   return {
     collector,
     exchange,
@@ -201,6 +213,7 @@ async function startAccumulatorForMarket(
     minMinute: Number.POSITIVE_INFINITY,
     maxMinute: Number.NEGATIVE_INFINITY,
     maxInputStartTs: companion?.lastInputStartTs ?? Number.NEGATIVE_INFINITY,
+    gapTracker,
     companion: companion ?? undefined,
   };
 }
@@ -280,13 +293,17 @@ async function processByMarket(opts: {
       /*console.log(
         `[${acc.collector}/${acc.exchange}/${acc.symbol}/${timeframe}] stream file=${file.relative_path} start_ts=${file.start_ts} skipBefore=${resumeSlot}`,
       );*/
-      const { linesRead, tradesKept, newBuckets } = await streamFile({
+      db.deleteEventsForFile(file.root_id, file.relative_path);
+      const { linesRead, tradesKept, newBuckets, events } = await streamFile({
         file,
         acc,
         root: config.root,
         timeframeMs,
         skipBeforeTs: resumeSlot,
       });
+      if (events.length) {
+        db.insertEvents(events);
+      }
       /*console.log(
         `[${acc.collector}/${acc.exchange}/${acc.symbol}/${timeframe}] done file=${file.relative_path} lines=${linesRead} kept=${tradesKept} newBuckets=${newBuckets} bucketCount=${acc.bucketCount}`,
       );*/
@@ -339,12 +356,20 @@ async function streamFile(opts: {
 
   const stream = await makeStream(fullPath);
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  const eventAccumulator = new EventAccumulator({
+    rootId: file.root_id,
+    relativePath: file.relative_path,
+    collector: acc.collector,
+    exchange: acc.exchange,
+    symbol: acc.symbol,
+  });
+  const eventGapTracker: GapTrackerState = { ...acc.gapTracker };
   const reject: { reason?: ParseRejectReason } = {};
   const rejectCounts: Record<ParseRejectReason, number> = {
-    parts_short: 0,
-    non_finite: 0,
-    invalid_ts_range: 0,
-    notional_too_large: 0,
+    [EventType.PartsShort]: 0,
+    [EventType.NonFinite]: 0,
+    [EventType.InvalidTsRange]: 0,
+    [EventType.NotionalTooLarge]: 0,
   };
 
   let linesRead = 0;
@@ -354,6 +379,7 @@ async function streamFile(opts: {
 
   for await (const line of rl) {
     linesRead += 1;
+    const lineNumber = linesRead;
     reject.reason = undefined;
 
     const trade = parseTradeLine(line, reject);
@@ -361,22 +387,35 @@ async function streamFile(opts: {
       const reason = reject.reason;
       if (reason !== undefined) {
         switch (reason) {
-          case "parts_short":
-            rejectCounts.parts_short += 1;
+          case EventType.PartsShort:
+            rejectCounts[EventType.PartsShort] += 1;
             break;
-          case "non_finite":
-            rejectCounts.non_finite += 1;
+          case EventType.NonFinite:
+            rejectCounts[EventType.NonFinite] += 1;
             break;
-          case "invalid_ts_range":
-            rejectCounts.invalid_ts_range += 1;
+          case EventType.InvalidTsRange:
+            rejectCounts[EventType.InvalidTsRange] += 1;
             break;
-          case "notional_too_large":
-            rejectCounts.notional_too_large += 1;
+          case EventType.NotionalTooLarge:
+            rejectCounts[EventType.NotionalTooLarge] += 1;
             break;
         }
+        eventAccumulator.record(reason, lineNumber);
         rejectTotal += 1;
       }
       continue;
+    }
+
+    const gap = recordGap(eventGapTracker, trade.ts, timeframeMs);
+    if (gap !== undefined) {
+      eventAccumulator.record(EventType.Gap, lineNumber, gap.gapMs, gap.gapMiss, trade.ts);
+    }
+
+    const shouldPersistGap =
+      (skipBeforeTs === undefined || trade.ts >= skipBeforeTs) &&
+      (acc.gapTracker.lastTradeTs === undefined || trade.ts > acc.gapTracker.lastTradeTs);
+    if (shouldPersistGap) {
+      recordGap(acc.gapTracker, trade.ts, timeframeMs);
     }
 
     if (skipBeforeTs !== undefined && trade.ts < skipBeforeTs) continue;
@@ -396,14 +435,18 @@ async function streamFile(opts: {
 
   if (rejectTotal > 0) {
     const summary: string[] = [];
-    if (rejectCounts.parts_short) summary.push(`parts_short=${rejectCounts.parts_short}`);
-    if (rejectCounts.non_finite) summary.push(`non_finite=${rejectCounts.non_finite}`);
-    if (rejectCounts.invalid_ts_range) summary.push(`invalid_ts_range=${rejectCounts.invalid_ts_range}`);
-    if (rejectCounts.notional_too_large) summary.push(`notional_too_large=${rejectCounts.notional_too_large}`);
+    if (rejectCounts[EventType.PartsShort]) summary.push(`parts_short=${rejectCounts[EventType.PartsShort]}`);
+    if (rejectCounts[EventType.NonFinite]) summary.push(`non_finite=${rejectCounts[EventType.NonFinite]}`);
+    if (rejectCounts[EventType.InvalidTsRange])
+      summary.push(`invalid_ts_range=${rejectCounts[EventType.InvalidTsRange]}`);
+    if (rejectCounts[EventType.NotionalTooLarge])
+      summary.push(`notional_too_large=${rejectCounts[EventType.NotionalTooLarge]}`);
     console.warn(`[parse-skip] path=${fullPath} rejects=${rejectTotal} ${summary.join(" ")}`);
   }
 
-  return { linesRead, tradesKept, newBuckets };
+  const events = eventAccumulator.finish();
+
+  return { linesRead, tradesKept, newBuckets, events };
 }
 
 async function makeStream(filePath: string) {
@@ -539,6 +582,7 @@ async function flushMarketOutput(
   });
 
   const lastInputStartTs = acc.maxInputStartTs === Number.NEGATIVE_INFINITY ? undefined : acc.maxInputStartTs;
+  const gapSnapshot = snapshotGapTracker(acc.gapTracker);
 
   const metadata: CompanionMetadata = {
     exchange: acc.exchange,
@@ -551,6 +595,7 @@ async function flushMarketOutput(
     volumeScale: VOL_SCALE,
     records: totalCandles,
     lastInputStartTs,
+    ...gapSnapshot,
   };
 
   await writeCompanion(state.outBase + ".json", metadata);

@@ -85,6 +85,10 @@ export interface CompanionMetadata {
   volumeScale: number;
   records: number;
   lastInputStartTs?: number;
+  gapAvgMs?: number;
+  gapSamples?: number;
+  lastTradeTs?: number;
+  gapSameTsCount?: number;
 }
 
 /**

@@ -71,6 +71,44 @@ async function createFixture(): Promise<FixturePaths> {
   return { baseDir, root, outDir, fileRelatives: [relGz, relPlain] };
 }
 
+async function createEventFixture(): Promise<FixturePaths> {
+  const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "aggr-process-events-"));
+  const root = path.join(baseDir, "input");
+  const outDir = path.join(baseDir, "out");
+  const marketDir = path.join(root, MARKET.collector, MARKET.bucket, MARKET.exchange, MARKET.symbol);
+
+  await fs.mkdir(marketDir, { recursive: true });
+
+  let ts = 1_700_000_000_000;
+  const lines: string[] = [];
+  for (let i = 0; i < 32; i += 1) {
+    if (i > 0) ts += 10;
+    lines.push(`${ts} 50000 1 1 0`);
+  }
+
+  lines.push("bad");
+  lines.push("still bad");
+
+  ts += 50_000;
+  lines.push(`${ts} 50010 0.5 1 0`);
+  ts += 10;
+  lines.push(`${ts} 50020 0.75 0 0`);
+  lines.push("bad_ts 1 1 1 0");
+
+  const plainPath = path.join(marketDir, "2024-02-02-00");
+  await fs.writeFile(plainPath, lines.join("\n"));
+
+  const relPlain = path.posix.join(
+    MARKET.collector,
+    MARKET.bucket,
+    MARKET.exchange,
+    MARKET.symbol,
+    "2024-02-02-00",
+  );
+
+  return { baseDir, root, outDir, fileRelatives: [relPlain] };
+}
+
 function buildConfig(root: string, outDir: string, dbPath: string): Config {
   return {
     root,
@@ -168,5 +206,72 @@ test("resume produces the same binary as a clean rebuild", async () => {
     assert.deepStrictEqual(resumed.companion, clean.companion);
   } finally {
     resumeDb.close();
+  }
+});
+
+test("process logs grouped parse rejects and gaps into events table", async () => {
+  const fixture = await createEventFixture();
+  const dbPath = path.join(fixture.baseDir, "events.sqlite");
+  const db = openDatabase(dbPath);
+  const config = buildConfig(fixture.root, fixture.outDir, dbPath);
+
+  const readEvents = () =>
+    (db.db
+      .prepare(
+        "SELECT event_type, start_line, end_line, gap_ms, gap_miss, gap_end_ts FROM events ORDER BY start_line;",
+      )
+      .all() as Array<{
+      event_type: string;
+      start_line: number;
+      end_line: number;
+      gap_ms: number | null;
+      gap_miss: number | null;
+      gap_end_ts: number | null;
+    }>).map((row) => ({
+      event_type: row.event_type,
+      start_line: row.start_line,
+      end_line: row.end_line,
+      gap_ms: row.gap_ms,
+      gap_miss: row.gap_miss,
+      gap_end_ts: row.gap_end_ts,
+    }));
+
+  try {
+    insertFixtureFiles(db, fixture.root, fixture.fileRelatives);
+
+    const strip = (
+      rows: Array<{
+        event_type: string;
+        start_line: number;
+        end_line: number;
+        gap_ms: number | null;
+        gap_end_ts: number | null;
+      }>,
+    ) =>
+      rows.map((row) => ({
+        event_type: row.event_type,
+        start_line: row.start_line,
+        end_line: row.end_line,
+        gap_ms: row.gap_ms,
+        gap_end_ts: row.gap_end_ts,
+      }));
+
+    const expected = [
+      { event_type: "parts_short", start_line: 33, end_line: 34, gap_ms: null, gap_end_ts: null },
+      { event_type: "gap", start_line: 35, end_line: 35, gap_ms: 50_000, gap_end_ts: 1_700_000_050_310 },
+      { event_type: "non_finite", start_line: 37, end_line: 37, gap_ms: null, gap_end_ts: null },
+    ];
+
+    await runProcess(config, db);
+    const first = readEvents();
+    assert.deepStrictEqual(strip(first), expected);
+    assert.ok(first[1]?.gap_miss !== null && first[1]?.gap_miss > 0);
+
+    await runProcess(config, db);
+    const second = readEvents();
+    assert.deepStrictEqual(strip(second), expected);
+    assert.ok(second[1]?.gap_miss !== null && second[1]?.gap_miss > 0);
+  } finally {
+    db.close();
   }
 });
