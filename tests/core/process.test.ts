@@ -160,6 +160,7 @@ test("process is idempotent with stable inputs", async () => {
 
     await runProcess(config, db);
     const first = await readOutputs(fixture.outDir);
+    assert.strictEqual(first.companion.hasLiquidations, true);
 
     await runProcess(config, db);
     const second = await readOutputs(fixture.outDir);
@@ -263,6 +264,8 @@ test("process logs grouped parse rejects and gaps into events table", async () =
     ];
 
     await runProcess(config, db);
+    const outputs = await readOutputs(fixture.outDir);
+    assert.strictEqual(outputs.companion.hasLiquidations, false);
     const first = readEvents();
     assert.deepStrictEqual(strip(first), expected);
     assert.ok(first[1]?.gap_miss !== null && first[1]?.gap_miss > 0);

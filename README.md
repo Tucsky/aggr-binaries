@@ -445,7 +445,7 @@ npm run serve
 
 * `GET /` → serves built frontend
 * `WS /ws` → no query params; all control uses JSON messages
-* Per-connection state: collector, exchange, symbol, timeframe, startMs, companion, anchorIndex
+* Per-connection state: collector, exchange, symbol, timeframe, startMs, companion, anchorIndex, hasLiquidations
 * Client → server messages:
   * `setTarget {collector,exchange,symbol}` → loads companion + anchor and replies with `meta`
   * `setTimeframe {timeframe}` → reloads companion for same market, replies with `meta`
@@ -454,10 +454,11 @@ npm run serve
   * `listMarkets {}` → replies with `markets` (registry-backed)
   * `listTimeframes {collector,exchange,symbol}` → replies with `timeframes` (registry-backed)
 * Server → client messages:
-* `meta` (timeframe/timeframeMs, records, anchorIndex, startTs/endTs, priceScale/volumeScale)
+* `meta` (timeframe/timeframeMs, records, anchorIndex, startTs/endTs, priceScale/volumeScale, hasLiquidations)
   * `candles` (slice response)
   * `markets`, `timeframes`, `error`
 * Works with dense (gap-filled) binaries; no reconnects required for target/timeframe/start changes.
+* `hasLiquidations` is persisted in companion metadata during processing/resampling and allows O(1) pane visibility decisions in preview (no runtime binary scan).
 
 ### Preview resampling (on-demand, registry + binaries)
 
@@ -472,6 +473,17 @@ npm run serve
 * Single WS connection; no URL params.
 * Collector select, market autocomplete (`EXCHANGE:SYMBOL` from registry), timeframe dropdown (user-managed list seeded by common TFs, highlights server-available TFs), start datetime.
 * Registry-driven discovery populates controls; changing selections sends messages instead of reconnecting.
+
+### Preview chart panes
+
+* Built on `lightweight-charts` v5 with three panes (price / volume / liquidations).
+* Volume pane overlays two histogram series on one scale:
+  * Total volume: `buyVol + sellVol` (dimmed, sign-colored by buy-vs-sell dominance).
+  * Volume delta overlay: `abs(buyVol - sellVol)` (brighter foreground bar, same sign-color logic).
+* Liquidation pane uses centered signed histograms:
+  * Long liquidations: `-liqSell`.
+  * Short liquidations: `+liqBuy`.
+* If `meta.hasLiquidations` is false, the liquidation pane is collapsed/hidden in the UI.
 
 ---
 

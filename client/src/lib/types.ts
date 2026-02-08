@@ -1,5 +1,3 @@
-import type { CandlestickData } from "lightweight-charts";
-
 export type Status = "idle" | "connected" | "closed" | "error";
 
 export interface Meta {
@@ -11,6 +9,7 @@ export interface Meta {
   timeframeMs: number;
   records: number;
   anchorIndex: number;
+  hasLiquidations: boolean;
 }
 
 export interface Prefs {
@@ -22,7 +21,12 @@ export interface Prefs {
   start: string;
 }
 
-export type Candle = CandlestickData & {
+export interface Candle {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
   buyVol: number;
   sellVol: number;
   buyCount: number;
@@ -30,7 +34,7 @@ export type Candle = CandlestickData & {
   liqBuy: number;
   liqSell: number;
   index: number;
-};
+}
 
 export interface Market {
   collector: string;

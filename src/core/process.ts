@@ -34,6 +34,7 @@ interface Accumulator {
   minMinute: number;
   maxMinute: number;
   maxInputStartTs: number;
+  hasLiquidations: boolean;
   gapTracker: GapTrackerState;
   companion?: CompanionMetadata;
 }
@@ -213,6 +214,7 @@ async function startAccumulatorForMarket(
     minMinute: Number.POSITIVE_INFINITY,
     maxMinute: Number.NEGATIVE_INFINITY,
     maxInputStartTs: companion?.lastInputStartTs ?? Number.NEGATIVE_INFINITY,
+    hasLiquidations: companion?.hasLiquidations ?? false,
     gapTracker,
     companion: companion ?? undefined,
   };
@@ -420,6 +422,10 @@ async function streamFile(opts: {
 
     if (skipBeforeTs !== undefined && trade.ts < skipBeforeTs) continue;
 
+    if (trade.liquidation) {
+      acc.hasLiquidations = true;
+    }
+
     const created = accumulate(acc, trade, timeframeMs);
     if (created) {
       acc.bucketCount += 1;
@@ -594,6 +600,7 @@ async function flushMarketOutput(
     priceScale: PRICE_SCALE,
     volumeScale: VOL_SCALE,
     records: totalCandles,
+    hasLiquidations: acc.hasLiquidations,
     lastInputStartTs,
     ...gapSnapshot,
   };

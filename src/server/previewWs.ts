@@ -27,6 +27,7 @@ interface ConnectionState {
   startMs: number | null;
   companion: Companion | null;
   anchorIndex: number | null;
+  hasLiquidations: boolean;
 }
 
 export function attachPreviewWs(server: http.Server, ctx: PreviewContext): void {
@@ -45,6 +46,7 @@ export function attachPreviewWs(server: http.Server, ctx: PreviewContext): void 
       startMs: null,
       companion: null,
       anchorIndex: null,
+      hasLiquidations: false,
     };
 
     const key = req.headers["sec-websocket-key"];
@@ -227,6 +229,7 @@ async function refreshCompanion(socket: any, ctx: PreviewContext, state: Connect
   try {
     const companion = await loadCompanion(ctx, state.collector, state.exchange, state.symbol, state.timeframe);
     state.companion = companion;
+    state.hasLiquidations = companion.hasLiquidations ?? false;
     state.anchorIndex = await computeAnchorIndex(
       ctx,
       state.collector,
@@ -266,5 +269,6 @@ function sendMeta(socket: any, state: ConnectionState): void {
     timeframe: companion.timeframe ?? state.timeframe,
     records: companion.records,
     anchorIndex: anchor,
+    hasLiquidations: state.hasLiquidations,
   });
 }

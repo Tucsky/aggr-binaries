@@ -84,6 +84,7 @@ export interface CompanionMetadata {
   priceScale: number;
   volumeScale: number;
   records: number;
+  hasLiquidations?: boolean;
   lastInputStartTs?: number;
   gapAvgMs?: number;
   gapSamples?: number;

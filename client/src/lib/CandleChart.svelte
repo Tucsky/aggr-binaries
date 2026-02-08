@@ -1,24 +1,37 @@
 <script lang="ts">
   import {
-      createChart,
-      CrosshairMode,
-      PriceScaleMode,
-      type CandlestickData,
-      type IChartApi,
-      type ISeriesApi,
-      type Time,
-      type WhitespaceData,
+    CandlestickSeries,
+    CrosshairMode,
+    HistogramSeries,
+    PriceScaleMode,
+    createChart,
+    type CandlestickData,
+    type HistogramData,
+    type IChartApi,
+    type ISeriesApi,
+    type Time,
+    type WhitespaceData
   } from "lightweight-charts";
   import { onDestroy, onMount } from "svelte";
+  import {
+    VOLUME_POSITIVE_DIM,
+    mapPreviewSeries,
+    type PreviewSeriesPoint,
+  } from "../../../src/shared/previewSeries.js";
   import type { Candle, Meta } from "./types.js";
   import { meta as metaStore, status as statusStore } from "./viewerStore.js";
   import { onCandles, requestSlice } from "./viewerWs.js";
 
   let chartEl: HTMLDivElement;
   let chart: IChartApi | null = null;
-  let series: ISeriesApi<"Candlestick"> | null = null;
+  let priceSeries: ISeriesApi<"Candlestick"> | null = null;
+  let totalVolumeSeries: ISeriesApi<"Histogram"> | null = null;
+  let deltaVolumeSeries: ISeriesApi<"Histogram"> | null = null;
+  let longLiqSeries: ISeriesApi<"Histogram"> | null = null;
+  let shortLiqSeries: ISeriesApi<"Histogram"> | null = null;
   let baseIndex: number | null = null;
-  let bars: Bar[] = [];
+  let points: PreviewSeriesPoint[] = [];
+  let hasLiquidationData = false;
   let suppressRangeEvent = false;
   let currentMeta: Meta | null = null;
   let unsubCandles: (() => void) | null = null;
@@ -26,7 +39,17 @@
   let unsubStatus: (() => void) | null = null;
   let resizeObserver: ResizeObserver | null = null;
 
-  type Bar = CandlestickData<Time> | WhitespaceData<Time>;
+  const PRICE_PANE_INDEX = 0;
+  const VOLUME_PANE_INDEX = 1;
+  const LIQUIDATION_PANE_INDEX = 2;
+  const PRICE_PANE_WEIGHT = 65;
+  const VOLUME_PANE_WEIGHT = 20;
+  const LIQUIDATION_PANE_WEIGHT = 15;
+  const HIDDEN_PANE_WEIGHT = 0.001;
+  const LONG_LIQ_COLOR = "#ff8c00";
+  const SHORT_LIQ_COLOR = "#b24dff";
+
+  type PricePoint = CandlestickData<Time> | WhitespaceData<Time>;
 
   onMount(() => {
     setupChart();
@@ -35,6 +58,7 @@
     );
     unsubMeta = metaStore.subscribe((m) => {
       currentMeta = m;
+      hasLiquidationData = m?.hasLiquidations ?? false;
       reset();
       if (m) {
         const fromIdx = Math.max(0, m.anchorIndex - 500);
@@ -56,7 +80,14 @@
 
   function setupChart() {
     chart = createChart(chartEl, {
-      layout: { background: { color: "#0d1117" }, textColor: "#e6edf3" },
+      layout: {
+        background: { color: "#0d1117" },
+        textColor: "#e6edf3",
+        panes: {
+          separatorColor: "rgba(255, 255, 255, 0.10)",
+          separatorHoverColor: "rgba(255, 255, 255, 0.12)",
+        },
+      },
       grid: {
         vertLines: { color: "#161b22", visible: false },
         horzLines: { color: "#161b22", visible: false },
@@ -70,13 +101,57 @@
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: { mode: PriceScaleMode.Logarithmic },
     });
-    series = chart.addCandlestickSeries({
+    priceSeries = chart.addSeries(CandlestickSeries, {
       upColor: "#3bca6d",
       downColor: "#d62828",
       wickUpColor: "#41f07b",
       wickDownColor: "#ff5253",
       borderVisible: false,
+      priceLineVisible: false,
+    }, PRICE_PANE_INDEX);
+    totalVolumeSeries = chart.addSeries(HistogramSeries, {
+      priceScaleId: "volume",
+      color: VOLUME_POSITIVE_DIM,
+      priceLineVisible: false,
+      priceFormat: {
+        type: 'volume',
+      },
+      base: 0,
+    }, VOLUME_PANE_INDEX);
+    deltaVolumeSeries = chart.addSeries(HistogramSeries, {
+      priceScaleId: "volume",
+      color: "#3bca6d",
+      priceLineVisible: false,
+      priceFormat: {
+        type: 'volume',
+      },
+      base: 0,
+    }, VOLUME_PANE_INDEX);
+    longLiqSeries = chart.addSeries(HistogramSeries, {
+      priceScaleId: "liq",
+      color: LONG_LIQ_COLOR,
+      priceLineVisible: false,
+      priceFormat: {
+        type: 'volume',
+      },
+      base: 0,
+    }, LIQUIDATION_PANE_INDEX);
+    shortLiqSeries = chart.addSeries(HistogramSeries, {
+      priceScaleId: "liq",
+      color: SHORT_LIQ_COLOR,
+      priceLineVisible: false,
+      priceFormat: {
+        type: 'volume',
+      },
+      base: 0,
+    }, LIQUIDATION_PANE_INDEX);
+    chart.priceScale("volume", VOLUME_PANE_INDEX).applyOptions({
+      scaleMargins: { top: 0.06, bottom: 0.04 },
     });
+    chart.priceScale("liq", LIQUIDATION_PANE_INDEX).applyOptions({
+      scaleMargins: { top: 0.1, bottom: 0.08 },
+    });
+    applyPaneLayout();
     startResizeObserver();
     chart.timeScale().subscribeVisibleTimeRangeChange((range) => {
       if (
@@ -87,9 +162,9 @@
         !currentMeta
       )
         return;
-      if (bars.length === 0 || baseIndex === null) return;
-      const minTime = Number(bars[0].time) * 1000;
-      const maxTime = Number(bars[bars.length - 1].time) * 1000;
+      if (points.length === 0 || baseIndex === null) return;
+      const minTime = Number(points[0].time) * 1000;
+      const maxTime = Number(points[points.length - 1].time) * 1000;
       const fromMs = Number(range.from) * 1000;
       const toMs = Number(range.to) * 1000;
       const margin = currentMeta.timeframeMs * 2;
@@ -113,23 +188,24 @@
 
   function reset() {
     baseIndex = null;
-    bars = [];
+    points = [];
     suppressRangeEvent = false;
-    series?.setData([]);
+    setSeriesData([]);
+    applyPaneLayout();
   }
 
   function ingest(fromIndex: number, candles: Candle[]) {
     if (!currentMeta) return;
     if (!candles.length) return;
-    const slice = candles.map(toBar);
+    const slice = mapPreviewSeries(candles);
     const sliceLen = slice.length;
     const sliceMax = fromIndex + sliceLen - 1;
 
-    if (baseIndex === null || bars.length === 0) {
+    if (baseIndex === null || points.length === 0) {
       baseIndex = fromIndex;
-      bars = slice;
+      points = slice;
       suppressRangeEvent = true;
-      series?.setData(bars);
+      setSeriesData(points);
       suppressRangeEvent = false;
       return;
     }
@@ -143,9 +219,13 @@
       const ts = chart?.timeScale();
       const prevPos = ts?.scrollPosition() ?? 0;
 
-      for (const b of slice) {
-        bars.push(b);
-        series?.update(b);
+      for (const point of slice) {
+        points.push(point);
+        priceSeries?.update(point.price);
+        totalVolumeSeries?.update(point.totalVolume);
+        deltaVolumeSeries?.update(point.volumeDelta);
+        longLiqSeries?.update(point.longLiquidation);
+        shortLiqSeries?.update(point.shortLiquidation);
       }
 
       if (prevPos > 0) {
@@ -160,19 +240,19 @@
 
     if (isPrependLeft) {
       baseIndex = fromIndex;
-      bars = slice.concat(bars);
+      points = slice.concat(points);
       suppressRangeEvent = true;
-      series?.setData(bars);
+      setSeriesData(points);
       suppressRangeEvent = false;
       return;
     }
 
     const newMin = Math.min(min, fromIndex);
     const newMax = Math.max(max, sliceMax);
-    const merged: Array<Bar | undefined> = Array(newMax - newMin + 1);
+    const merged: Array<PreviewSeriesPoint | undefined> = Array(newMax - newMin + 1);
 
-    for (let i = 0; i < bars.length; i++) {
-      merged[min - newMin + i] = bars[i];
+    for (let i = 0; i < points.length; i++) {
+      merged[min - newMin + i] = points[i];
     }
     for (let i = 0; i < sliceLen; i++) {
       merged[fromIndex - newMin + i] = slice[i];
@@ -184,31 +264,35 @@
     if (first === -1 || last < first) return;
 
     baseIndex = newMin + first;
-    bars = merged.slice(first, last + 1).filter(Boolean) as Bar[];
+    points = merged.slice(first, last + 1).filter(Boolean) as PreviewSeriesPoint[];
     suppressRangeEvent = true;
-    series?.setData(bars);
+    setSeriesData(points);
     suppressRangeEvent = false;
   }
 
-  function toBar(c: Candle): Bar {
-    const timeSec: Time = Math.floor(Number(c.time) / 1000) as Time;
-    const gap =
-      c.open === undefined ||
-      c.high === undefined ||
-      c.low === undefined ||
-      c.close === undefined ||
-      c.open === 0 ||
-      c.high === 0 ||
-      c.low === 0 ||
-      c.close === 0;
-    if (gap) return { time: timeSec };
-    return {
-      time: timeSec,
-      open: c.open,
-      high: c.high,
-      low: c.low,
-      close: c.close,
-    };
+  function setSeriesData(data: readonly PreviewSeriesPoint[]) {
+    const len = data.length;
+    const priceData: PricePoint[] = new Array(len);
+    const totalVolumeData: HistogramData<Time>[] = new Array(len);
+    const deltaVolumeData: HistogramData<Time>[] = new Array(len);
+    const longLiqData: HistogramData<Time>[] = new Array(len);
+    const shortLiqData: HistogramData<Time>[] = new Array(len);
+
+    for (let i = 0; i < len; i += 1) {
+      const point = data[i];
+      priceData[i] = point.price;
+      totalVolumeData[i] = point.totalVolume;
+      deltaVolumeData[i] = point.volumeDelta;
+      longLiqData[i] = point.longLiquidation;
+      shortLiqData[i] = point.shortLiquidation;
+    }
+
+    priceSeries?.setData(priceData);
+    totalVolumeSeries?.setData(totalVolumeData);
+    deltaVolumeSeries?.setData(deltaVolumeData);
+    longLiqSeries?.setData(longLiqData);
+    shortLiqSeries?.setData(shortLiqData);
+    applyPaneLayout();
   }
 
   function loadedMin(): number | null {
@@ -217,7 +301,20 @@
 
   function loadedMax(): number | null {
     if (baseIndex === null) return null;
-    return baseIndex + bars.length - 1;
+    return baseIndex + points.length - 1;
+  }
+
+  function applyPaneLayout() {
+    if (!chart) return;
+    const panes = chart.panes();
+    if (panes.length < 3) return;
+    panes[PRICE_PANE_INDEX].setStretchFactor(PRICE_PANE_WEIGHT);
+    panes[VOLUME_PANE_INDEX].setStretchFactor(VOLUME_PANE_WEIGHT);
+    panes[LIQUIDATION_PANE_INDEX].setStretchFactor(
+      hasLiquidationData ? LIQUIDATION_PANE_WEIGHT : HIDDEN_PANE_WEIGHT,
+    );
+    longLiqSeries?.applyOptions({ visible: hasLiquidationData });
+    shortLiqSeries?.applyOptions({ visible: hasLiquidationData });
   }
 
   function startResizeObserver() {
@@ -226,10 +323,12 @@
       if (!chart) return;
       const { clientWidth, clientHeight } = chartEl;
       chart.resize(clientWidth, clientHeight);
+      applyPaneLayout();
     });
     resizeObserver.observe(chartEl);
     const { clientWidth, clientHeight } = chartEl;
     chart?.resize(clientWidth, clientHeight);
+    applyPaneLayout();
   }
 </script>
 
