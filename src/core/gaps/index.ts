@@ -1,0 +1,319 @@
+import path from "node:path";
+import type { Config } from "../config.js";
+import type { Db } from "../db.js";
+import { GapFixStatus } from "../events.js";
+import { createDefaultAdapterRegistry, type AdapterRegistry } from "./adapters/index.js";
+import { extractGapWindows } from "./extract.js";
+import { mergeRecoveredTradesIntoFile } from "./merge.js";
+import { patchBinariesForRecoveredTrades } from "./patch.js";
+import { iterateGapFixEvents, type GapFixEventRow } from "./queue.js";
+
+const DEBUG_FIXGAPS = process.env.AGGR_FIXGAPS_DEBUG === "1";
+
+export interface FixGapsOptions {
+  limit?: number;
+  retryStatuses?: string[];
+  adapterRegistry?: AdapterRegistry;
+}
+
+export interface FixGapsStats {
+  selectedEvents: number;
+  processedFiles: number;
+  recoveredTrades: number;
+  deletedEvents: number;
+  missingAdapter: number;
+  adapterError: number;
+  binariesPatched: number;
+}
+
+export async function runFixGaps(config: Config, db: Db, options: FixGapsOptions = {}): Promise<FixGapsStats> {
+  const start = Date.now();
+  const stats: FixGapsStats = {
+    selectedEvents: 0,
+    processedFiles: 0,
+    recoveredTrades: 0,
+    deletedEvents: 0,
+    missingAdapter: 0,
+    adapterError: 0,
+    binariesPatched: 0,
+  };
+
+  const adapterRegistry = options.adapterRegistry ?? createDefaultAdapterRegistry();
+  console.log(
+    `[fixgaps] start filters=${config.collector ?? "ALL"}/${config.exchange ?? "ALL"}/${config.symbol ?? "ALL"} limit=${options.limit ?? "ALL"} retry=${options.retryStatuses?.join(",") ?? "NONE"}`,
+  );
+
+  const queue = iterateGapFixEvents(db, {
+    collector: config.collector,
+    exchange: config.exchange,
+    symbol: config.symbol,
+    limit: options.limit,
+    retryStatuses: options.retryStatuses,
+  });
+
+  let currentGroup: GapFixEventRow[] = [];
+  let currentKey = "";
+
+  for (const row of queue) {
+    stats.selectedEvents += 1;
+    const key = `${row.root_id}|${row.relative_path}`;
+    if (!currentGroup.length) {
+      currentGroup.push(row);
+      currentKey = key;
+      continue;
+    }
+    if (key === currentKey) {
+      currentGroup.push(row);
+      continue;
+    }
+
+    await processGroup(currentGroup, config, db, adapterRegistry, stats);
+    currentGroup = [row];
+    currentKey = key;
+  }
+
+  if (currentGroup.length) {
+    await processGroup(currentGroup, config, db, adapterRegistry, stats);
+  }
+
+  const elapsed = ((Date.now() - start) / 1000).toFixed(2);
+  console.log(
+    `[fixgaps] complete selected=${stats.selectedEvents} files=${stats.processedFiles} recovered=${stats.recoveredTrades} deleted=${stats.deletedEvents} missing_adapter=${stats.missingAdapter} adapter_error=${stats.adapterError} patched_timeframes=${stats.binariesPatched} elapsed=${elapsed}s`,
+  );
+
+  return stats;
+}
+
+async function processGroup(
+  rows: GapFixEventRow[],
+  config: Config,
+  db: Db,
+  adapterRegistry: AdapterRegistry,
+  stats: FixGapsStats,
+): Promise<void> {
+  if (!rows.length) return;
+  stats.processedFiles += 1;
+  const rowsById = new Map<number, GapFixEventRow>(rows.map((row) => [row.id, row]));
+
+  const first = rows[0];
+  if (DEBUG_FIXGAPS) {
+    console.log(
+      `[fixgaps/debug] file_start exchange=${first.exchange} symbol=${first.symbol} path=${first.relative_path} events=${rows.length}`,
+    );
+  }
+
+  const adapter = adapterRegistry.getAdapter(first.exchange);
+  if (!adapter) {
+    const reason = `No adapter for exchange ${first.exchange}`;
+    db.updateGapFixStatus(
+      rows.map((row) => ({
+        id: row.id,
+        status: GapFixStatus.MissingAdapter,
+        error: reason,
+      })),
+    );
+    for (const row of rows) {
+      logGapError(row, reason);
+    }
+    stats.missingAdapter += rows.length;
+    return;
+  }
+
+  const filePath = path.join(first.root_path, first.relative_path);
+  let extraction;
+  try {
+    extraction = await extractGapWindows(filePath, rows);
+  } catch (err) {
+    db.updateGapFixStatus(
+      rows.map((row) => ({
+        id: row.id,
+        status: GapFixStatus.AdapterError,
+        error: toErrorMessage(err, "Failed to extract gap windows"),
+      })),
+    );
+    stats.adapterError += rows.length;
+    return;
+  }
+  if (DEBUG_FIXGAPS) {
+    console.log(
+      `[fixgaps/debug] windows path=${first.relative_path} resolvable=${extraction.windows.length} unresolved=${extraction.unresolvedEventIds.length}`,
+    );
+  }
+
+  if (extraction.unresolvedEventIds.length) {
+    const reason = "Unable to resolve event lines into gap windows";
+    db.updateGapFixStatus(
+      extraction.unresolvedEventIds.map((id) => ({
+        id,
+        status: GapFixStatus.AdapterError,
+        error: reason,
+      })),
+    );
+    for (const id of extraction.unresolvedEventIds) {
+      const row = rowsById.get(id);
+      if (row) {
+        logGapError(row, reason);
+      }
+    }
+    stats.adapterError += extraction.unresolvedEventIds.length;
+  }
+
+  const resolvableEventIds = new Set<number>(extraction.windows.map((w) => w.eventId));
+  if (!resolvableEventIds.size) {
+    return;
+  }
+
+  let recovered;
+  try {
+    recovered = await adapter.recover({
+      exchange: first.exchange,
+      symbol: first.symbol,
+      windows: extraction.windows,
+    });
+  } catch (err) {
+    const ids = [...resolvableEventIds];
+    const reason = toErrorMessage(err, `Adapter ${adapter.name} failed`);
+    db.updateGapFixStatus(
+      ids.map((id) => ({
+        id,
+        status: GapFixStatus.AdapterError,
+        error: reason,
+      })),
+    );
+    for (const id of ids) {
+      const row = rowsById.get(id);
+      if (row) {
+        logGapError(row, reason);
+      }
+    }
+    stats.adapterError += ids.length;
+    return;
+  }
+  if (DEBUG_FIXGAPS) {
+    console.log(
+      `[fixgaps/debug] adapter_done adapter=${adapter.name} path=${first.relative_path} recovered=${recovered.length}`,
+    );
+  }
+
+  if (recovered.length) {
+    try {
+      const mergeResult = await mergeRecoveredTradesIntoFile(filePath, recovered);
+      if (DEBUG_FIXGAPS) {
+        console.log(
+          `[fixgaps/debug] merge_done path=${first.relative_path} inserted=${mergeResult.inserted} deduped=${recovered.length - mergeResult.inserted}`,
+        );
+      }
+      if (mergeResult.insertedTrades.length) {
+        const patchResult = await patchBinariesForRecoveredTrades(
+          config,
+          db,
+          {
+            collector: first.collector,
+            exchange: first.exchange,
+            symbol: first.symbol,
+          },
+          filePath,
+          mergeResult.insertedTrades,
+        );
+        stats.binariesPatched += patchResult.patchedTimeframes;
+        stats.recoveredTrades += mergeResult.inserted;
+        if (DEBUG_FIXGAPS) {
+          console.log(
+            `[fixgaps/debug] patch_done path=${first.relative_path} patched_timeframes=${patchResult.patchedTimeframes}`,
+          );
+        }
+      }
+    } catch (err) {
+      const ids = [...resolvableEventIds];
+      const reason = toErrorMessage(err, "Failed to merge or patch recovered trades");
+      db.updateGapFixStatus(
+        ids.map((id) => ({
+          id,
+          status: GapFixStatus.AdapterError,
+          error: reason,
+        })),
+      );
+      for (const id of ids) {
+        const row = rowsById.get(id);
+        if (row) {
+          logGapError(row, reason);
+        }
+      }
+      stats.adapterError += ids.length;
+      return;
+    }
+  }
+
+  const deleteIds = [...resolvableEventIds];
+  const recoveredByEvent = countRecoveredByEvent(extraction.windows, recovered);
+  for (const id of deleteIds) {
+    const row = rowsById.get(id);
+    if (!row) continue;
+    logGapRecovered(row, recoveredByEvent.get(id) ?? 0);
+  }
+  db.deleteEventsByIds(deleteIds);
+  stats.deletedEvents += deleteIds.length;
+  if (DEBUG_FIXGAPS) {
+    console.log(`[fixgaps/debug] file_done path=${first.relative_path} deleted=${deleteIds.length}`);
+  }
+}
+
+function toErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message) {
+    return err.message;
+  }
+  return fallback;
+}
+
+function countRecoveredByEvent(
+  windows: Array<{ eventId: number; fromTs: number; toTs: number }>,
+  recovered: Array<{ ts: number }>,
+): Map<number, number> {
+  const counts = new Map<number, number>();
+  const sortedWindows = [...windows].sort((a, b) => (a.fromTs - b.fromTs) || (a.toTs - b.toTs) || (a.eventId - b.eventId));
+  for (const window of sortedWindows) {
+    if (!counts.has(window.eventId)) {
+      counts.set(window.eventId, 0);
+    }
+  }
+  if (!recovered.length || !sortedWindows.length) {
+    return counts;
+  }
+
+  for (const trade of recovered) {
+    for (const window of sortedWindows) {
+      if (trade.ts <= window.fromTs) break;
+      if (trade.ts >= window.toTs) continue;
+      counts.set(window.eventId, (counts.get(window.eventId) ?? 0) + 1);
+      break;
+    }
+  }
+  return counts;
+}
+
+function logGapRecovered(row: GapFixEventRow, recovered: number): void {
+  const miss = row.gap_miss === null ? "?" : String(row.gap_miss);
+  console.log(`[fixgaps] ${formatGapLabel(row)} : recover ${recovered} / ${miss}`);
+}
+
+function logGapError(row: GapFixEventRow, reason: string): void {
+  const sanitized = reason.replaceAll("\n", " ").replaceAll("\r", " ");
+  console.log(`[fixgaps] ${formatGapLabel(row)} : error (${sanitized})`);
+}
+
+function formatGapLabel(row: GapFixEventRow): string {
+  return `${row.exchange}/${row.symbol}/${formatGapMinuteUtc(row.gap_end_ts)}`;
+}
+
+function formatGapMinuteUtc(ts: number | null): string {
+  if (ts === null || !Number.isFinite(ts)) {
+    return "unknown";
+  }
+  const d = new Date(ts);
+  const year = d.getUTCFullYear();
+  const month = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  const hour = String(d.getUTCHours()).padStart(2, "0");
+  const minute = String(d.getUTCMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day} ${hour}:${minute}`;
+}

@@ -1,11 +1,12 @@
 import { loadConfig, printHelp } from "./config.js";
 import { openDatabase } from "./db.js";
+import { runFixGaps } from "./gaps/index.js";
 import { runIndex } from "./indexer.js";
 import { runProcess } from "./process.js";
 import { runRegistry } from "./registry.js";
 
 interface ParsedArgs {
-  command: "index" | "process" | "registry";
+  command: "index" | "process" | "registry" | "fixgaps";
   overrides: {
     root?: string;
     dbPath?: string;
@@ -21,6 +22,10 @@ interface ParsedArgs {
     timeframe?: string;
     flushIntervalSeconds?: number;
   };
+  fixgaps: {
+    limit?: number;
+    retryStatuses?: string[];
+  };
   showHelp: boolean;
 }
 
@@ -28,13 +33,14 @@ function parseArgs(argv: string[]): ParsedArgs {
   const parsed: ParsedArgs = {
     command: "index",
     overrides: {},
+    fixgaps: {},
     showHelp: false,
   };
 
   // command is first non-flag argument
   const args = argv.slice(2);
   if (args[0] && !args[0].startsWith("-")) {
-    if (args[0] === "index" || args[0] === "process" || args[0] === "registry") {
+    if (args[0] === "index" || args[0] === "process" || args[0] === "registry" || args[0] === "fixgaps") {
       parsed.command = args[0];
       args.shift();
     } else {
@@ -103,6 +109,18 @@ function parseArgs(argv: string[]): ParsedArgs {
       case "--flush-interval":
         parsed.overrides.flushIntervalSeconds = Number(normalized[++i]);
         break;
+      case "--limit":
+        parsed.fixgaps.limit = Number(normalized[++i]);
+        break;
+      case "--retry-status": {
+        const raw = normalized[++i] ?? "";
+        const statuses = raw
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+        parsed.fixgaps.retryStatuses = statuses.length ? statuses : undefined;
+        break;
+      }
       case "-h":
       case "--help":
         parsed.showHelp = true;
@@ -166,6 +184,12 @@ async function main() {
       console.log(
         `Registry synced in ${duration}s. scanned=${stats.scanned} upserted=${stats.upserted} deleted=${stats.deleted}`,
       );
+    }
+    if (parsed.command === "fixgaps") {
+      await runFixGaps(config, db, {
+        limit: parsed.fixgaps.limit,
+        retryStatuses: parsed.fixgaps.retryStatuses,
+      });
     }
   } catch (err) {
     console.error("Operation failed:", err);

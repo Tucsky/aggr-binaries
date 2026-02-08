@@ -8,6 +8,11 @@ export enum EventType {
   Gap = "gap",
 }
 
+export enum GapFixStatus {
+  MissingAdapter = "missing_adapter",
+  AdapterError = "adapter_error",
+}
+
 export type ParseRejectReason =
   | EventType.PartsShort
   | EventType.NonFinite

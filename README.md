@@ -327,6 +327,7 @@ npm start -- <subcommand> [flags]
 * `index` — build / append SQLite inventory.
 * `process` — generate binaries.
 * `registry` — rebuild registry table by scanning output companions.
+* `fixgaps` — recover missing trades from `events(event_type='gap')`, rewrite raw files, and patch binaries.
 
 ### Shared flags
 
@@ -349,6 +350,42 @@ npm start -- <subcommand> [flags]
 * `--flush-interval <s>` checkpoint every _s_ seconds (default 10)
 * `--force` ignore resume guards
 
+### Fixgaps flags
+
+* `--collector <name>` limit queue to a collector
+* `--exchange <EXCHANGE>` limit queue to an exchange
+* `--symbol <SYMBOL>` limit queue to a symbol
+* `--limit <n>` process at most _n_ gap events
+* `--retry-status <csv>` include statused rows in addition to null status rows (example: `adapter_error,missing_adapter`)
+
+### Fixgaps behavior
+
+`fixgaps` is event-driven recovery over `events.event_type='gap'`.
+
+For each grouped `(root_id, relative_path)` file:
+1. Resolve one or more gap windows from event line ranges (with `gap_end_ts/gap_ms` fallback when needed).
+2. Route by exchange adapter and fetch trades for those windows.
+3. Deterministically merge recovered trades into the original raw file (timestamp-sorted, deduped).
+4. Patch all existing timeframe binaries for that market over the affected timestamp range.
+5. Update event lifecycle:
+   * Adapter succeeded (including 0 recovered trades): delete event row(s).
+   * Missing adapter: keep row, set `gap_fix_status='missing_adapter'`.
+   * Adapter/merge/patch failure: keep row, set `gap_fix_status='adapter_error'` + `gap_fix_error`.
+
+Supported adapters in this iteration:
+* `BINANCE` / `BINANCE_FUTURES` → `data.binance.vision`
+* `BYBIT` → `public.bybit.com/trading`
+* `KRAKEN` → `api.kraken.com/0/public/Trades`
+* `BITFINEX` → `api-pub.bitfinex.com/v2/trades/.../hist`
+* `COINBASE` → brokerage ticker + exchange trades pagination
+
+### Fixgaps debug (optional)
+
+Set env vars to inspect long-running retries and per-file progress:
+* `AGGR_FIXGAPS_DEBUG=1` — high-level file/window + adapter + HTTP retry logs
+* `AGGR_FIXGAPS_DEBUG_ADAPTERS=1` — adapter pagination logs only
+* `AGGR_FIXGAPS_DEBUG_HTTP=1` — HTTP retry/backoff logs only
+
 ### Examples
 
 ```bash
@@ -357,6 +394,10 @@ npm start -- index --include "PI/2018-2019-2020"
 
 npm start -- process --collector RAM --exchange BITMEX --symbol XBTUSD
 npm start -- process
+
+npm start -- fixgaps --collector PI --exchange BITFINEX --symbol BTCUSD
+npm start -- fixgaps --retry-status adapter_error
+npm start -- fixgaps --retry-status adapter_error --limit 1
 ```
 
 ---

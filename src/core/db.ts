@@ -1,5 +1,5 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
-import type { EventRange } from "./events.js";
+import type { EventRange, GapFixStatus } from "./events.js";
 import type { IndexedFile, RegistryEntry, RegistryFilter, RegistryKey } from "./model.js";
 
 export interface Db {
@@ -11,7 +11,34 @@ export interface Db {
   getRegistryEntry(key: RegistryKey): RegistryEntry | null;
   insertEvents(rows: EventRange[]): void;
   deleteEventsForFile(rootId: number, relativePath: string): void;
+  iterateGapEventsForFix(opts: GapFixQueueFilter): Iterable<GapFixQueueRow>;
+  updateGapFixStatus(rows: Array<{ id: number; status: GapFixStatus; error?: string }>): void;
+  deleteEventsByIds(ids: number[]): void;
   close(): void;
+}
+
+export interface GapFixQueueFilter {
+  collector?: string;
+  exchange?: string;
+  symbol?: string;
+  retryStatuses?: string[];
+  limit?: number;
+}
+
+export interface GapFixQueueRow {
+  id: number;
+  root_id: number;
+  root_path: string;
+  relative_path: string;
+  collector: string;
+  exchange: string;
+  symbol: string;
+  start_line: number;
+  end_line: number;
+  gap_ms: number | null;
+  gap_miss: number | null;
+  gap_end_ts: number | null;
+  gap_fix_status: string | null;
 }
 
 export function openDatabase(dbPath: string): Db {
@@ -62,6 +89,14 @@ export function openDatabase(dbPath: string): Db {
   const deleteEventsForFileStmt = db.prepare(
     `DELETE FROM events WHERE root_id = :rootId AND relative_path = :relativePath;`,
   );
+  const updateGapFixStatusStmt = db.prepare(
+    `UPDATE events
+        SET gap_fix_status = :status,
+            gap_fix_error = :error,
+            gap_fix_updated_at = (unixepoch('subsec') * 1000)
+      WHERE id = :id;`,
+  );
+  const deleteEventByIdStmt = db.prepare("DELETE FROM events WHERE id = :id;");
 
   const api: Db = {
     db,
@@ -81,6 +116,11 @@ export function openDatabase(dbPath: string): Db {
     insertEvents: (rows: EventRange[]) => insertEvents(db, insertEventStmt, rows),
     deleteEventsForFile: (rootId: number, relativePath: string) =>
       deleteEventsForFileStmt.run({ rootId, relativePath }),
+    iterateGapEventsForFix: (opts: GapFixQueueFilter): Iterable<GapFixQueueRow> =>
+      iterateGapEventsForFix(db, opts),
+    updateGapFixStatus: (rows: Array<{ id: number; status: GapFixStatus; error?: string }>) =>
+      updateGapFixStatus(db, updateGapFixStatusStmt, rows),
+    deleteEventsByIds: (ids: number[]) => deleteEventsByIds(db, deleteEventByIdStmt, ids),
     close: () => db.close(),
   };
 
@@ -284,6 +324,9 @@ function migrateEvents(db: DatabaseSync): void {
   const info = db.prepare("PRAGMA table_info(events);").all() as Array<{ name: string }>;
   const hasGapMiss = info.some((c) => c.name === "gap_miss");
   const hasGapEndTs = info.some((c) => c.name === "gap_end_ts");
+  const hasFixStatus = info.some((c) => c.name === "gap_fix_status");
+  const hasFixError = info.some((c) => c.name === "gap_fix_error");
+  const hasFixUpdatedAt = info.some((c) => c.name === "gap_fix_updated_at");
 
   if (!info.length) {
     db.exec(`
@@ -300,6 +343,9 @@ function migrateEvents(db: DatabaseSync): void {
         gap_ms INTEGER,
         gap_miss INTEGER,
         gap_end_ts INTEGER,
+        gap_fix_status TEXT,
+        gap_fix_error TEXT,
+        gap_fix_updated_at INTEGER,
         created_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000)
       );
     `);
@@ -310,9 +356,21 @@ function migrateEvents(db: DatabaseSync): void {
     if (!hasGapEndTs) {
       db.exec("ALTER TABLE events ADD COLUMN gap_end_ts INTEGER;");
     }
+    if (!hasFixStatus) {
+      db.exec("ALTER TABLE events ADD COLUMN gap_fix_status TEXT;");
+    }
+    if (!hasFixError) {
+      db.exec("ALTER TABLE events ADD COLUMN gap_fix_error TEXT;");
+    }
+    if (!hasFixUpdatedAt) {
+      db.exec("ALTER TABLE events ADD COLUMN gap_fix_updated_at INTEGER;");
+    }
   }
   db.exec("CREATE INDEX IF NOT EXISTS idx_events_file ON events(root_id, relative_path);");
   db.exec("CREATE INDEX IF NOT EXISTS idx_events_market ON events(collector, exchange, symbol);");
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_events_fix_queue ON events(event_type, gap_fix_status, collector, exchange, symbol, root_id, relative_path, id);",
+  );
 }
 
 function insertMany(
@@ -367,6 +425,42 @@ function insertEvents(db: DatabaseSync, stmt: StatementSync, rows: EventRange[])
         gapMiss: row.gapMiss ?? null,
         gapEndTs: row.gapEndTs ?? null,
       });
+    }
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}
+
+function updateGapFixStatus(
+  db: DatabaseSync,
+  stmt: StatementSync,
+  rows: Array<{ id: number; status: GapFixStatus; error?: string }>,
+): void {
+  if (!rows.length) return;
+  db.exec("BEGIN");
+  try {
+    for (const row of rows) {
+      stmt.run({
+        id: row.id,
+        status: row.status,
+        error: row.error ?? null,
+      });
+    }
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}
+
+function deleteEventsByIds(db: DatabaseSync, stmt: StatementSync, ids: number[]): void {
+  if (!ids.length) return;
+  db.exec("BEGIN");
+  try {
+    for (const id of ids) {
+      stmt.run({ id });
     }
     db.exec("COMMIT");
   } catch (err) {
@@ -448,4 +542,53 @@ function getRegistry(stmt: StatementSync, key: RegistryKey): RegistryEntry | nul
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
+}
+
+function iterateGapEventsForFix(db: DatabaseSync, opts: GapFixQueueFilter): Iterable<GapFixQueueRow> {
+  const where: string[] = ["e.event_type = 'gap'"];
+  const params: Record<string, string | number | null> = {};
+
+  const retryStatuses = (opts.retryStatuses ?? []).map((s) => s.trim()).filter(Boolean);
+  if (retryStatuses.length) {
+    const placeholders: string[] = [];
+    for (let i = 0; i < retryStatuses.length; i += 1) {
+      const key = `retry${i}`;
+      placeholders.push(`:${key}`);
+      params[key] = retryStatuses[i];
+    }
+    where.push(`(e.gap_fix_status IS NULL OR e.gap_fix_status IN (${placeholders.join(",")}))`);
+  } else {
+    where.push("e.gap_fix_status IS NULL");
+  }
+
+  if (opts.collector) {
+    where.push("e.collector = :collector");
+    params.collector = opts.collector.toUpperCase();
+  }
+  if (opts.exchange) {
+    where.push("e.exchange = :exchange");
+    params.exchange = opts.exchange.toUpperCase();
+  }
+  if (opts.symbol) {
+    where.push("e.symbol = :symbol");
+    params.symbol = opts.symbol;
+  }
+
+  const limit = Number.isFinite(opts.limit) && (opts.limit as number) > 0 ? Math.floor(opts.limit as number) : undefined;
+  if (limit !== undefined) {
+    params.limit = limit;
+  }
+
+  const sql =
+    `SELECT e.id, e.root_id, r.path AS root_path, e.relative_path,
+            e.collector, e.exchange, e.symbol,
+            e.start_line, e.end_line, e.gap_ms, e.gap_miss, e.gap_end_ts, e.gap_fix_status
+       FROM events e
+       JOIN roots r ON r.id = e.root_id
+      WHERE ${where.join(" AND ")}
+      ORDER BY e.root_id, e.relative_path, e.start_line, e.id` +
+    (limit !== undefined ? " LIMIT :limit" : "") +
+    ";";
+  const stmt = db.prepare(sql);
+  return stmt.iterate(params) as Iterable<GapFixQueueRow>;
 }

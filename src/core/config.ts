@@ -86,6 +86,7 @@ Commands:
   index      Index filesystem into SQLite
   process    Build/update binaries from indexed files (resume supported)
   registry   Rebuild registry table from existing companions
+  fixgaps    Recover missing trades from gap events and patch outputs
 
 Options (override config file):
   -r, --root <path>         Root input directory (default: ${DEFAULTS.root})
@@ -99,6 +100,8 @@ Options (override config file):
   --force                   Processing: ignore processed-files cache
   --timeframe <tf>          Processing: timeframe string (e.g., 1m, 5m, 1h) (default: ${DEFAULTS.timeframe})
   --flush-interval <s>      Processing: flush interval in seconds (default: ${DEFAULTS.flushIntervalSeconds})
+  --limit <n>               Fixgaps: maximum gap events to process
+  --retry-status <csv>      Fixgaps: include rows with statuses (comma-separated)
   --config <path>           Path to JSON config (default: ./config.json if present)
   --no-config               Skip loading any config file
   -h, --help                Show this help
