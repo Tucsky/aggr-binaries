@@ -25,6 +25,8 @@ interface ParsedArgs {
   fixgaps: {
     limit?: number;
     retryStatuses?: string[];
+    dryRun?: boolean;
+    id?: number;
   };
   showHelp: boolean;
 }
@@ -121,6 +123,12 @@ function parseArgs(argv: string[]): ParsedArgs {
         parsed.fixgaps.retryStatuses = statuses.length ? statuses : undefined;
         break;
       }
+      case "--dry-run":
+        parsed.fixgaps.dryRun = true;
+        break;
+      case "--id":
+        parsed.fixgaps.id = Number(normalized[++i]);
+        break;
       case "-h":
       case "--help":
         parsed.showHelp = true;
@@ -189,6 +197,8 @@ async function main() {
       await runFixGaps(config, db, {
         limit: parsed.fixgaps.limit,
         retryStatuses: parsed.fixgaps.retryStatuses,
+        dryRun: parsed.fixgaps.dryRun,
+        id: parsed.fixgaps.id,
       });
     }
   } catch (err) {

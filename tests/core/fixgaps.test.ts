@@ -165,7 +165,7 @@ test("fixgaps merges recovered trades, patches all timeframes, and is idempotent
     assert.ok(stats.binariesPatched >= 2);
 
     const lines = (await fs.readFile(fixture.fullPath, "utf8")).trim().split("\n");
-    assert.deepStrictEqual(lines, [`${TS0} 100 1 1 0`, `${TS1} 101 1 1 0`, `${TS2} 102 1 0 0`]);
+    assert.deepStrictEqual(lines, [`${TS0} 100 1 1 0`, `${TS1} 101 1 1`, `${TS2} 102 1 0 0`]);
 
     const after1m = await readBin(fixture.outDir, "1m");
     const after5m = await readBin(fixture.outDir, "5m");
@@ -221,7 +221,7 @@ test("fixgaps sorts unsorted files when recovered data is before existing rows",
     assert.strictEqual(readEventRows(db).length, 0);
 
     const lines = (await fs.readFile(fixture.fullPath, "utf8")).trim().split("\n");
-    assert.deepStrictEqual(lines, [`${TS1} 101 1 0 0`, `${recoveredTs} 100.5 0.5 1 0`, `${TS2} 102 1 1 0`]);
+    assert.deepStrictEqual(lines, [`${TS1} 101 1 0 0`, `${recoveredTs} 100.5 0.5 1`, `${TS2} 102 1 1 0`]);
   } finally {
     db.close();
   }
@@ -282,9 +282,9 @@ test("fixgaps on unsorted files sorts and recovers mixed windows", async () => {
     const lines = (await fs.readFile(fixture.fullPath, "utf8")).trim().split("\n");
     assert.deepStrictEqual(lines, [
       `${TS1} 101 1 0 0`,
-      `${recoveredTsEarly} 100.5 0.5 1 0`,
+      `${recoveredTsEarly} 100.5 0.5 1`,
       `${TS2} 102 1 1 0`,
-      `${recoveredTsLate} 102.5 0.25 0 0`,
+      `${recoveredTsLate} 102.5 0.25 0`,
       `${TS2 + 60_000} 103 1 1 0`,
     ]);
   } finally {
@@ -329,6 +329,88 @@ test("fixgaps deletes event when adapter succeeds with zero recovered trades", a
   }
 });
 
+test("fixgaps dry-run does not mutate files, binaries, or events", async () => {
+  const fixture = await createFixture();
+  const db = openDatabase(fixture.dbPath);
+
+  try {
+    const { rootId } = insertIndexedFile(db, fixture.root, fixture.relativePath);
+    await runProcess(buildConfig(fixture.root, fixture.outDir, fixture.dbPath, "1m"), db);
+    db.db.exec("DELETE FROM events;");
+    insertGapEvent(db, { rootId, relativePath: fixture.relativePath });
+
+    const beforeFile = await fs.readFile(fixture.fullPath, "utf8");
+    const beforeBin = await readBin(fixture.outDir, "1m");
+    const beforeRows = readEventRows(db);
+
+    const adapterRegistry = createAdapterRegistry({
+      BITFINEX: oneTradeAdapter({ ts: TS1, price: 101, size: 1, side: "buy", priceText: "101", sizeText: "1" }),
+    });
+
+    const dryStats = await runFixGaps(buildConfig(fixture.root, fixture.outDir, fixture.dbPath, "1m"), db, {
+      adapterRegistry,
+      dryRun: true,
+    });
+
+    assert.strictEqual(dryStats.selectedEvents, 1);
+    assert.strictEqual(dryStats.deletedEvents, 0);
+    assert.strictEqual(dryStats.binariesPatched, 0);
+    assert.strictEqual(dryStats.recoveredTrades, 1);
+    assert.strictEqual(await fs.readFile(fixture.fullPath, "utf8"), beforeFile);
+    assert.strictEqual(Buffer.compare(await readBin(fixture.outDir, "1m"), beforeBin), 0);
+    assert.deepStrictEqual(readEventRows(db), beforeRows);
+
+    const applyStats = await runFixGaps(buildConfig(fixture.root, fixture.outDir, fixture.dbPath, "1m"), db, {
+      adapterRegistry,
+    });
+
+    assert.strictEqual(applyStats.deletedEvents, 1);
+    assert.strictEqual(readEventRows(db).length, 0);
+  } finally {
+    db.close();
+  }
+});
+
+test("fixgaps success logs include date, gap ms, and minute in recovered line", async () => {
+  const fixture = await createFixture();
+  const db = openDatabase(fixture.dbPath);
+
+  try {
+    const { rootId } = insertIndexedFile(db, fixture.root, fixture.relativePath);
+    await runProcess(buildConfig(fixture.root, fixture.outDir, fixture.dbPath, "1m"), db);
+    db.db.exec("DELETE FROM events;");
+    insertGapEvent(db, { rootId, relativePath: fixture.relativePath });
+
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => {
+      logs.push(args.map((arg) => String(arg)).join(" "));
+    };
+    try {
+      await runFixGaps(buildConfig(fixture.root, fixture.outDir, fixture.dbPath, "1m"), db, {
+        adapterRegistry: createAdapterRegistry({
+          BITFINEX: {
+            name: "empty",
+            async recover() {
+              return [];
+            },
+          },
+        }),
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    const recoveredLine = logs.find((line) => line.includes(": recovered 0 / 1"));
+    assert.match(
+      recoveredLine ?? "",
+      /^\[fixgaps\] \[BITFINEX\/BTCUSD\/2024-01-01\] 120000ms gap @ 00:02 : recovered 0 \/ 1$/,
+    );
+  } finally {
+    db.close();
+  }
+});
+
 test("fixgaps marks unsupported exchanges as missing_adapter", async () => {
   const fixture = await createFixture("UNSUPPORTEDX");
   const db = openDatabase(fixture.dbPath);
@@ -354,6 +436,59 @@ test("fixgaps marks unsupported exchanges as missing_adapter", async () => {
     const rows = readEventRows(db);
     assert.strictEqual(rows.length, 1);
     assert.strictEqual(rows[0].status, GapFixStatus.MissingAdapter);
+  } finally {
+    db.close();
+  }
+});
+
+test("fixgaps id filter targets a single event and bypasses retry-status gating", async () => {
+  const fixture = await createFixture();
+  const db = openDatabase(fixture.dbPath);
+
+  try {
+    const { rootId } = insertIndexedFile(db, fixture.root, fixture.relativePath);
+    await runProcess(buildConfig(fixture.root, fixture.outDir, fixture.dbPath, "1m"), db);
+    db.db.exec("DELETE FROM events;");
+
+    const targetedId = insertGapEvent(db, {
+      rootId,
+      relativePath: fixture.relativePath,
+      startLine: 99,
+      endLine: 99,
+      gapMs: TS2 - TS1,
+      gapEndTs: TS2,
+      status: GapFixStatus.AdapterError,
+    });
+    const otherId = insertGapEvent(db, {
+      rootId,
+      relativePath: fixture.relativePath,
+      startLine: 99,
+      endLine: 99,
+      gapMs: TS2 - TS1,
+      gapEndTs: TS2,
+      status: null,
+    });
+
+    let seenWindows = 0;
+    const stats = await runFixGaps(buildConfig(fixture.root, fixture.outDir, fixture.dbPath, "1m"), db, {
+      id: targetedId,
+      adapterRegistry: createAdapterRegistry({
+        BITFINEX: {
+          name: "target-id",
+          async recover(req) {
+            seenWindows = req.windows.length;
+            return [];
+          },
+        },
+      }),
+    });
+
+    assert.strictEqual(seenWindows, 1);
+    assert.strictEqual(stats.selectedEvents, 1);
+    assert.strictEqual(stats.deletedEvents, 1);
+    const rows = readEventRows(db);
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0]?.id, otherId);
   } finally {
     db.close();
   }

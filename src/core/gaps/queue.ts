@@ -6,6 +6,7 @@ export interface FixGapsQueryOptions {
   symbol?: string;
   retryStatuses?: string[];
   limit?: number;
+  id?: number;
 }
 
 export type GapFixEventRow = GapFixQueueRow;
@@ -17,5 +18,6 @@ export function iterateGapFixEvents(db: Db, opts: FixGapsQueryOptions): Iterable
     symbol: opts.symbol,
     retryStatuses: opts.retryStatuses,
     limit: opts.limit,
+    id: opts.id,
   });
 }

@@ -101,7 +101,9 @@ Options (override config file):
   --timeframe <tf>          Processing: timeframe string (e.g., 1m, 5m, 1h) (default: ${DEFAULTS.timeframe})
   --flush-interval <s>      Processing: flush interval in seconds (default: ${DEFAULTS.flushIntervalSeconds})
   --limit <n>               Fixgaps: maximum gap events to process
+  --id <n>                  Fixgaps: process only the specified gap event id
   --retry-status <csv>      Fixgaps: include rows with statuses (comma-separated)
+  --dry-run                 Fixgaps: fetch and report only (no file/db mutations)
   --config <path>           Path to JSON config (default: ./config.json if present)
   --no-config               Skip loading any config file
   -h, --help                Show this help

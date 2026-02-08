@@ -124,6 +124,48 @@ export function parseCsvLines(raw: string): string[] {
   return lines;
 }
 
+export function forEachCsvLine(raw: string, onLine: (line: string) => void): void {
+  let start = 0;
+  while (start < raw.length) {
+    let end = raw.indexOf("\n", start);
+    if (end === -1) end = raw.length;
+    let line = raw.slice(start, end);
+    if (line.endsWith("\r")) {
+      line = line.slice(0, -1);
+    }
+    if (line.length) {
+      onLine(line);
+    }
+    start = end + 1;
+  }
+}
+
+export function isTsWithinAnyWindow(ts: number, windows: GapWindow[]): boolean {
+  for (const window of windows) {
+    if (ts <= window.fromTs) {
+      return false;
+    }
+    if (ts < window.toTs) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function sortRecoveredTrades(trades: RecoveredTrade[]): RecoveredTrade[] {
+  trades.sort((a, b) => {
+    const tsDiff = a.ts - b.ts;
+    if (tsDiff) return tsDiff;
+    const priceDiff = a.price - b.price;
+    if (priceDiff) return priceDiff;
+    const sizeDiff = a.size - b.size;
+    if (sizeDiff) return sizeDiff;
+    if (a.side !== b.side) return a.side === "buy" ? -1 : 1;
+    return 0;
+  });
+  return trades;
+}
+
 export function buildRecoveredTrade(
   ts: number,
   priceText: string,
@@ -162,12 +204,33 @@ export async function fetchBuffer(url: string, fetchImpl: FetchLike): Promise<Bu
   return Buffer.from(ab);
 }
 
+export async function fetchBufferIfFound(url: string, fetchImpl: FetchLike): Promise<Buffer | undefined> {
+  setFixgapsProgress(`[fixgaps] downloading ${formatProgressUrl(url)} ...`);
+  const res = await fetchImpl(url, { method: "GET" });
+  if (res.status === 404) {
+    disposeBody(res);
+    return undefined;
+  }
+  if (!res.ok) {
+    const body = await safeText(res);
+    throw new Error(`HTTP ${res.status} for ${url}: ${body.slice(0, 300)}`);
+  }
+  const ab = await res.arrayBuffer();
+  return Buffer.from(ab);
+}
+
 async function safeText(res: Response): Promise<string> {
   try {
     return await res.text();
   } catch {
     return "";
   }
+}
+
+function disposeBody(response: Response): void {
+  const body = response.body;
+  if (!body) return;
+  void body.cancel().catch(() => {});
 }
 
 export function extractFirstZipEntry(zipData: Buffer): string {

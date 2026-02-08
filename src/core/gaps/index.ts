@@ -15,6 +15,8 @@ export interface FixGapsOptions {
   limit?: number;
   retryStatuses?: string[];
   adapterRegistry?: AdapterRegistry;
+  dryRun?: boolean;
+  id?: number;
 }
 
 export interface FixGapsStats {
@@ -41,7 +43,7 @@ export async function runFixGaps(config: Config, db: Db, options: FixGapsOptions
 
   const adapterRegistry = options.adapterRegistry ?? createDefaultAdapterRegistry();
   logFixgapsLine(
-    `[fixgaps] start filters=${config.collector ?? "ALL"}/${config.exchange ?? "ALL"}/${config.symbol ?? "ALL"} limit=${options.limit ?? "ALL"} retry=${options.retryStatuses?.join(",") ?? "NONE"}`,
+    `[fixgaps] start filters=${config.collector ?? "ALL"}/${config.exchange ?? "ALL"}/${config.symbol ?? "ALL"} id=${options.id ?? "ALL"} limit=${options.limit ?? "ALL"} retry=${options.retryStatuses?.join(",") ?? "NONE"} dry_run=${options.dryRun ? "1" : "0"}`,
   );
 
   const queue = iterateGapFixEvents(db, {
@@ -50,6 +52,7 @@ export async function runFixGaps(config: Config, db: Db, options: FixGapsOptions
     symbol: config.symbol,
     limit: options.limit,
     retryStatuses: options.retryStatuses,
+    id: options.id,
   });
 
   let currentGroup: GapFixEventRow[] = [];
@@ -68,13 +71,13 @@ export async function runFixGaps(config: Config, db: Db, options: FixGapsOptions
       continue;
     }
 
-    await processGroup(currentGroup, config, db, adapterRegistry, stats);
+    await processGroup(currentGroup, config, db, adapterRegistry, stats, options.dryRun === true);
     currentGroup = [row];
     currentKey = key;
   }
 
   if (currentGroup.length) {
-    await processGroup(currentGroup, config, db, adapterRegistry, stats);
+    await processGroup(currentGroup, config, db, adapterRegistry, stats, options.dryRun === true);
   }
 
   const elapsed = ((Date.now() - start) / 1000).toFixed(2);
@@ -92,6 +95,7 @@ async function processGroup(
   db: Db,
   adapterRegistry: AdapterRegistry,
   stats: FixGapsStats,
+  dryRun: boolean,
 ): Promise<void> {
   if (!rows.length) return;
   stats.processedFiles += 1;
@@ -107,13 +111,15 @@ async function processGroup(
   const adapter = adapterRegistry.getAdapter(first.exchange);
   if (!adapter) {
     const reason = `No adapter for exchange ${first.exchange}`;
-    db.updateGapFixStatus(
-      rows.map((row) => ({
-        id: row.id,
-        status: GapFixStatus.MissingAdapter,
-        error: reason,
-      })),
-    );
+    if (!dryRun) {
+      db.updateGapFixStatus(
+        rows.map((row) => ({
+          id: row.id,
+          status: GapFixStatus.MissingAdapter,
+          error: reason,
+        })),
+      );
+    }
     for (const row of rows) {
       logGapError(row, reason);
     }
@@ -128,13 +134,15 @@ async function processGroup(
     setFixgapsProgress(`[fixgaps] scanning ${fileLabel} ...`);
     extraction = await extractGapWindows(filePath, rows);
   } catch (err) {
-    db.updateGapFixStatus(
-      rows.map((row) => ({
-        id: row.id,
-        status: GapFixStatus.AdapterError,
-        error: toErrorMessage(err, "Failed to extract gap windows"),
-      })),
-    );
+    if (!dryRun) {
+      db.updateGapFixStatus(
+        rows.map((row) => ({
+          id: row.id,
+          status: GapFixStatus.AdapterError,
+          error: toErrorMessage(err, "Failed to extract gap windows"),
+        })),
+      );
+    }
     stats.adapterError += rows.length;
     return;
   }
@@ -146,13 +154,15 @@ async function processGroup(
 
   if (extraction.unresolvedEventIds.length) {
     const reason = "Unable to resolve event lines into gap windows";
-    db.updateGapFixStatus(
-      extraction.unresolvedEventIds.map((id) => ({
-        id,
-        status: GapFixStatus.AdapterError,
-        error: reason,
-      })),
-    );
+    if (!dryRun) {
+      db.updateGapFixStatus(
+        extraction.unresolvedEventIds.map((id) => ({
+          id,
+          status: GapFixStatus.AdapterError,
+          error: reason,
+        })),
+      );
+    }
     for (const id of extraction.unresolvedEventIds) {
       const row = rowsById.get(id);
       if (row) {
@@ -179,13 +189,15 @@ async function processGroup(
   } catch (err) {
     const ids = [...resolvableEventIds];
     const reason = toErrorMessage(err, `Adapter ${adapter.name} failed`);
-    db.updateGapFixStatus(
-      ids.map((id) => ({
-        id,
-        status: GapFixStatus.AdapterError,
-        error: reason,
-      })),
-    );
+    if (!dryRun) {
+      db.updateGapFixStatus(
+        ids.map((id) => ({
+          id,
+          status: GapFixStatus.AdapterError,
+          error: reason,
+        })),
+      );
+    }
     for (const id of ids) {
       const row = rowsById.get(id);
       if (row) {
@@ -201,7 +213,11 @@ async function processGroup(
     );
   }
 
-  if (recovered.length) {
+  if (recovered.length && dryRun) {
+    stats.recoveredTrades += recovered.length;
+  }
+
+  if (recovered.length && !dryRun) {
     try {
       setFixgapsProgress(`[fixgaps] merging ${fileLabel} (${recovered.length} recovered trades) ...`);
       const mergeResult = await mergeRecoveredTradesIntoFile(filePath, recovered);
@@ -236,13 +252,15 @@ async function processGroup(
     } catch (err) {
       const ids = [...resolvableEventIds];
       const reason = toErrorMessage(err, "Failed to merge or patch recovered trades");
-      db.updateGapFixStatus(
-        ids.map((id) => ({
-          id,
-          status: GapFixStatus.AdapterError,
-          error: reason,
-        })),
-      );
+      if (!dryRun) {
+        db.updateGapFixStatus(
+          ids.map((id) => ({
+            id,
+            status: GapFixStatus.AdapterError,
+            error: reason,
+          })),
+        );
+      }
       for (const id of ids) {
         const row = rowsById.get(id);
         if (row) {
@@ -261,9 +279,11 @@ async function processGroup(
     if (!row) continue;
     logGapRecovered(row, recoveredByEvent.get(id) ?? 0);
   }
-  db.deleteEventsByIds(deleteIds);
-  stats.deletedEvents += deleteIds.length;
-  if (DEBUG_FIXGAPS) {
+  if (!dryRun) {
+    db.deleteEventsByIds(deleteIds);
+    stats.deletedEvents += deleteIds.length;
+  }
+  if (DEBUG_FIXGAPS && !dryRun) {
     logFixgapsLine(`[fixgaps/debug] file_done path=${first.relative_path} deleted=${deleteIds.length}`);
   }
 }
@@ -303,21 +323,25 @@ function countRecoveredByEvent(
 
 function logGapRecovered(row: GapFixEventRow, recovered: number): void {
   const miss = row.gap_miss === null ? "?" : String(row.gap_miss);
-  logFixgapsLine(`[fixgaps] ${formatGapLabel(row)} : recover ${recovered} / ${miss}`);
+  logFixgapsLine(`[fixgaps] ${formatGapContext(row)} : recovered ${recovered} / ${miss}`);
 }
 
 function logGapError(row: GapFixEventRow, reason: string): void {
   const sanitized = reason.replaceAll("\n", " ").replaceAll("\r", " ");
-  logFixgapsLine(`[fixgaps] ${formatGapLabel(row)} : error (${sanitized})`);
+  logFixgapsLine(`[fixgaps] ${formatGapContext(row)} : error (${sanitized})`);
 }
 
-function formatGapLabel(row: GapFixEventRow): string {
-  return `${row.exchange}/${row.symbol}/${formatGapMinuteUtc(row.gap_end_ts)}`;
+function formatGapContext(row: GapFixEventRow): string {
+  const dayTime = formatGapDayTimeUtc(row.gap_end_ts);
+  const date = dayTime?.date ?? "unknown";
+  const time = dayTime?.time ?? "unknown";
+  const gapMs = row.gap_ms === null || !Number.isFinite(row.gap_ms) ? "?ms" : `${Math.round(row.gap_ms)}ms`;
+  return `[${row.exchange}/${row.symbol}/${date}] ${gapMs} gap @ ${time}`;
 }
 
-function formatGapMinuteUtc(ts: number | null): string {
+function formatGapDayTimeUtc(ts: number | null): { date: string; time: string } | undefined {
   if (ts === null || !Number.isFinite(ts)) {
-    return "unknown";
+    return undefined;
   }
   const d = new Date(ts);
   const year = d.getUTCFullYear();
@@ -325,7 +349,7 @@ function formatGapMinuteUtc(ts: number | null): string {
   const day = String(d.getUTCDate()).padStart(2, "0");
   const hour = String(d.getUTCHours()).padStart(2, "0");
   const minute = String(d.getUTCMinutes()).padStart(2, "0");
-  return `${year}-${month}-${day} ${hour}:${minute}`;
+  return { date: `${year}-${month}-${day}`, time: `${hour}:${minute}` };
 }
 
 function formatFileProgressLabel(row: GapFixEventRow): string {

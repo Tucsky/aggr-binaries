@@ -48,6 +48,11 @@ const HOST_OVERRIDES: Record<string, FetchPolicyOverride> = {
   "api.coinbase.com": { minIntervalMs: 200, maxAttempts: 6, baseBackoffMs: 400, maxBackoffMs: 8_000 },
   "public.bybit.com": { minIntervalMs: 120, maxAttempts: 4, baseBackoffMs: 300, maxBackoffMs: 4_000 },
   "data.binance.vision": { minIntervalMs: 120, maxAttempts: 4, baseBackoffMs: 300, maxBackoffMs: 4_000 },
+  "www.okx.com": { minIntervalMs: 200, maxAttempts: 6, baseBackoffMs: 400, maxBackoffMs: 8_000 },
+  "static.okx.com": { minIntervalMs: 120, maxAttempts: 4, baseBackoffMs: 300, maxBackoffMs: 4_000 },
+  "s3-eu-west-1.amazonaws.com": { minIntervalMs: 120, maxAttempts: 4, baseBackoffMs: 300, maxBackoffMs: 4_000 },
+  "historical-data.kucoin.com": { minIntervalMs: 120, maxAttempts: 4, baseBackoffMs: 300, maxBackoffMs: 4_000 },
+  "www.htx.com": { minIntervalMs: 120, maxAttempts: 4, baseBackoffMs: 300, maxBackoffMs: 4_000 },
 };
 
 export function createRateLimitedFetch(

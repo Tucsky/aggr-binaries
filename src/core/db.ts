@@ -23,6 +23,7 @@ export interface GapFixQueueFilter {
   symbol?: string;
   retryStatuses?: string[];
   limit?: number;
+  id?: number;
 }
 
 export interface GapFixQueueRow {
@@ -548,17 +549,23 @@ function iterateGapEventsForFix(db: DatabaseSync, opts: GapFixQueueFilter): Iter
   const where: string[] = ["e.event_type = 'gap'"];
   const params: Record<string, string | number | null> = {};
 
-  const retryStatuses = (opts.retryStatuses ?? []).map((s) => s.trim()).filter(Boolean);
-  if (retryStatuses.length) {
-    const placeholders: string[] = [];
-    for (let i = 0; i < retryStatuses.length; i += 1) {
-      const key = `retry${i}`;
-      placeholders.push(`:${key}`);
-      params[key] = retryStatuses[i];
-    }
-    where.push(`(e.gap_fix_status IS NULL OR e.gap_fix_status IN (${placeholders.join(",")}))`);
+  const selectedId = Number.isFinite(opts.id) && (opts.id as number) > 0 ? Math.floor(opts.id as number) : undefined;
+  if (selectedId !== undefined) {
+    where.push("e.id = :id");
+    params.id = selectedId;
   } else {
-    where.push("e.gap_fix_status IS NULL");
+    const retryStatuses = (opts.retryStatuses ?? []).map((s) => s.trim()).filter(Boolean);
+    if (retryStatuses.length) {
+      const placeholders: string[] = [];
+      for (let i = 0; i < retryStatuses.length; i += 1) {
+        const key = `retry${i}`;
+        placeholders.push(`:${key}`);
+        params[key] = retryStatuses[i];
+      }
+      where.push(`(e.gap_fix_status IS NULL OR e.gap_fix_status IN (${placeholders.join(",")}))`);
+    } else {
+      where.push("e.gap_fix_status IS NULL");
+    }
   }
 
   if (opts.collector) {

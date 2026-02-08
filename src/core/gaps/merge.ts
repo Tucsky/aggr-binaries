@@ -235,16 +235,15 @@ interface ParsedExistingTrade {
 function parseExistingTradeLine(line: string): ParsedExistingTrade | undefined {
   const trade = parseTradeLine(line);
   if (!trade) return undefined;
-  const fields = readFields(line, 5);
+  const fields = readFields(line, 4);
   if (fields.length < 4) return undefined;
   const sideBit = fields[3] === "1" ? "1" : "0";
-  const liqBit = fields.length >= 5 && fields[4] === "1" ? "1" : "0";
   const priceKey = trade.price.toString();
   const sizeKey = trade.size.toString();
 
   return {
     ts: trade.ts,
-    key: `${trade.ts}|${priceKey}|${sizeKey}|${sideBit}|${liqBit}`,
+    key: `${trade.ts}|${priceKey}|${sizeKey}|${sideBit}`,
   };
 }
 
@@ -301,12 +300,12 @@ function readFields(line: string, maxFields: number): string[] {
 
 function buildRecoveredKey(trade: RecoveredTrade): string {
   const sideBit = trade.side === "buy" ? "1" : "0";
-  return `${trade.ts}|${trade.price.toString()}|${trade.size.toString()}|${sideBit}|0`;
+  return `${trade.ts}|${trade.price.toString()}|${trade.size.toString()}|${sideBit}`;
 }
 
 function formatRecoveredLine(trade: RecoveredTrade): string {
   const sideBit = trade.side === "buy" ? "1" : "0";
-  return `${trade.ts} ${trade.priceText} ${trade.sizeText} ${sideBit} 0`;
+  return `${trade.ts} ${trade.priceText} ${trade.sizeText} ${sideBit}`;
 }
 
 export interface LineWriter {

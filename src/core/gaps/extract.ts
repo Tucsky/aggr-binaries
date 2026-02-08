@@ -28,6 +28,7 @@ export async function extractGapWindows(filePath: string, rows: GapFixEventRow[]
 
     const trade = parseTradeLine(line);
     if (!trade) continue;
+    if (trade.liquidation) continue;
 
     let idx = cursor;
     while (idx < sortedRows.length && sortedRows[idx].start_line <= lineNumber) {

@@ -269,6 +269,7 @@ Fix queue index (SQL-first filtering):
 
 ### Gap detection (adaptive, single state)
 The detector maintains a **single** adaptive average gap (`avgGapMs`) per market, updated in a time‑weighted way.
+* **Liquidation rows are excluded** from gap tracking and fixgaps window extraction.
 * **Same‑timestamp trades** are handled by spreading the next observed time span across them.
 * **Threshold**: treat gaps as exponential tail events and log when:
   ```
@@ -362,8 +363,12 @@ npm start -- <subcommand> [flags]
 * `--collector <name>` limit queue to a collector
 * `--exchange <EXCHANGE>` limit queue to an exchange
 * `--symbol <SYMBOL>` limit queue to a symbol
+* `--id <n>` process only one specific `events.id` gap row
 * `--limit <n>` process at most _n_ gap events
 * `--retry-status <csv>` include statused rows in addition to null status rows (example: `adapter_error,missing_adapter`)
+* `--dry-run` run adapter recovery without mutating raw files, binaries, or events table
+
+`--id` selection is applied directly on `events.id`; when present, it takes precedence over `--retry-status` queue gating.
 
 ### Fixgaps behavior
 
@@ -372,30 +377,41 @@ npm start -- <subcommand> [flags]
 For each grouped `(root_id, relative_path)` file:
 1. Resolve one or more gap windows from event line ranges (with `gap_end_ts/gap_ms` fallback when needed).
 2. Route by exchange adapter and fetch trades for those windows.
+   * Adapters recover **trades only** in this iteration (no liquidation backfill via `fixgaps`).
 3. Deterministically rewrite recovered files with a full timestamp sort-normalization pass:
    * Build a temporary sortable stream of existing trades + recovered trades.
    * Run external `sort` by timestamp and stable key.
    * Write sorted output atomically; existing rows win duplicates, recovered rows are inserted only when missing.
    * Preserve non-trade lines by appending them unchanged after sorted trade rows.
+   * Recovered inserts are emitted as canonical trade rows (`ts price size side`) without liquidation marker.
 4. Patch all existing timeframe binaries for that market over the affected timestamp range.
 5. Update event lifecycle:
    * Adapter succeeded (including 0 recovered trades): delete event row(s).
    * Missing adapter: keep row, set `gap_fix_status='missing_adapter'`.
    * Adapter/merge/patch failure: keep row, set `gap_fix_status='adapter_error'` + `gap_fix_error`.
 
+When `--dry-run` is enabled:
+* `fixgaps` still scans gaps and calls adapters, and logs `recovered X / Y`.
+* No raw file rewrites, no binary patches, and no `events` row updates/deletes are performed.
+
 Supported adapters in this iteration:
 * `BINANCE` / `BINANCE_FUTURES` → `data.binance.vision`
 * `BYBIT` → `public.bybit.com/trading`
 * `KRAKEN` → `api.kraken.com/0/public/Trades`
 * `BITFINEX` → `api-pub.bitfinex.com/v2/trades/.../hist`
+* `BITMEX` → `public.bitmex.com/data/trade` daily gzip dataset
+* `OKEX` / `OKX` → direct daily trades only (`static.okx.com`, available from 2021-09-02)
+* `KUCOIN` → direct spot daily trades (`historical-data.kucoin.com`)
+* `HUOBI` / `HTX` → direct daily trades (`www.htx.com`) for spot + linear swap
 * `COINBASE` → brokerage ticker + exchange trades pagination
 * Adapter-level rate-limit handling includes host pacing/backoff. Bitfinex is clamped to conservative pacing (`4s` min interval, `14 req/min`). Kraken also retries `EGeneral:Too many requests` JSON responses.
+* Internal exchange ids remain `OKEX` and `HUOBI`; `OKX` / `HTX` are supported as compatibility aliases for adapter routing.
 
 ### Fixgaps output
 
 Definitive per-gap lines:
-* Success: `[fixgaps] EXCHANGE/SYMBOL/YYYY-MM-DD HH:mm : recover {recovered} / {gap_miss}`
-* Failure: `[fixgaps] EXCHANGE/SYMBOL/YYYY-MM-DD HH:mm : error (reason)`
+* Success: `[fixgaps] [EXCHANGE/SYMBOL/YYYY-MM-DD] {gap_ms}ms gap @ HH:mm : recovered {recovered} / {gap_miss}`
+* Failure: `[fixgaps] [EXCHANGE/SYMBOL/YYYY-MM-DD] {gap_ms}ms gap @ HH:mm : error (reason)`
 
 Transient status line (single-line TTY progress) shows fetch/wait/sort/patch phases while work is in flight.
 
@@ -419,6 +435,7 @@ npm start -- process
 npm start -- fixgaps --collector PI --exchange BITFINEX --symbol BTCUSD
 npm start -- fixgaps --retry-status adapter_error
 npm start -- fixgaps --retry-status adapter_error --limit 1
+npm start -- fixgaps --dry-run --id 85
 ```
 
 ---

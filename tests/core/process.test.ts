@@ -21,6 +21,7 @@ const TIMEFRAME_MS: number = (() => {
   return ms;
 })();
 const MARKET = { collector: "RAM", bucket: "bucketA", exchange: "BITFINEX", symbol: "BTCUSD" };
+const LIQ_GAP_BASE_TS = 1_710_000_000_000;
 
 interface FixturePaths {
   baseDir: string;
@@ -104,6 +105,44 @@ async function createEventFixture(): Promise<FixturePaths> {
     MARKET.exchange,
     MARKET.symbol,
     "2024-02-02-00",
+  );
+
+  return { baseDir, root, outDir, fileRelatives: [relPlain] };
+}
+
+async function createLiquidationGapFixture(): Promise<FixturePaths> {
+  const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "aggr-process-liq-gap-"));
+  const root = path.join(baseDir, "input");
+  const outDir = path.join(baseDir, "out");
+  const marketDir = path.join(root, MARKET.collector, MARKET.bucket, MARKET.exchange, MARKET.symbol);
+
+  await fs.mkdir(marketDir, { recursive: true });
+
+  let ts = LIQ_GAP_BASE_TS;
+  const lines: string[] = [];
+  for (let i = 0; i < 32; i += 1) {
+    if (i > 0) ts += 10;
+    lines.push(`${ts} 50000 1 1 0`);
+  }
+
+  ts += 20_000;
+  lines.push(`${ts} 50005 0.5 1 1`);
+  ts += 20_000;
+  lines.push(`${ts} 50010 0.25 0 1`);
+  ts += 10_000;
+  lines.push(`${ts} 50020 1 1 0`);
+  ts += 10;
+  lines.push(`${ts} 50030 1 0 0`);
+
+  const plainPath = path.join(marketDir, "2024-03-03-00");
+  await fs.writeFile(plainPath, lines.join("\n"));
+
+  const relPlain = path.posix.join(
+    MARKET.collector,
+    MARKET.bucket,
+    MARKET.exchange,
+    MARKET.symbol,
+    "2024-03-03-00",
   );
 
   return { baseDir, root, outDir, fileRelatives: [relPlain] };
@@ -274,6 +313,44 @@ test("process logs grouped parse rejects and gaps into events table", async () =
     const second = readEvents();
     assert.deepStrictEqual(strip(second), expected);
     assert.ok(second[1]?.gap_miss !== null && second[1]?.gap_miss > 0);
+  } finally {
+    db.close();
+  }
+});
+
+test("process gap detection ignores liquidation rows", async () => {
+  const fixture = await createLiquidationGapFixture();
+  const dbPath = path.join(fixture.baseDir, "liq-gap.sqlite");
+  const db = openDatabase(dbPath);
+  const config = buildConfig(fixture.root, fixture.outDir, dbPath);
+
+  try {
+    insertFixtureFiles(db, fixture.root, fixture.fileRelatives);
+    await runProcess(config, db);
+
+    const outputs = await readOutputs(fixture.outDir);
+    assert.strictEqual(outputs.companion.hasLiquidations, true);
+
+    const gapRows = db.db
+      .prepare(
+        "SELECT event_type, start_line, end_line, gap_ms, gap_end_ts FROM events WHERE event_type = 'gap' ORDER BY id;",
+      )
+      .all() as Array<{
+      event_type: string;
+      start_line: number;
+      end_line: number;
+      gap_ms: number | null;
+      gap_end_ts: number | null;
+    }>;
+
+    assert.strictEqual(gapRows.length, 1);
+    assert.deepStrictEqual({ ...gapRows[0] }, {
+      event_type: "gap",
+      start_line: 35,
+      end_line: 35,
+      gap_ms: 50_000,
+      gap_end_ts: LIQ_GAP_BASE_TS + 50_310,
+    });
   } finally {
     db.close();
   }

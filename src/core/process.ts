@@ -408,12 +408,16 @@ async function streamFile(opts: {
       continue;
     }
 
-    const gap = recordGap(eventGapTracker, trade.ts, timeframeMs);
-    if (gap !== undefined) {
-      eventAccumulator.record(EventType.Gap, lineNumber, gap.gapMs, gap.gapMiss, trade.ts);
+    const includeInGapTracking = !trade.liquidation;
+    if (includeInGapTracking) {
+      const gap = recordGap(eventGapTracker, trade.ts, timeframeMs);
+      if (gap !== undefined) {
+        eventAccumulator.record(EventType.Gap, lineNumber, gap.gapMs, gap.gapMiss, trade.ts);
+      }
     }
 
     const shouldPersistGap =
+      includeInGapTracking &&
       (skipBeforeTs === undefined || trade.ts >= skipBeforeTs) &&
       (acc.gapTracker.lastTradeTs === undefined || trade.ts > acc.gapTracker.lastTradeTs);
     if (shouldPersistGap) {
