@@ -123,6 +123,36 @@ test("rate limited fetch enforces host pacing only per host", async () => {
   assert.deepStrictEqual(sleeps, [50]);
 });
 
+test("rate limited fetch enforces per-minute host quota", async () => {
+  let nowMs = 0;
+  const sleeps: number[] = [];
+  const callTimes: number[] = [];
+
+  const fetchImpl: FetchLike = async () => {
+    callTimes.push(nowMs);
+    return new Response("ok", { status: 200 });
+  };
+
+  const wrapped = createRateLimitedFetch(fetchImpl, {
+    defaultPolicy: { minIntervalMs: 1, maxRequestsPerMinute: 2, maxAttempts: 1, baseBackoffMs: 10, maxBackoffMs: 100 },
+    hostOverrides: {
+      "quota.test": { minIntervalMs: 1, maxRequestsPerMinute: 2, maxAttempts: 1, baseBackoffMs: 10, maxBackoffMs: 100 },
+    },
+    now: () => nowMs,
+    sleep: async (ms: number) => {
+      sleeps.push(ms);
+      nowMs += ms;
+    },
+  });
+
+  await wrapped("https://quota.test/one");
+  await wrapped("https://quota.test/two");
+  await wrapped("https://quota.test/three");
+
+  assert.deepStrictEqual(callTimes, [0, 1, 60_000]);
+  assert.deepStrictEqual(sleeps, [1, 59_999]);
+});
+
 test("rate limited fetch stops retries at max attempts", async () => {
   let nowMs = 0;
   const sleeps: number[] = [];

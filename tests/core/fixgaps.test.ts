@@ -184,6 +184,114 @@ test("fixgaps merges recovered trades, patches all timeframes, and is idempotent
   }
 });
 
+test("fixgaps sorts unsorted files when recovered data is before existing rows", async () => {
+  const fixture = await createFixture();
+  const db = openDatabase(fixture.dbPath);
+
+  try {
+    await fs.writeFile(fixture.fullPath, [`${TS2} 102 1 1 0`, `${TS1} 101 1 0 0`].join("\n"));
+    const { rootId } = insertIndexedFile(db, fixture.root, fixture.relativePath);
+    await runProcess(buildConfig(fixture.root, fixture.outDir, fixture.dbPath, "1m"), db);
+    db.db.exec("DELETE FROM events;");
+    insertGapEvent(db, {
+      rootId,
+      relativePath: fixture.relativePath,
+      startLine: 9_999,
+      endLine: 9_999,
+      gapMs: TS2 - TS0,
+      gapEndTs: TS2,
+    });
+
+    const recoveredTs = TS1 + 1;
+    const stats = await runFixGaps(buildConfig(fixture.root, fixture.outDir, fixture.dbPath, "1m"), db, {
+      adapterRegistry: createAdapterRegistry({
+        BITFINEX: oneTradeAdapter({
+          ts: recoveredTs,
+          price: 100.5,
+          size: 0.5,
+          side: "buy",
+          priceText: "100.5",
+          sizeText: "0.5",
+        }),
+      }),
+    });
+
+    assert.strictEqual(stats.deletedEvents, 1);
+    assert.strictEqual(stats.recoveredTrades, 1);
+    assert.strictEqual(readEventRows(db).length, 0);
+
+    const lines = (await fs.readFile(fixture.fullPath, "utf8")).trim().split("\n");
+    assert.deepStrictEqual(lines, [`${TS1} 101 1 0 0`, `${recoveredTs} 100.5 0.5 1 0`, `${TS2} 102 1 1 0`]);
+  } finally {
+    db.close();
+  }
+});
+
+test("fixgaps on unsorted files sorts and recovers mixed windows", async () => {
+  const fixture = await createFixture();
+  const db = openDatabase(fixture.dbPath);
+
+  try {
+    await fs.writeFile(fixture.fullPath, [`${TS2} 102 1 1 0`, `${TS1} 101 1 0 0`, `${TS2 + 60_000} 103 1 1 0`].join("\n"));
+    const { rootId } = insertIndexedFile(db, fixture.root, fixture.relativePath);
+    await runProcess(buildConfig(fixture.root, fixture.outDir, fixture.dbPath, "1m"), db);
+    db.db.exec("DELETE FROM events;");
+
+    insertGapEvent(db, {
+      rootId,
+      relativePath: fixture.relativePath,
+      startLine: 9_999,
+      endLine: 9_999,
+      gapMs: TS2 - TS0,
+      gapEndTs: TS2,
+    });
+    insertGapEvent(db, {
+      rootId,
+      relativePath: fixture.relativePath,
+      startLine: 9_999,
+      endLine: 9_999,
+      gapMs: 60_000,
+      gapEndTs: TS2 + 60_000,
+    });
+
+    const recoveredTsEarly = TS1 + 1;
+    const recoveredTsLate = TS2 + 30_000;
+    let seenWindowCount = 0;
+    const stats = await runFixGaps(buildConfig(fixture.root, fixture.outDir, fixture.dbPath, "1m"), db, {
+      adapterRegistry: createAdapterRegistry({
+        BITFINEX: {
+          name: "mixed-unsorted",
+          async recover(req) {
+            seenWindowCount = req.windows.length;
+            assert.strictEqual(req.windows.length, 2);
+            return [
+              { ts: recoveredTsEarly, price: 100.5, size: 0.5, side: "buy", priceText: "100.5", sizeText: "0.5" },
+              { ts: recoveredTsLate, price: 102.5, size: 0.25, side: "sell", priceText: "102.5", sizeText: "0.25" },
+            ];
+          },
+        },
+      }),
+    });
+
+    assert.strictEqual(seenWindowCount, 2);
+    assert.strictEqual(stats.deletedEvents, 2);
+    assert.strictEqual(stats.recoveredTrades, 2);
+    assert.strictEqual(stats.adapterError, 0);
+    assert.strictEqual(readEventRows(db).length, 0);
+
+    const lines = (await fs.readFile(fixture.fullPath, "utf8")).trim().split("\n");
+    assert.deepStrictEqual(lines, [
+      `${TS1} 101 1 0 0`,
+      `${recoveredTsEarly} 100.5 0.5 1 0`,
+      `${TS2} 102 1 1 0`,
+      `${recoveredTsLate} 102.5 0.25 0 0`,
+      `${TS2 + 60_000} 103 1 1 0`,
+    ]);
+  } finally {
+    db.close();
+  }
+});
+
 test("fixgaps deletes event when adapter succeeds with zero recovered trades", async () => {
   const fixture = await createFixture();
   const db = openDatabase(fixture.dbPath);

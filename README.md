@@ -257,9 +257,15 @@ events(
   gap_ms INTEGER,        -- max gap size within the grouped range (if gap)
   gap_miss INTEGER,      -- estimated missing trades for the max gap (if gap)
   gap_end_ts INTEGER,    -- timestamp of the trade after the max gap (if gap)
+  gap_fix_status TEXT,   -- NULL | missing_adapter | adapter_error
+  gap_fix_error TEXT,    -- last error message for fix attempt
+  gap_fix_updated_at INTEGER,
   created_at INTEGER
 )
 ```
+
+Fix queue index (SQL-first filtering):
+* `idx_events_fix_queue(event_type, gap_fix_status, collector, exchange, symbol, root_id, relative_path, id)`
 
 ### Gap detection (adaptive, single state)
 The detector maintains a **single** adaptive average gap (`avgGapMs`) per market, updated in a time‑weighted way.
@@ -284,8 +290,9 @@ Located in `scripts/`:
 
 ## X. Configuration
 
-Requires **Node ≥ 22**
-(uses built-in `node:sqlite` and `--experimental-strip-types`).
+Requires:
+* **Node ≥ 22** (uses built-in `node:sqlite` and `--experimental-strip-types`)
+* System `sort` utility (`/usr/bin/sort` on macOS, GNU/BSD sort accepted) for `fixgaps` file rewrites
 
 Install:
 
@@ -365,7 +372,11 @@ npm start -- <subcommand> [flags]
 For each grouped `(root_id, relative_path)` file:
 1. Resolve one or more gap windows from event line ranges (with `gap_end_ts/gap_ms` fallback when needed).
 2. Route by exchange adapter and fetch trades for those windows.
-3. Deterministically merge recovered trades into the original raw file (timestamp-sorted, deduped).
+3. Deterministically rewrite recovered files with a full timestamp sort-normalization pass:
+   * Build a temporary sortable stream of existing trades + recovered trades.
+   * Run external `sort` by timestamp and stable key.
+   * Write sorted output atomically; existing rows win duplicates, recovered rows are inserted only when missing.
+   * Preserve non-trade lines by appending them unchanged after sorted trade rows.
 4. Patch all existing timeframe binaries for that market over the affected timestamp range.
 5. Update event lifecycle:
    * Adapter succeeded (including 0 recovered trades): delete event row(s).
@@ -378,6 +389,15 @@ Supported adapters in this iteration:
 * `KRAKEN` → `api.kraken.com/0/public/Trades`
 * `BITFINEX` → `api-pub.bitfinex.com/v2/trades/.../hist`
 * `COINBASE` → brokerage ticker + exchange trades pagination
+* Adapter-level rate-limit handling includes host pacing/backoff. Bitfinex is clamped to conservative pacing (`4s` min interval, `14 req/min`). Kraken also retries `EGeneral:Too many requests` JSON responses.
+
+### Fixgaps output
+
+Definitive per-gap lines:
+* Success: `[fixgaps] EXCHANGE/SYMBOL/YYYY-MM-DD HH:mm : recover {recovered} / {gap_miss}`
+* Failure: `[fixgaps] EXCHANGE/SYMBOL/YYYY-MM-DD HH:mm : error (reason)`
+
+Transient status line (single-line TTY progress) shows fetch/wait/sort/patch phases while work is in flight.
 
 ### Fixgaps debug (optional)
 
@@ -385,6 +405,7 @@ Set env vars to inspect long-running retries and per-file progress:
 * `AGGR_FIXGAPS_DEBUG=1` — high-level file/window + adapter + HTTP retry logs
 * `AGGR_FIXGAPS_DEBUG_ADAPTERS=1` — adapter pagination logs only
 * `AGGR_FIXGAPS_DEBUG_HTTP=1` — HTTP retry/backoff logs only
+* `AGGR_FIXGAPS_PROGRESS=0` — disable transient one-line progress rendering
 
 ### Examples
 

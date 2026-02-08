@@ -6,6 +6,7 @@ import { createDefaultAdapterRegistry, type AdapterRegistry } from "./adapters/i
 import { extractGapWindows } from "./extract.js";
 import { mergeRecoveredTradesIntoFile } from "./merge.js";
 import { patchBinariesForRecoveredTrades } from "./patch.js";
+import { clearFixgapsProgress, logFixgapsLine, setFixgapsProgress } from "./progress.js";
 import { iterateGapFixEvents, type GapFixEventRow } from "./queue.js";
 
 const DEBUG_FIXGAPS = process.env.AGGR_FIXGAPS_DEBUG === "1";
@@ -39,7 +40,7 @@ export async function runFixGaps(config: Config, db: Db, options: FixGapsOptions
   };
 
   const adapterRegistry = options.adapterRegistry ?? createDefaultAdapterRegistry();
-  console.log(
+  logFixgapsLine(
     `[fixgaps] start filters=${config.collector ?? "ALL"}/${config.exchange ?? "ALL"}/${config.symbol ?? "ALL"} limit=${options.limit ?? "ALL"} retry=${options.retryStatuses?.join(",") ?? "NONE"}`,
   );
 
@@ -77,9 +78,10 @@ export async function runFixGaps(config: Config, db: Db, options: FixGapsOptions
   }
 
   const elapsed = ((Date.now() - start) / 1000).toFixed(2);
-  console.log(
+  logFixgapsLine(
     `[fixgaps] complete selected=${stats.selectedEvents} files=${stats.processedFiles} recovered=${stats.recoveredTrades} deleted=${stats.deletedEvents} missing_adapter=${stats.missingAdapter} adapter_error=${stats.adapterError} patched_timeframes=${stats.binariesPatched} elapsed=${elapsed}s`,
   );
+  clearFixgapsProgress();
 
   return stats;
 }
@@ -97,7 +99,7 @@ async function processGroup(
 
   const first = rows[0];
   if (DEBUG_FIXGAPS) {
-    console.log(
+    logFixgapsLine(
       `[fixgaps/debug] file_start exchange=${first.exchange} symbol=${first.symbol} path=${first.relative_path} events=${rows.length}`,
     );
   }
@@ -120,8 +122,10 @@ async function processGroup(
   }
 
   const filePath = path.join(first.root_path, first.relative_path);
+  const fileLabel = formatFileProgressLabel(first);
   let extraction;
   try {
+    setFixgapsProgress(`[fixgaps] scanning ${fileLabel} ...`);
     extraction = await extractGapWindows(filePath, rows);
   } catch (err) {
     db.updateGapFixStatus(
@@ -135,7 +139,7 @@ async function processGroup(
     return;
   }
   if (DEBUG_FIXGAPS) {
-    console.log(
+    logFixgapsLine(
       `[fixgaps/debug] windows path=${first.relative_path} resolvable=${extraction.windows.length} unresolved=${extraction.unresolvedEventIds.length}`,
     );
   }
@@ -158,17 +162,19 @@ async function processGroup(
     stats.adapterError += extraction.unresolvedEventIds.length;
   }
 
-  const resolvableEventIds = new Set<number>(extraction.windows.map((w) => w.eventId));
+  const selectedWindows = extraction.windows;
+  const resolvableEventIds = new Set<number>(selectedWindows.map((w) => w.eventId));
   if (!resolvableEventIds.size) {
     return;
   }
 
   let recovered;
   try {
+    setFixgapsProgress(`[fixgaps] recovering ${fileLabel} via ${adapter.name} (${selectedWindows.length} windows) ...`);
     recovered = await adapter.recover({
       exchange: first.exchange,
       symbol: first.symbol,
-      windows: extraction.windows,
+      windows: selectedWindows,
     });
   } catch (err) {
     const ids = [...resolvableEventIds];
@@ -190,20 +196,24 @@ async function processGroup(
     return;
   }
   if (DEBUG_FIXGAPS) {
-    console.log(
+    logFixgapsLine(
       `[fixgaps/debug] adapter_done adapter=${adapter.name} path=${first.relative_path} recovered=${recovered.length}`,
     );
   }
 
   if (recovered.length) {
     try {
+      setFixgapsProgress(`[fixgaps] merging ${fileLabel} (${recovered.length} recovered trades) ...`);
       const mergeResult = await mergeRecoveredTradesIntoFile(filePath, recovered);
       if (DEBUG_FIXGAPS) {
-        console.log(
+        logFixgapsLine(
           `[fixgaps/debug] merge_done path=${first.relative_path} inserted=${mergeResult.inserted} deduped=${recovered.length - mergeResult.inserted}`,
         );
       }
       if (mergeResult.insertedTrades.length) {
+        setFixgapsProgress(
+          `[fixgaps] patching ${fileLabel} binaries (${mergeResult.insertedTrades.length} inserted) ...`,
+        );
         const patchResult = await patchBinariesForRecoveredTrades(
           config,
           db,
@@ -218,7 +228,7 @@ async function processGroup(
         stats.binariesPatched += patchResult.patchedTimeframes;
         stats.recoveredTrades += mergeResult.inserted;
         if (DEBUG_FIXGAPS) {
-          console.log(
+          logFixgapsLine(
             `[fixgaps/debug] patch_done path=${first.relative_path} patched_timeframes=${patchResult.patchedTimeframes}`,
           );
         }
@@ -245,7 +255,7 @@ async function processGroup(
   }
 
   const deleteIds = [...resolvableEventIds];
-  const recoveredByEvent = countRecoveredByEvent(extraction.windows, recovered);
+  const recoveredByEvent = countRecoveredByEvent(selectedWindows, recovered);
   for (const id of deleteIds) {
     const row = rowsById.get(id);
     if (!row) continue;
@@ -254,7 +264,7 @@ async function processGroup(
   db.deleteEventsByIds(deleteIds);
   stats.deletedEvents += deleteIds.length;
   if (DEBUG_FIXGAPS) {
-    console.log(`[fixgaps/debug] file_done path=${first.relative_path} deleted=${deleteIds.length}`);
+    logFixgapsLine(`[fixgaps/debug] file_done path=${first.relative_path} deleted=${deleteIds.length}`);
   }
 }
 
@@ -293,12 +303,12 @@ function countRecoveredByEvent(
 
 function logGapRecovered(row: GapFixEventRow, recovered: number): void {
   const miss = row.gap_miss === null ? "?" : String(row.gap_miss);
-  console.log(`[fixgaps] ${formatGapLabel(row)} : recover ${recovered} / ${miss}`);
+  logFixgapsLine(`[fixgaps] ${formatGapLabel(row)} : recover ${recovered} / ${miss}`);
 }
 
 function logGapError(row: GapFixEventRow, reason: string): void {
   const sanitized = reason.replaceAll("\n", " ").replaceAll("\r", " ");
-  console.log(`[fixgaps] ${formatGapLabel(row)} : error (${sanitized})`);
+  logFixgapsLine(`[fixgaps] ${formatGapLabel(row)} : error (${sanitized})`);
 }
 
 function formatGapLabel(row: GapFixEventRow): string {
@@ -316,4 +326,9 @@ function formatGapMinuteUtc(ts: number | null): string {
   const hour = String(d.getUTCHours()).padStart(2, "0");
   const minute = String(d.getUTCMinutes()).padStart(2, "0");
   return `${year}-${month}-${day} ${hour}:${minute}`;
+}
+
+function formatFileProgressLabel(row: GapFixEventRow): string {
+  const fileName = path.posix.basename(row.relative_path);
+  return `${row.exchange}/${row.symbol}/${fileName}`;
 }

@@ -1,11 +1,13 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { FetchLike } from "./types.js";
+import { setFixgapsProgress } from "../progress.js";
 
 const RETRYABLE_STATUS = new Set<number>([429, 500, 502, 503, 504]);
 const MAX_SERVER_RETRY_AFTER_MS = 300_000;
 
 interface FetchPolicy {
   minIntervalMs: number;
+  maxRequestsPerMinute?: number;
   maxAttempts: number;
   baseBackoffMs: number;
   maxBackoffMs: number;
@@ -13,6 +15,7 @@ interface FetchPolicy {
 
 interface FetchPolicyOverride {
   minIntervalMs?: number;
+  maxRequestsPerMinute?: number;
   maxAttempts?: number;
   baseBackoffMs?: number;
   maxBackoffMs?: number;
@@ -33,7 +36,13 @@ const DEFAULT_POLICY: FetchPolicy = {
 };
 
 const HOST_OVERRIDES: Record<string, FetchPolicyOverride> = {
-  "api-pub.bitfinex.com": { minIntervalMs: 1000, maxAttempts: 8, baseBackoffMs: 500, maxBackoffMs: 10_000 },
+  "api-pub.bitfinex.com": {
+    minIntervalMs: 4000,
+    maxRequestsPerMinute: 14,
+    maxAttempts: 8,
+    baseBackoffMs: 10_000,
+    maxBackoffMs: 300_000,
+  },
   "api.kraken.com": { minIntervalMs: 400, maxAttempts: 6, baseBackoffMs: 500, maxBackoffMs: 10_000 },
   "api.exchange.coinbase.com": { minIntervalMs: 250, maxAttempts: 6, baseBackoffMs: 500, maxBackoffMs: 10_000 },
   "api.coinbase.com": { minIntervalMs: 200, maxAttempts: 6, baseBackoffMs: 400, maxBackoffMs: 8_000 },
@@ -48,6 +57,7 @@ export function createRateLimitedFetch(
   const now = options.now ?? Date.now;
   const sleep = options.sleep ?? defaultSleep;
   const nextAllowedAtByHost = new Map<string, number>();
+  const requestHistoryByHost = new Map<string, number[]>();
   const defaultPolicy = mergePolicy(DEFAULT_POLICY, options.defaultPolicy);
   const debug = process.env.AGGR_FIXGAPS_DEBUG_HTTP === "1" || process.env.AGGR_FIXGAPS_DEBUG === "1";
 
@@ -57,7 +67,7 @@ export function createRateLimitedFetch(
     const policy = resolvePolicy(host, defaultPolicy, options.hostOverrides);
 
     for (let attempt = 1; attempt <= policy.maxAttempts; attempt += 1) {
-      await waitForHostTurn(host, policy.minIntervalMs, nextAllowedAtByHost, now, sleep);
+      await waitForHostTurn(host, policy, nextAllowedAtByHost, requestHistoryByHost, now, sleep);
 
       let response: Response;
       try {
@@ -67,6 +77,9 @@ export function createRateLimitedFetch(
           throw err;
         }
         const backoffMs = computeBackoff(policy, attempt);
+        setFixgapsProgress(
+          `[fixgaps] waiting retry ${host} attempt=${attempt + 1}/${policy.maxAttempts} delay=${backoffMs}ms ...`,
+        );
         if (debug) {
           const message = err instanceof Error ? err.message : "unknown";
           console.log(
@@ -91,6 +104,9 @@ export function createRateLimitedFetch(
       const backoffMs = computeBackoff(policy, attempt);
       const serverDelayMs = retryAfterMs === undefined ? undefined : Math.min(MAX_SERVER_RETRY_AFTER_MS, retryAfterMs);
       const delayMs = Math.max(policy.minIntervalMs, serverDelayMs ?? backoffMs);
+      setFixgapsProgress(
+        `[fixgaps] waiting retry ${host} status=${response.status} attempt=${attempt + 1}/${policy.maxAttempts} delay=${delayMs}ms ...`,
+      );
       if (debug) {
         const retryAfterLog = retryAfterMs === undefined ? "none" : String(retryAfterMs);
         console.log(
@@ -109,6 +125,7 @@ export function createRateLimitedFetch(
 function mergePolicy(base: FetchPolicy, override?: FetchPolicyOverride): FetchPolicy {
   return {
     minIntervalMs: positiveOr(base.minIntervalMs, override?.minIntervalMs),
+    maxRequestsPerMinute: positiveOptionalOr(base.maxRequestsPerMinute, override?.maxRequestsPerMinute),
     maxAttempts: positiveOr(base.maxAttempts, override?.maxAttempts),
     baseBackoffMs: positiveOr(base.baseBackoffMs, override?.baseBackoffMs),
     maxBackoffMs: positiveOr(base.maxBackoffMs, override?.maxBackoffMs),
@@ -126,17 +143,31 @@ function resolvePolicy(
 
 async function waitForHostTurn(
   host: string,
-  minIntervalMs: number,
+  policy: FetchPolicy,
   nextAllowedAtByHost: Map<string, number>,
+  requestHistoryByHost: Map<string, number[]>,
   now: () => number,
   sleep: (ms: number) => Promise<void>,
 ): Promise<void> {
-  const nowMs = now();
-  const nextAllowedAt = nextAllowedAtByHost.get(host) ?? 0;
-  if (nextAllowedAt > nowMs) {
-    await sleep(nextAllowedAt - nowMs);
+  while (true) {
+    const nowMs = now();
+    const intervalWaitMs = computeIntervalWaitMs(host, nextAllowedAtByHost, nowMs);
+    const quotaWaitMs = computeQuotaWaitMs(host, policy, requestHistoryByHost, nowMs);
+    const waitMs = Math.max(intervalWaitMs, quotaWaitMs);
+    if (waitMs <= 0) {
+      nextAllowedAtByHost.set(host, nowMs + policy.minIntervalMs);
+      if (policy.maxRequestsPerMinute !== undefined) {
+        recordRequest(host, requestHistoryByHost, nowMs);
+      } else {
+        requestHistoryByHost.delete(host);
+      }
+      return;
+    }
+    if (waitMs >= 1000) {
+      setFixgapsProgress(`[fixgaps] waiting rate limit ${host} ${waitMs}ms ...`);
+    }
+    await sleep(waitMs);
   }
-  nextAllowedAtByHost.set(host, now() + minIntervalMs);
 }
 
 function computeBackoff(policy: FetchPolicy, attempt: number): number {
@@ -181,6 +212,60 @@ function positiveOr(fallback: number, candidate?: number): number {
   if (candidate === undefined) return fallback;
   if (!Number.isFinite(candidate) || candidate <= 0) return fallback;
   return Math.round(candidate);
+}
+
+function positiveOptionalOr(fallback: number | undefined, candidate?: number): number | undefined {
+  if (candidate === undefined) return fallback;
+  if (!Number.isFinite(candidate) || candidate <= 0) return fallback;
+  return Math.round(candidate);
+}
+
+function computeIntervalWaitMs(host: string, nextAllowedAtByHost: Map<string, number>, nowMs: number): number {
+  const nextAllowedAt = nextAllowedAtByHost.get(host) ?? 0;
+  if (nextAllowedAt <= nowMs) return 0;
+  return nextAllowedAt - nowMs;
+}
+
+function computeQuotaWaitMs(
+  host: string,
+  policy: FetchPolicy,
+  requestHistoryByHost: Map<string, number[]>,
+  nowMs: number,
+): number {
+  const maxPerMinute = policy.maxRequestsPerMinute;
+  if (maxPerMinute === undefined) return 0;
+  const history = requestHistoryByHost.get(host);
+  if (!history || !history.length) return 0;
+  pruneOldRequests(history, nowMs);
+  if (!history.length) {
+    requestHistoryByHost.delete(host);
+    return 0;
+  }
+  if (history.length < maxPerMinute) return 0;
+  const oldest = history[0];
+  const waitMs = oldest + 60_000 - nowMs;
+  return waitMs > 0 ? waitMs : 0;
+}
+
+function recordRequest(host: string, requestHistoryByHost: Map<string, number[]>, nowMs: number): void {
+  const history = requestHistoryByHost.get(host);
+  if (!history) {
+    requestHistoryByHost.set(host, [nowMs]);
+    return;
+  }
+  pruneOldRequests(history, nowMs);
+  history.push(nowMs);
+}
+
+function pruneOldRequests(history: number[], nowMs: number): void {
+  const threshold = nowMs - 60_000;
+  let idx = 0;
+  while (idx < history.length && history[idx] <= threshold) {
+    idx += 1;
+  }
+  if (idx > 0) {
+    history.splice(0, idx);
+  }
 }
 
 function toUrl(input: string | URL): URL {

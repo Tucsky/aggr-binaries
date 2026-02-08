@@ -1,5 +1,6 @@
 import zlib from "node:zlib";
 import type { FetchLike, GapWindow, RecoveredTrade, TradeSide } from "./types.js";
+import { formatProgressUrl, setFixgapsProgress } from "../progress.js";
 
 interface LocalZipHeader {
   method: number;
@@ -141,6 +142,7 @@ export function buildRecoveredTrade(
 }
 
 export async function fetchText(url: string, fetchImpl: FetchLike): Promise<string> {
+  setFixgapsProgress(`[fixgaps] fetching ${formatProgressUrl(url)} ...`);
   const res = await fetchImpl(url, { method: "GET" });
   if (!res.ok) {
     const body = await safeText(res);
@@ -150,6 +152,7 @@ export async function fetchText(url: string, fetchImpl: FetchLike): Promise<stri
 }
 
 export async function fetchBuffer(url: string, fetchImpl: FetchLike): Promise<Buffer> {
+  setFixgapsProgress(`[fixgaps] downloading ${formatProgressUrl(url)} ...`);
   const res = await fetchImpl(url, { method: "GET" });
   if (!res.ok) {
     const body = await safeText(res);
