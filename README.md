@@ -465,7 +465,7 @@ npm run serve
 * Client → server messages:
   * `setTarget {collector,exchange,symbol}` → loads companion + anchor and replies with `meta`
   * `setTimeframe {timeframe}` → reloads companion for same market, replies with `meta`
-  * `setStart {startTs}` → recomputes anchor, replies with `meta`
+  * `setStart {startTs}` → recomputes anchor from UTC start timestamp, replies with `meta`
   * `slice {fromIndex,toIndex}` → replies with `candles` slice
   * `listMarkets {}` → replies with `markets` (registry-backed)
   * `listTimeframes {collector,exchange,symbol}` → replies with `timeframes` (registry-backed)
@@ -484,7 +484,7 @@ npm run serve
 ### Preview UI (registry-backed controls)
 
 * Single WS connection; no URL params.
-* Collector select, market autocomplete (`EXCHANGE:SYMBOL`), timeframe dropdown, and start datetime.
+* Collector select, market autocomplete (`EXCHANGE:SYMBOL`), timeframe dropdown, and UTC start datetime.
 * Registry-driven discovery populates controls; changing selections sends messages instead of reconnecting.
 
 ### Preview chart scales and overlays

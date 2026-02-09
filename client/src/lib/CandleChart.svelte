@@ -21,6 +21,10 @@
   } from "./candleChartSeries.js";
   import { computeChartScaleMargins } from "../../../src/shared/chartScaleMargins.js";
   import {
+    computeAnchoredVisibleRange,
+    computeChartInitialSlice,
+  } from "../../../src/shared/chartInitialSlice.js";
+  import {
     findCandleAtOrBefore,
     formatLiquidationLegend,
     formatPriceLegend,
@@ -50,6 +54,7 @@
   let suppressRangeEvent = false;
   let hoverTimeMs: number | null = null;
   let currentMeta: Meta | null = null;
+  let alignInitialRangeToAnchor = false;
 
   let unsubCandles: (() => void) | null = null;
   let unsubMeta: (() => void) | null = null;
@@ -74,8 +79,10 @@
       currentMeta = meta;
       reset();
       if (!meta) return;
-      const fromIdx = Math.max(0, meta.anchorIndex - 500);
-      requestSlice(fromIdx, meta.anchorIndex, "initial load");
+      alignInitialRangeToAnchor = meta.anchorIndex < meta.records - 1;
+      const slice = computeChartInitialSlice(meta.anchorIndex, meta.records);
+      if (!slice) return;
+      requestSlice(slice.fromIndex, slice.toIndex, "initial load");
     });
 
     unsubStatus = statusStore.subscribe((status) => {
@@ -184,6 +191,7 @@
     points = [];
     hoverTimeMs = null;
     suppressRangeEvent = false;
+    alignInitialRangeToAnchor = false;
     priceSeries?.setData([]);
     totalVolumeSeries?.setData([]);
     deltaVolumeSeries?.setData([]);
@@ -203,7 +211,9 @@
       points = candles.slice();
       suppressRangeEvent = true;
       setSeriesData(points);
+      if (alignInitialRangeToAnchor) alignVisibleRangeToStart();
       suppressRangeEvent = false;
+      alignInitialRangeToAnchor = false;
       return;
     }
 
@@ -268,6 +278,19 @@
     shortLiqSeries?.setData(shortLiqData);
 
     refreshLegendFromCurrentPoint();
+  }
+
+  function alignVisibleRangeToStart(): void {
+    const ts = chart?.timeScale();
+    if (!ts || points.length === 0) return;
+    const logical = ts.getVisibleLogicalRange();
+    const span =
+      logical && Number.isFinite(logical.to) && Number.isFinite(logical.from)
+        ? logical.to - logical.from
+        : null;
+    const range = computeAnchoredVisibleRange(points.length, span);
+    if (!range) return;
+    ts.setVisibleLogicalRange(range);
   }
 
   function updateSeries(candle: Candle): void {

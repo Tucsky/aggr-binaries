@@ -3,6 +3,7 @@
   import { get } from "svelte/store";
   import Autocomplete from "./Autocomplete.svelte";
   import Dropdown from "./Dropdown.svelte";
+  import StartDateInput from "./StartDateInput.svelte";
   import TimeframeDropdown from "./TimeframeDropdown.svelte";
   import type { Market } from "./types.js";
   import {
@@ -19,6 +20,7 @@
       setStart,
       setTarget,
   } from "./viewerWs.js";
+  import { parseStartInputUtcMs } from "../../../src/shared/startInput.js";
 
   let local = get(prefs);
   let currentMarkets: Market[] = [];
@@ -118,6 +120,7 @@
         m.symbol === parsed.symbol,
     );
     if (!exists) return;
+    const startMs = parseStart(local.start);
     setTarget(
       {
         collector: local.collector,
@@ -128,12 +131,7 @@
         force,
         clearMeta: true,
         timeframe: local.timeframe,
-        startMs:
-          local.start === ""
-            ? null
-            : Number.isNaN(Date.parse(local.start))
-              ? undefined
-              : Date.parse(local.start),
+        startMs,
       },
     );
   }
@@ -155,18 +153,23 @@
     sendSelections(true);
   }
 
-  function handleStartChange(event: Event) {
-    const value = (event.target as HTMLInputElement).value;
-    local = { ...local, start: value };
-    savePrefs(local);
-    if (!value) {
-      setStart(null, { force: true });
-      return;
+  function handleStartChange(event: CustomEvent<{ value: string; ms: number | null }>) {
+    const nextValue = event.detail.value;
+    const nextMs = event.detail.ms;
+    const currentMs = parseStart(local.start);
+    if (nextValue !== local.start) {
+      local = { ...local, start: nextValue };
+      savePrefs(local);
     }
-    const ts = Date.parse(value);
-    if (!Number.isNaN(ts)) {
-      setStart(ts, { force: true });
+    if (nextMs !== currentMs) {
+      setStart(nextMs, { force: true });
     }
+  }
+
+  function parseStart(value: string): number | null | undefined {
+    if (!value) return null;
+    const ms = parseStartInputUtcMs(value);
+    return ms === null ? undefined : ms;
   }
 
   function handleReconnect() {
@@ -194,9 +197,8 @@
 
     <TimeframeDropdown />
 
-    <input
-      class="border-none bg-slate-900 outline-none px-2 py-1.5 text-slate-100 placeholder:text-slate-500"
-      type="datetime-local"
+    <StartDateInput
+      className="border-none bg-slate-900 outline-none px-2 py-1.5 text-slate-100 placeholder:text-slate-500"
       value={local.start}
       on:change={handleStartChange}
     />

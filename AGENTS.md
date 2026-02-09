@@ -30,6 +30,11 @@
 ## Logging
 - No per-line logs. Logs must be rate-limited and summarize counts.
 
+## Documentation scope
+- README is project documentation, not an iteration changelog.
+- When asked to document "relevant changes", only update durable project-level docs when behavior/capabilities materially change for operators or developers.
+- Do not add per-iteration UI details; prefer small edits to existing sections over new deep-dive subsections.
+
 ## Node / npm execution
 - Agent shells do NOT load NVM or interactive shell config.
 - When running Node or npm commands, always ensure the Node binary is available.
