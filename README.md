@@ -119,7 +119,7 @@ Applied during streaming, before accumulation.
 OHLC:          4 × int32  = 16 B
 vBuy/vSell:    2 × int64  = 16 B   // quote volume
 cBuy/cSell:    2 × uint32 =  8 B   // trade counts
-lBuy/lSell:    2 × int64  = 16 B   // liquidation quote volume
+lBuy/lSell:    2 × int64  = 16 B   // liquidation quote volume (NOT included in above fields)
 --------------------------------------------------------------
 
 Total ≈ 56 B

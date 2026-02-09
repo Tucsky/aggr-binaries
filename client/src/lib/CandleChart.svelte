@@ -82,7 +82,7 @@
       alignInitialRangeToAnchor = meta.anchorIndex < meta.records - 1;
       const slice = computeChartInitialSlice(meta.anchorIndex, meta.records);
       if (!slice) return;
-      requestSlice(slice.fromIndex, slice.toIndex, "initial load");
+      requestSlice(slice.fromIndex, slice.toIndex);
     });
 
     unsubStatus = statusStore.subscribe((status) => {
@@ -177,11 +177,11 @@
     const maxIdx = loadedMax();
 
     if (fromMs < minTime + margin && minIdx !== null && minIdx > 0) {
-      requestSlice(Math.max(0, minIdx - 500), minIdx - 1, "scroll left");
+      requestSlice(Math.max(0, minIdx - 500), minIdx - 1);
     }
 
     if (toMs > maxTime - margin && maxIdx !== null && maxIdx < currentMeta.records - 1) {
-      requestSlice(maxIdx + 1, Math.min(currentMeta.records - 1, maxIdx + 500), "scroll right");
+      requestSlice(maxIdx + 1, Math.min(currentMeta.records - 1, maxIdx + 500));
       suppressRangeEvent = true;
     }
   }

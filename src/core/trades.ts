@@ -106,17 +106,16 @@ export function accumulate(
   const slot = Math.floor(t.ts / timeframeMs) * timeframeMs;
   if (slot < acc.minMinute) acc.minMinute = slot;
   if (slot > acc.maxMinute) acc.maxMinute = slot;
-  const priceInt = Math.round(t.price * PRICE_SCALE);
   const quoteVol = BigInt(Math.round(t.price * t.size * VOL_SCALE));
   const existing = acc.buckets.get(slot);
   const isNew = existing === undefined;
   const bucket =
     existing ??
     {
-      open: priceInt,
-      high: priceInt,
-      low: priceInt,
-      close: priceInt,
+      open: 0,
+      high: 0,
+      low: 0,
+      close: 0,
       buyVol: 0n,
       sellVol: 0n,
       buyCount: 0,
@@ -124,17 +123,30 @@ export function accumulate(
       liqBuy: 0n,
       liqSell: 0n,
     };
-  bucket.high = Math.max(bucket.high, priceInt);
-  bucket.low = Math.min(bucket.low, priceInt);
-  bucket.close = priceInt;
-  if (t.side === "buy") {
-    bucket.buyVol += quoteVol;
-    bucket.buyCount += 1;
-    if (t.liquidation) bucket.liqBuy += quoteVol;
+
+  if (t.liquidation) {
+    if (t.side === "buy") bucket.liqBuy += quoteVol;
+    else bucket.liqSell += quoteVol;
   } else {
-    bucket.sellVol += quoteVol;
-    bucket.sellCount += 1;
-    if (t.liquidation) bucket.liqSell += quoteVol;
+    const priceInt = Math.round(t.price * PRICE_SCALE);
+    if (bucket.buyCount === 0 && bucket.sellCount === 0) {
+      bucket.open = priceInt;
+      bucket.high = priceInt;
+      bucket.low = priceInt;
+      bucket.close = priceInt;
+    } else {
+      bucket.high = Math.max(bucket.high, priceInt);
+      bucket.low = Math.min(bucket.low, priceInt);
+      bucket.close = priceInt;
+    }
+
+    if (t.side === "buy") {
+      bucket.buyVol += quoteVol;
+      bucket.buyCount += 1;
+    } else {
+      bucket.sellVol += quoteVol;
+      bucket.sellCount += 1;
+    }
   }
   acc.buckets.set(slot, bucket);
   return isNew;
