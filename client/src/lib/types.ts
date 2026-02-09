@@ -9,7 +9,6 @@ export interface Meta {
   timeframeMs: number;
   records: number;
   anchorIndex: number;
-  hasLiquidations: boolean;
 }
 
 export interface Prefs {

@@ -462,7 +462,6 @@ npm run serve
 
 * `GET /` → serves built frontend
 * `WS /ws` → no query params; all control uses JSON messages
-* Per-connection state: collector, exchange, symbol, timeframe, startMs, companion, anchorIndex, hasLiquidations
 * Client → server messages:
   * `setTarget {collector,exchange,symbol}` → loads companion + anchor and replies with `meta`
   * `setTimeframe {timeframe}` → reloads companion for same market, replies with `meta`
@@ -471,46 +470,37 @@ npm run serve
   * `listMarkets {}` → replies with `markets` (registry-backed)
   * `listTimeframes {collector,exchange,symbol}` → replies with `timeframes` (registry-backed)
 * Server → client messages:
-* `meta` (timeframe/timeframeMs, records, anchorIndex, startTs/endTs, priceScale/volumeScale, hasLiquidations)
+  * `meta` (timeframe/timeframeMs, records, anchorIndex, startTs/endTs, priceScale/volumeScale)
   * `candles` (slice response)
   * `markets`, `timeframes`, `error`
-* Works with dense (gap-filled) binaries; no reconnects required for target/timeframe/start changes.
-* `hasLiquidations` is persisted in companion metadata during processing/resampling and allows O(1) pane visibility decisions in preview (no runtime binary scan).
+* One connection stays open while target/timeframe/start changes.
 
 ### Preview resampling (on-demand, registry + binaries)
 
-* When the client requests a timeframe, the server ensures the binary exists and is fresh before serving slices.
-* Freshness: for each timeframe `tfMs`, `maxEnd = floor(rootEnd / tfMs) * tfMs` using the smallest timeframe (`root`) in the registry; a timeframe is fresh if its `endTs === maxEnd`.
-* Source selection: among timeframes where `dst % src === 0`, pick the largest fresh candidate (fallback to root); skip missing binaries and purge their registry rows.
-* Updates are append-only: compute missing `[from = dst.endTs, to = maxEnd]`; aggregate source candles into dst buckets and append to `dst.bin` and companion, then upsert registry.
-* Gaps (zero OHLC) are ignored for price aggregation so resampled OHLCs are not flattened by holes.
+* Requested timeframes are generated/refreshed on demand before slices are served.
+* Resampling is append-only and uses the best available smaller timeframe as source.
+* Gap candles (zero OHLC) are excluded from price aggregation.
 
 ### Preview UI (registry-backed controls)
 
 * Single WS connection; no URL params.
-* Collector select, market autocomplete (`EXCHANGE:SYMBOL` from registry), timeframe dropdown (user-managed list seeded by common TFs, highlights server-available TFs), start datetime.
+* Collector select, market autocomplete (`EXCHANGE:SYMBOL`), timeframe dropdown, and start datetime.
 * Registry-driven discovery populates controls; changing selections sends messages instead of reconnecting.
 
-### Preview chart panes
+### Preview chart scales and overlays
 
-* Built on `lightweight-charts` v5 with three panes (price / volume / liquidations).
-* Volume pane overlays two histogram series on one scale:
-  * Total volume: `buyVol + sellVol` (dimmed, sign-colored by buy-vs-sell dominance).
-  * Volume delta overlay: `abs(buyVol - sellVol)` (brighter foreground bar, same sign-color logic).
-* Liquidation pane uses centered signed histograms:
-  * Long liquidations: `-liqSell`.
-  * Short liquidations: `+liqBuy`.
-* If `meta.hasLiquidations` is false, the liquidation pane is collapsed/hidden in the UI.
+* Built on `lightweight-charts` v4 using one chart with multiple scales (`right`, `liq`, `volume`).
+* Price uses `right`; volume uses total + delta histograms on `volume`; liquidations use two histograms on `liq`.
+* Top-left in-chart legend rows (`Liquidations`, `Price`, `Volume`) toggle visibility and show hovered values.
+* Scale margins adapt to visible series; volume remains bottom-anchored when visible.
 
 ---
 
 ## XII. Summary
 
-* Append-only indexing, gap-aware outputs, checkpointed/resumable processing driven solely by companions/binaries.
-* Outputs are timeframe-scoped (`collector/exchange/symbol/<tf>.bin/.json`) and registered in SQLite (upsert during processing; `npm start -- registry` to rescan companions).
-* Processing flushes at intervals (`--flush-interval`) to persist checkpoints mid-market, truncate/rewrite resume slots, and prune old buckets for bounded memory.
-* No legacy assumptions in code; historical complexity is captured here for correctness.
-* Designed to safely process millions of files with minimal memory and syscall overhead.
+* Deterministic, append-only processing over binaries + companions.
+* Outputs are timeframe-scoped (`collector/exchange/symbol/<tf>.bin/.json`) and registered in SQLite.
+* Designed for large datasets with resumable processing and bounded memory.
 
 ## XIII. Development
 

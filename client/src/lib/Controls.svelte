@@ -179,7 +179,6 @@
   }
 
   function toggleSettings() {
-    console.log("toggling settings dropdown");
     settingsDropdownOpened = !settingsDropdownOpened;
   }
 </script>

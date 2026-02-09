@@ -1,23 +1,31 @@
 <script lang="ts">
   import {
-    CandlestickSeries,
     CrosshairMode,
-    HistogramSeries,
     PriceScaleMode,
     createChart,
-    type CandlestickData,
-    type HistogramData,
     type IChartApi,
     type ISeriesApi,
+    type MouseEventParams,
     type Time,
-    type WhitespaceData
   } from "lightweight-charts";
   import { onDestroy, onMount } from "svelte";
   import {
+    LONG_LIQ_COLOR,
+    SHORT_LIQ_COLOR,
+    buildSeriesData,
+    buildSeriesUpdate,
+    hasHistogramValue,
+    toTimeMs,
+    VOLUME_POSITIVE,
     VOLUME_POSITIVE_DIM,
-    mapPreviewSeries,
-    type PreviewSeriesPoint,
-  } from "../../../src/shared/previewSeries.js";
+  } from "./candleChartSeries.js";
+  import { computeChartScaleMargins } from "../../../src/shared/chartScaleMargins.js";
+  import {
+    findCandleAtOrBefore,
+    formatLiquidationLegend,
+    formatPriceLegend,
+    formatVolumeLegend,
+  } from "../../../src/shared/chartLegend.js";
   import type { Candle, Meta } from "./types.js";
   import { meta as metaStore, status as statusStore } from "./viewerStore.js";
   import { onCandles, requestSlice } from "./viewerWs.js";
@@ -29,44 +37,49 @@
   let deltaVolumeSeries: ISeriesApi<"Histogram"> | null = null;
   let longLiqSeries: ISeriesApi<"Histogram"> | null = null;
   let shortLiqSeries: ISeriesApi<"Histogram"> | null = null;
+
+  let liqValueEl: HTMLSpanElement;
+  let priceValueEl: HTMLSpanElement;
+  let volumeValueEl: HTMLSpanElement;
+
   let baseIndex: number | null = null;
-  let points: PreviewSeriesPoint[] = [];
-  let hasLiquidationData = false;
+  let points: Candle[] = [];
+  let showPriceSeries = true;
+  let showLiquidationSeries = true;
+  let showVolumeSeries = true;
   let suppressRangeEvent = false;
+  let hoverTimeMs: number | null = null;
   let currentMeta: Meta | null = null;
+
   let unsubCandles: (() => void) | null = null;
   let unsubMeta: (() => void) | null = null;
   let unsubStatus: (() => void) | null = null;
   let resizeObserver: ResizeObserver | null = null;
 
-  const PRICE_PANE_INDEX = 0;
-  const VOLUME_PANE_INDEX = 1;
-  const LIQUIDATION_PANE_INDEX = 2;
-  const PRICE_PANE_WEIGHT = 65;
-  const VOLUME_PANE_WEIGHT = 20;
-  const LIQUIDATION_PANE_WEIGHT = 15;
-  const HIDDEN_PANE_WEIGHT = 0.001;
-  const LONG_LIQ_COLOR = "#ff8c00";
-  const SHORT_LIQ_COLOR = "#b24dff";
-
-  type PricePoint = CandlestickData<Time> | WhitespaceData<Time>;
+  const legendCache: Record<"price" | "liq" | "volume", string> = {
+    price: "",
+    liq: "",
+    volume: "",
+  };
 
   onMount(() => {
     setupChart();
-    unsubCandles = onCandles((fromIndex, candles) =>
-      ingest(fromIndex, candles),
-    );
-    unsubMeta = metaStore.subscribe((m) => {
-      currentMeta = m;
-      hasLiquidationData = m?.hasLiquidations ?? false;
-      reset();
-      if (m) {
-        const fromIdx = Math.max(0, m.anchorIndex - 500);
-        requestSlice(fromIdx, m.anchorIndex, "initial load");
-      }
+    resetLegendValues();
+
+    unsubCandles = onCandles((fromIndex, candles) => {
+      ingest(fromIndex, candles);
     });
-    unsubStatus = statusStore.subscribe((s) => {
-      if (s !== "connected") reset();
+
+    unsubMeta = metaStore.subscribe((meta) => {
+      currentMeta = meta;
+      reset();
+      if (!meta) return;
+      const fromIdx = Math.max(0, meta.anchorIndex - 500);
+      requestSlice(fromIdx, meta.anchorIndex, "initial load");
+    });
+
+    unsubStatus = statusStore.subscribe((status) => {
+      if (status !== "connected") reset();
     });
   });
 
@@ -75,19 +88,13 @@
     unsubMeta?.();
     unsubStatus?.();
     resizeObserver?.disconnect();
+    chart?.unsubscribeCrosshairMove(handleCrosshairMove);
     chart?.remove();
   });
 
-  function setupChart() {
+  function setupChart(): void {
     chart = createChart(chartEl, {
-      layout: {
-        background: { color: "#0d1117" },
-        textColor: "#e6edf3",
-        panes: {
-          separatorColor: "rgba(255, 255, 255, 0.10)",
-          separatorHoverColor: "rgba(255, 255, 255, 0.12)",
-        },
-      },
+      layout: { background: { color: "#0d1117" }, textColor: "#e6edf3" },
       grid: {
         vertLines: { color: "#161b22", visible: false },
         horzLines: { color: "#161b22", visible: false },
@@ -101,109 +108,99 @@
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: { mode: PriceScaleMode.Logarithmic },
     });
-    priceSeries = chart.addSeries(CandlestickSeries, {
+
+    priceSeries = chart.addCandlestickSeries({
       upColor: "#3bca6d",
       downColor: "#d62828",
       wickUpColor: "#41f07b",
       wickDownColor: "#ff5253",
       borderVisible: false,
       priceLineVisible: false,
-    }, PRICE_PANE_INDEX);
-    totalVolumeSeries = chart.addSeries(HistogramSeries, {
+    });
+
+    totalVolumeSeries = chart.addHistogramSeries({
       priceScaleId: "volume",
       color: VOLUME_POSITIVE_DIM,
       priceLineVisible: false,
-      priceFormat: {
-        type: 'volume',
-      },
+      priceFormat: { type: "volume" },
       base: 0,
-    }, VOLUME_PANE_INDEX);
-    deltaVolumeSeries = chart.addSeries(HistogramSeries, {
+    });
+
+    deltaVolumeSeries = chart.addHistogramSeries({
       priceScaleId: "volume",
-      color: "#3bca6d",
+      color: VOLUME_POSITIVE,
       priceLineVisible: false,
-      priceFormat: {
-        type: 'volume',
-      },
+      priceFormat: { type: "volume" },
       base: 0,
-    }, VOLUME_PANE_INDEX);
-    longLiqSeries = chart.addSeries(HistogramSeries, {
+    });
+
+    longLiqSeries = chart.addHistogramSeries({
       priceScaleId: "liq",
       color: LONG_LIQ_COLOR,
       priceLineVisible: false,
-      priceFormat: {
-        type: 'volume',
-      },
+      priceFormat: { type: "volume" },
       base: 0,
-    }, LIQUIDATION_PANE_INDEX);
-    shortLiqSeries = chart.addSeries(HistogramSeries, {
+    });
+
+    shortLiqSeries = chart.addHistogramSeries({
       priceScaleId: "liq",
       color: SHORT_LIQ_COLOR,
       priceLineVisible: false,
-      priceFormat: {
-        type: 'volume',
-      },
+      priceFormat: { type: "volume" },
       base: 0,
-    }, LIQUIDATION_PANE_INDEX);
-    chart.priceScale("volume", VOLUME_PANE_INDEX).applyOptions({
-      scaleMargins: { top: 0.06, bottom: 0.04 },
     });
-    chart.priceScale("liq", LIQUIDATION_PANE_INDEX).applyOptions({
-      scaleMargins: { top: 0.1, bottom: 0.08 },
-    });
-    applyPaneLayout();
+
+    applySeriesVisibility();
+    applyScaleMargins();
+    chart.subscribeCrosshairMove(handleCrosshairMove);
+    chart.timeScale().subscribeVisibleTimeRangeChange(handleVisibleRangeChange);
     startResizeObserver();
-    chart.timeScale().subscribeVisibleTimeRangeChange((range) => {
-      if (
-        suppressRangeEvent ||
-        !range ||
-        range.from == null ||
-        range.to == null ||
-        !currentMeta
-      )
-        return;
-      if (points.length === 0 || baseIndex === null) return;
-      const minTime = Number(points[0].time) * 1000;
-      const maxTime = Number(points[points.length - 1].time) * 1000;
-      const fromMs = Number(range.from) * 1000;
-      const toMs = Number(range.to) * 1000;
-      const margin = currentMeta.timeframeMs * 2;
-      const minIdx = loadedMin();
-      const maxIdx = loadedMax();
-      if (fromMs < minTime + margin && minIdx !== null && minIdx > 0) {
-        const nextFrom = Math.max(0, minIdx - 500);
-        requestSlice(nextFrom, minIdx - 1, "scroll left");
-      }
-      if (
-        toMs > maxTime - margin &&
-        maxIdx !== null &&
-        maxIdx < currentMeta.records - 1
-      ) {
-        const nextTo = Math.min(currentMeta.records - 1, maxIdx + 500);
-        requestSlice(maxIdx + 1, nextTo, "scroll right");
-        suppressRangeEvent = true;
-      }
-    });
   }
 
-  function reset() {
+  function handleVisibleRangeChange(range: { from: Time; to: Time } | null): void {
+    if (suppressRangeEvent || !range || range.from == null || range.to == null || !currentMeta) return;
+    if (points.length === 0 || baseIndex === null) return;
+
+    const minTime = points[0].time;
+    const maxTime = points[points.length - 1].time;
+    const fromMs = Number(range.from) * 1000;
+    const toMs = Number(range.to) * 1000;
+    const margin = currentMeta.timeframeMs * 2;
+    const minIdx = loadedMin();
+    const maxIdx = loadedMax();
+
+    if (fromMs < minTime + margin && minIdx !== null && minIdx > 0) {
+      requestSlice(Math.max(0, minIdx - 500), minIdx - 1, "scroll left");
+    }
+
+    if (toMs > maxTime - margin && maxIdx !== null && maxIdx < currentMeta.records - 1) {
+      requestSlice(maxIdx + 1, Math.min(currentMeta.records - 1, maxIdx + 500), "scroll right");
+      suppressRangeEvent = true;
+    }
+  }
+
+  function reset(): void {
     baseIndex = null;
     points = [];
+    hoverTimeMs = null;
     suppressRangeEvent = false;
-    setSeriesData([]);
-    applyPaneLayout();
+    priceSeries?.setData([]);
+    totalVolumeSeries?.setData([]);
+    deltaVolumeSeries?.setData([]);
+    longLiqSeries?.setData([]);
+    shortLiqSeries?.setData([]);
+    resetLegendValues();
   }
 
-  function ingest(fromIndex: number, candles: Candle[]) {
-    if (!currentMeta) return;
-    if (!candles.length) return;
-    const slice = mapPreviewSeries(candles);
-    const sliceLen = slice.length;
+  function ingest(fromIndex: number, candles: Candle[]): void {
+    if (!currentMeta || candles.length === 0) return;
+
+    const sliceLen = candles.length;
     const sliceMax = fromIndex + sliceLen - 1;
 
     if (baseIndex === null || points.length === 0) {
       baseIndex = fromIndex;
-      points = slice;
+      points = candles.slice();
       suppressRangeEvent = true;
       setSeriesData(points);
       suppressRangeEvent = false;
@@ -212,35 +209,29 @@
 
     const min = loadedMin()!;
     const max = loadedMax()!;
-    const isAppendRight = fromIndex === max + 1;
-    const isPrependLeft = sliceMax === min - 1;
 
-    if (isAppendRight) {
+    if (fromIndex === max + 1) {
       const ts = chart?.timeScale();
       const prevPos = ts?.scrollPosition() ?? 0;
 
-      for (const point of slice) {
-        points.push(point);
-        priceSeries?.update(point.price);
-        totalVolumeSeries?.update(point.totalVolume);
-        deltaVolumeSeries?.update(point.volumeDelta);
-        longLiqSeries?.update(point.longLiquidation);
-        shortLiqSeries?.update(point.shortLiquidation);
+      for (let i = 0; i < sliceLen; i++) {
+        const candle = candles[i];
+        points.push(candle);
+        updateSeries(candle);
       }
 
-      if (prevPos > 0) {
-        ts?.scrollToPosition(prevPos - sliceLen, false);
-      }
+      refreshLegendFromCurrentPoint();
+      if (prevPos > 0) ts?.scrollToPosition(prevPos - sliceLen, false);
 
       setTimeout(() => {
         suppressRangeEvent = false;
-      }, 100)
+      }, 100);
       return;
     }
 
-    if (isPrependLeft) {
+    if (sliceMax === min - 1) {
       baseIndex = fromIndex;
-      points = slice.concat(points);
+      points = candles.concat(points);
       suppressRangeEvent = true;
       setSeriesData(points);
       suppressRangeEvent = false;
@@ -249,50 +240,104 @@
 
     const newMin = Math.min(min, fromIndex);
     const newMax = Math.max(max, sliceMax);
-    const merged: Array<PreviewSeriesPoint | undefined> = Array(newMax - newMin + 1);
+    const merged: Array<Candle | undefined> = Array(newMax - newMin + 1);
 
-    for (let i = 0; i < points.length; i++) {
-      merged[min - newMin + i] = points[i];
-    }
-    for (let i = 0; i < sliceLen; i++) {
-      merged[fromIndex - newMin + i] = slice[i];
-    }
+    for (let i = 0; i < points.length; i++) merged[min - newMin + i] = points[i];
+    for (let i = 0; i < sliceLen; i++) merged[fromIndex - newMin + i] = candles[i];
 
-    let first = merged.findIndex(Boolean);
+    const first = merged.findIndex(Boolean);
     let last = merged.length - 1;
     while (last >= 0 && !merged[last]) last -= 1;
     if (first === -1 || last < first) return;
 
     baseIndex = newMin + first;
-    points = merged.slice(first, last + 1).filter(Boolean) as PreviewSeriesPoint[];
+    points = merged.slice(first, last + 1).filter(Boolean) as Candle[];
+
     suppressRangeEvent = true;
     setSeriesData(points);
     suppressRangeEvent = false;
   }
 
-  function setSeriesData(data: readonly PreviewSeriesPoint[]) {
-    const len = data.length;
-    const priceData: PricePoint[] = new Array(len);
-    const totalVolumeData: HistogramData<Time>[] = new Array(len);
-    const deltaVolumeData: HistogramData<Time>[] = new Array(len);
-    const longLiqData: HistogramData<Time>[] = new Array(len);
-    const shortLiqData: HistogramData<Time>[] = new Array(len);
-
-    for (let i = 0; i < len; i += 1) {
-      const point = data[i];
-      priceData[i] = point.price;
-      totalVolumeData[i] = point.totalVolume;
-      deltaVolumeData[i] = point.volumeDelta;
-      longLiqData[i] = point.longLiquidation;
-      shortLiqData[i] = point.shortLiquidation;
-    }
-
+  function setSeriesData(data: readonly Candle[]): void {
+    const { priceData, totalVolumeData, deltaVolumeData, longLiqData, shortLiqData } =
+      buildSeriesData(data);
     priceSeries?.setData(priceData);
     totalVolumeSeries?.setData(totalVolumeData);
     deltaVolumeSeries?.setData(deltaVolumeData);
     longLiqSeries?.setData(longLiqData);
     shortLiqSeries?.setData(shortLiqData);
-    applyPaneLayout();
+
+    refreshLegendFromCurrentPoint();
+  }
+
+  function updateSeries(candle: Candle): void {
+    const { price, totalVolume, deltaVolume, longLiq, shortLiq } = buildSeriesUpdate(candle);
+    priceSeries?.update(price);
+    totalVolumeSeries?.update(totalVolume);
+    deltaVolumeSeries?.update(deltaVolume);
+    if (hasHistogramValue(longLiq)) longLiqSeries?.update(longLiq);
+    if (hasHistogramValue(shortLiq)) shortLiqSeries?.update(shortLiq);
+  }
+
+  function togglePriceSeries(): void {
+    showPriceSeries = !showPriceSeries;
+    applySeriesVisibility();
+    refreshLegendFromCurrentPoint();
+  }
+
+  function toggleLiquidationSeries(): void {
+    showLiquidationSeries = !showLiquidationSeries;
+    applySeriesVisibility();
+    refreshLegendFromCurrentPoint();
+  }
+
+  function toggleVolumeSeries(): void {
+    showVolumeSeries = !showVolumeSeries;
+    applySeriesVisibility();
+    refreshLegendFromCurrentPoint();
+  }
+
+  function applySeriesVisibility(): void {
+    priceSeries?.applyOptions({ visible: showPriceSeries });
+    totalVolumeSeries?.applyOptions({ visible: showVolumeSeries });
+    deltaVolumeSeries?.applyOptions({ visible: showVolumeSeries });
+    longLiqSeries?.applyOptions({ visible: showLiquidationSeries });
+    shortLiqSeries?.applyOptions({ visible: showLiquidationSeries });
+    applyScaleMargins();
+  }
+
+  function handleCrosshairMove(param: MouseEventParams<Time>): void {
+    hoverTimeMs = toTimeMs(param.time);
+    refreshLegendFromCurrentPoint();
+  }
+
+  function refreshLegendFromCurrentPoint(): void {
+    const candle =
+      hoverTimeMs === null
+        ? points.length > 0
+          ? points[points.length - 1]
+          : null
+        : findCandleAtOrBefore(points, hoverTimeMs);
+
+    setLegendText("liq", showLiquidationSeries ? formatLiquidationLegend(candle) : "off", liqValueEl);
+    setLegendText("price", showPriceSeries ? formatPriceLegend(candle) : "off", priceValueEl);
+    setLegendText("volume", showVolumeSeries ? formatVolumeLegend(candle) : "off", volumeValueEl);
+  }
+
+  function resetLegendValues(): void {
+    setLegendText("liq", "na", liqValueEl);
+    setLegendText("price", "na", priceValueEl);
+    setLegendText("volume", "na", volumeValueEl);
+  }
+
+  function setLegendText(
+    key: "price" | "liq" | "volume",
+    next: string,
+    target?: HTMLSpanElement,
+  ): void {
+    if (!target || legendCache[key] === next) return;
+    legendCache[key] = next;
+    target.textContent = next;
   }
 
   function loadedMin(): number | null {
@@ -304,32 +349,46 @@
     return baseIndex + points.length - 1;
   }
 
-  function applyPaneLayout() {
-    if (!chart) return;
-    const panes = chart.panes();
-    if (panes.length < 3) return;
-    panes[PRICE_PANE_INDEX].setStretchFactor(PRICE_PANE_WEIGHT);
-    panes[VOLUME_PANE_INDEX].setStretchFactor(VOLUME_PANE_WEIGHT);
-    panes[LIQUIDATION_PANE_INDEX].setStretchFactor(
-      hasLiquidationData ? LIQUIDATION_PANE_WEIGHT : HIDDEN_PANE_WEIGHT,
-    );
-    longLiqSeries?.applyOptions({ visible: hasLiquidationData });
-    shortLiqSeries?.applyOptions({ visible: hasLiquidationData });
-  }
-
-  function startResizeObserver() {
+  function startResizeObserver(): void {
     resizeObserver?.disconnect();
     resizeObserver = new ResizeObserver(() => {
       if (!chart) return;
-      const { clientWidth, clientHeight } = chartEl;
-      chart.resize(clientWidth, clientHeight);
-      applyPaneLayout();
+      chart.resize(chartEl.clientWidth, chartEl.clientHeight);
     });
     resizeObserver.observe(chartEl);
-    const { clientWidth, clientHeight } = chartEl;
-    chart?.resize(clientWidth, clientHeight);
-    applyPaneLayout();
+    chart?.resize(chartEl.clientWidth, chartEl.clientHeight);
+  }
+
+  function applyScaleMargins(): void {
+    if (!chart) return;
+    const margins = computeChartScaleMargins({
+      price: showPriceSeries,
+      liq: showLiquidationSeries,
+      volume: showVolumeSeries,
+    });
+    chart.priceScale("right").applyOptions({ scaleMargins: margins.right });
+    chart.priceScale("liq").applyOptions({ scaleMargins: margins.liq });
+    chart.priceScale("volume").applyOptions({ scaleMargins: margins.volume });
   }
 </script>
 
-<div bind:this={chartEl} class="h-full w-full"></div>
+<div class="relative h-full w-full">
+  <div bind:this={chartEl} class="h-full w-full"></div>
+
+  <div class="pointer-events-none absolute left-2 top-2 z-10 flex flex-col gap-1 text-xs leading-none">
+    <button class="pointer-events-auto flex items-center gap-1 border-0 text-slate-200" class:opacity-45={!showLiquidationSeries} on:click={toggleLiquidationSeries} type="button">
+      <span class="min-w-[75px] text-left py-1">Liquidations</span>
+      <span bind:this={liqValueEl} class="text-left bg-slate-950/80 hover:bg-slate-950/95 px-2 py-1 font-mono text-emerald-300">na</span>
+    </button>
+
+    <button class="pointer-events-auto flex items-center gap-1 border-0 text-slate-200" class:opacity-45={!showPriceSeries} on:click={togglePriceSeries} type="button">
+      <span class="min-w-[75px] text-left py-1">Price</span>
+      <span bind:this={priceValueEl} class="text-left bg-slate-950/80 hover:bg-slate-950/95 px-2 py-1 font-mono text-emerald-300">na</span>
+    </button>
+
+    <button class="pointer-events-auto flex items-center gap-1 border-0 text-slate-200" class:opacity-45={!showVolumeSeries} on:click={toggleVolumeSeries} type="button">
+      <span class="min-w-[75px] text-left py-1">Volume</span>
+      <span bind:this={volumeValueEl} class="text-left bg-slate-950/80 hover:bg-slate-950/95 px-2 py-1 font-mono text-emerald-300">na</span>
+    </button>
+  </div>
+</div>

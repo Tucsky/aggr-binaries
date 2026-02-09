@@ -31,7 +31,6 @@ interface ResampleRangeParams {
   exchange: string;
   symbol: string;
   src: Companion;
-  existingHasLiquidations: boolean;
   dstTimeframe: string;
   dstTimeframeMs: number;
   dstStart: number;
@@ -148,7 +147,6 @@ export async function ensurePreviewTimeframe(
         priceScale: source.priceScale ?? PRICE_SCALE,
         volumeScale: source.volumeScale ?? VOL_SCALE,
         records: existingRecords,
-        hasLiquidations: source.hasLiquidations ?? false,
       },
       target,
       targetMs,
@@ -163,7 +161,6 @@ export async function ensurePreviewTimeframe(
     exchange,
     symbol,
     src: source,
-    existingHasLiquidations: existingCompanion?.hasLiquidations ?? false,
     dstTimeframe: target,
     dstTimeframeMs: targetMs,
     dstStart,
@@ -195,7 +192,6 @@ async function resampleRange(params: ResampleRangeParams): Promise<void> {
     exchange,
     symbol,
     src,
-    existingHasLiquidations,
     dstTimeframe,
     dstTimeframeMs,
     dstStart,
@@ -236,7 +232,6 @@ async function resampleRange(params: ResampleRangeParams): Promise<void> {
       priceScale: src.priceScale ?? PRICE_SCALE,
       volumeScale: src.volumeScale ?? VOL_SCALE,
       records: existingRecords + Math.max(0, Math.floor((to - from) / dstTimeframeMs)),
-      hasLiquidations: existingHasLiquidations,
     });
     return;
   }
@@ -250,7 +245,6 @@ async function resampleRange(params: ResampleRangeParams): Promise<void> {
   );
 
   const buckets = new Map<number, AggBucket>();
-  let hasLiquidationsInRange = false;
   const fh = await fs.open(srcBinPath, "r");
   const chunkCandles = 4096;
   let cursor = srcFromIndex;
@@ -263,9 +257,6 @@ async function resampleRange(params: ResampleRangeParams): Promise<void> {
       if (ts < from || ts >= to) continue;
       const base = i * CANDLE_BYTES;
       const candle = readCandle(buf, base);
-      if (candle.liqBuy !== 0n || candle.liqSell !== 0n) {
-        hasLiquidationsInRange = true;
-      }
       const bucketTs = alignToBucket(ts, dstTimeframeMs);
       const aggregated = buckets.get(bucketTs) ?? createEmptyAgg();
       const isGap = candle.open === 0 && candle.high === 0 && candle.low === 0 && candle.close === 0;
@@ -308,7 +299,6 @@ async function resampleRange(params: ResampleRangeParams): Promise<void> {
     priceScale: src.priceScale ?? PRICE_SCALE,
     volumeScale: src.volumeScale ?? VOL_SCALE,
     records: existingRecords + appendedRecords,
-    hasLiquidations: existingHasLiquidations || hasLiquidationsInRange,
   };
   await writeCompanion(ctx.outputRoot, collector, exchange, symbol, dstTimeframe, companion);
   console.log(
@@ -561,7 +551,6 @@ function normalizeCompanion(meta: Partial<CompanionMetadata>, timeframe: string,
     priceScale: meta.priceScale ?? PRICE_SCALE,
     volumeScale: meta.volumeScale ?? VOL_SCALE,
     records,
-    hasLiquidations: meta.hasLiquidations ?? false,
   };
 }
 

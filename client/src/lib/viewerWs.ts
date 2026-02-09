@@ -234,7 +234,6 @@ function handleMeta(msg: any): void {
     timeframeMs: msg.timeframeMs ?? 60_000,
     records: msg.records ?? 0,
     anchorIndex: msg.anchorIndex ?? (msg.records > 0 ? msg.records - 1 : 0),
-    hasLiquidations: msg.hasLiquidations ?? false,
   };
   const unchanged =
     currentMeta &&
@@ -245,8 +244,7 @@ function handleMeta(msg: any): void {
     newMeta.anchorIndex === currentMeta.anchorIndex &&
     newMeta.timeframeMs === currentMeta.timeframeMs &&
     newMeta.priceScale === currentMeta.priceScale &&
-    newMeta.volumeScale === currentMeta.volumeScale &&
-    newMeta.hasLiquidations === currentMeta.hasLiquidations;
+    newMeta.volumeScale === currentMeta.volumeScale;
   if (unchanged) return;
 
   resetSlices(false);
