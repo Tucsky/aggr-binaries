@@ -266,6 +266,7 @@ events(
 
 Fix queue index (SQL-first filtering):
 * `idx_events_fix_queue(event_type, gap_fix_status, collector, exchange, symbol, root_id, relative_path, id)`
+* `idx_events_market_gap_end_ts(collector, exchange, symbol, gap_end_ts, id)` for timeline range scans
 
 ### Gap detection (adaptive, single state)
 The detector maintains a **single** adaptive average gap (`avgGapMs`) per market, updated in a time‑weighted way.
@@ -440,12 +441,12 @@ npm start -- fixgaps --dry-run --id 85
 
 ---
 
-## XI. Preview module (frontend + websocket server)
+## XI. Client module (timeline + viewer)
 
 ### Structure
 
 * Core pipeline: `src/core`
-* WebSocket server: `src/server.ts` (split into `server/` helpers)
+* HTTP + WebSocket server: `src/server.ts` (split into `server/` helpers)
 * Frontend: `client/` (Svelte + Vite + Tailwind)
 
 ### Commands
@@ -456,11 +457,23 @@ npm run build:client
 npm run serve
 ```
 
-* `serve` builds everything and starts the WS + static server from `dist/server.js`.
+* `serve` builds everything and starts the HTTP + WS + static server from `dist/server.js`.
+* `dev:client` proxies `/api` and `/ws` to `DEV_API_TARGET` (default `http://localhost:3000`), so the backend server must be running.
+
+### HTTP routes
+
+* `GET /` → serves built frontend
+* SPA fallback to `index.html` for client routes (for example `/timeline`, `/chart/...`)
+* `GET /api/timeline/markets[?timeframe=...]`
+  * without `timeframe`: grouped market ranges using `MIN(start_ts)` and `MAX(end_ts)` per `{collector,exchange,symbol}`
+  * with `timeframe`: per-timeframe rows
+* `GET /api/timeline/events?startTs=...&endTs=...&collector=...&exchange=...&symbol=...`
+  * `startTs`/`endTs` are required
+  * timestamp source is `gap_end_ts` when present, otherwise `files.start_ts` via `(root_id, relative_path)` join
+  * deterministic ordering: `collector, exchange, symbol, ts, id`
 
 ### WebSocket API (message-driven, single connection)
 
-* `GET /` → serves built frontend
 * `WS /ws` → no query params; all control uses JSON messages
 * Client → server messages:
   * `setTarget {collector,exchange,symbol}` → loads companion + anchor and replies with `meta`
@@ -481,11 +494,13 @@ npm run serve
 * Resampling is append-only and uses the best available smaller timeframe as source.
 * Gap candles (zero OHLC) are excluded from price aggregation.
 
-### Preview UI (registry-backed controls)
+### Client routes and UI behavior
 
-* Single WS connection; no URL params.
-* Collector select, market autocomplete (`EXCHANGE:SYMBOL`), timeframe dropdown, and UTC start datetime.
-* Registry-driven discovery populates controls; changing selections sends messages instead of reconnecting.
+* `/timeline` is the default route.
+* `/chart`, `/chart/:collector/:exchange/:symbol`, and optional query `?timeframe=...&startTs=...`.
+* Timeline page uses REST endpoints (`/api/timeline/*`) and renders virtualized rows with one canvas per visible row.
+* Viewer page keeps the existing single WS connection model (`/ws`) for candle metadata/slices.
+* URL is canonical route state; chart changes update URL with `replaceState`, and timeline state is restored when returning from Viewer.
 
 ### Preview chart scales and overlays
 

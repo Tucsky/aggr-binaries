@@ -11,6 +11,19 @@ export default defineConfig({
       ...svelteConfig, // gives plugin your preprocess from svelte.config.js
     }),
   ],
+  server: {
+    proxy: {
+      "/api": {
+        target: process.env.DEV_API_TARGET || "http://localhost:3000",
+        changeOrigin: true,
+      },
+      "/ws": {
+        target: process.env.DEV_API_TARGET || "http://localhost:3000",
+        changeOrigin: true,
+        ws: true,
+      },
+    },
+  },
   build: {
     outDir: "dist",
     emptyOutDir: true,

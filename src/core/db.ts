@@ -369,6 +369,7 @@ function migrateEvents(db: DatabaseSync): void {
   }
   db.exec("CREATE INDEX IF NOT EXISTS idx_events_file ON events(root_id, relative_path);");
   db.exec("CREATE INDEX IF NOT EXISTS idx_events_market ON events(collector, exchange, symbol);");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_events_market_gap_end_ts ON events(collector, exchange, symbol, gap_end_ts, id);");
   db.exec(
     "CREATE INDEX IF NOT EXISTS idx_events_fix_queue ON events(event_type, gap_fix_status, collector, exchange, symbol, root_id, relative_path, id);",
   );

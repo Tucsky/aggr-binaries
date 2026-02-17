@@ -1,18 +1,24 @@
 <script lang="ts">
-  import CandleChart from "./lib/CandleChart.svelte";
-  import Controls from "./lib/Controls.svelte";
+  import { onMount } from "svelte";
   import Toasts from "./lib/Toasts.svelte";
-  import { loadPrefs } from "./lib/viewerStore.js";
+  import { currentRoute, initRouteStore } from "./lib/routeStore.js";
+  import ViewerPage from "./pages/ViewerPage.svelte";
+  import TimelinePage from "./pages/TimelinePage.svelte";
 
-  loadPrefs();
+  onMount(() => {
+    initRouteStore();
+  });
 </script>
 
 <main
   class="flex h-screen min-h-screen flex-col bg-slate-950 text-sm text-slate-100 overflow-hidden"
 >
-  <Controls />
   <div class="flex-1 min-h-0">
-    <CandleChart />
+    {#if $currentRoute.kind === "timeline"}
+      <TimelinePage />
+    {:else}
+      <ViewerPage />
+    {/if}
   </div>
   <Toasts />
 </main>

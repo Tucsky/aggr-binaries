@@ -9,7 +9,7 @@
   "scripts": {
     "start": "npm run build:core && node dist/core/cli.js",
     "build": "npm run build:core && npm run build:client",
-    "test": "npm run build:tests && node --test dist-tests/tests/core/**/*.test.js",
+    "test": "npm run build:tests && node --test dist-tests/tests/**/*.test.js",
     "build:core": "tsc -p tsconfig.json",
     "build:tests": "tsc -p tsconfig.tests.json",
     "build:client": "vite build --config client/vite.config.ts",

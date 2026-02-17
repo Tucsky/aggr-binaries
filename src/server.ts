@@ -3,6 +3,7 @@ import { openDatabase } from "./core/db.js";
 import { createStaticServer } from "./server/staticServer.js";
 import { attachPreviewWs } from "./server/previewWs.js";
 import type { PreviewContext } from "./server/previewData.js";
+import { createTimelineApiHandler } from "./server/timelineApi.js";
 
 const PORT = Number(process.env.PORT || 3000);
 const OUTPUT_ROOT = path.resolve(process.env.OUTPUT_ROOT || "output");
@@ -11,7 +12,7 @@ const PUBLIC_DIR = path.resolve(process.env.PUBLIC_DIR || "client/dist");
 
 const db = openDatabase(DB_PATH);
 const ctx: PreviewContext = { db, outputRoot: OUTPUT_ROOT };
-const server = createStaticServer(PUBLIC_DIR);
+const server = createStaticServer(PUBLIC_DIR, createTimelineApiHandler(db));
 attachPreviewWs(server, ctx);
 
 process.on("exit", () => {

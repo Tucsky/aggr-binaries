@@ -6,6 +6,7 @@
   import StartDateInput from "./StartDateInput.svelte";
   import TimeframeDropdown from "./TimeframeDropdown.svelte";
   import type { Market } from "./types.js";
+  import { resolveRouteMarket, type ChartRoute } from "./routes.js";
   import {
       markets,
       meta,
@@ -21,6 +22,9 @@
       setTarget,
   } from "./viewerWs.js";
   import { parseStartInputUtcMs } from "../../../src/shared/startInput.js";
+  import { navigate } from "./routeStore.js";
+
+  export let route: ChartRoute | null = null;
 
   let local = get(prefs);
   let currentMarkets: Market[] = [];
@@ -28,6 +32,9 @@
   let marketOptions: string[] = [];
   let localMarket = combineMarket(local.exchange, local.symbol);
   let initialSyncDone = false;
+  let manualRouteOverride = false;
+  let routeInvalid = false;
+  let routeSignature = "";
   let settingsDropdownOpened = false;
   let settingsDropdownButton: HTMLButtonElement | null = null;
 
@@ -44,6 +51,13 @@
     unsubPrefs();
     unsubMarkets();
   });
+
+  $: routeSignature = route?.market
+    ? `${route.market.collector}:${route.market.exchange}:${route.market.symbol}:${route.timeframe ?? ""}:${route.startTs ?? ""}`
+    : "";
+  $: if (routeSignature) {
+    manualRouteOverride = false;
+  }
 
   $: prefs.set(local);
   $: if (!local.timeframe) local.timeframe = "1m";
@@ -75,10 +89,45 @@
 
   function syncFromMarkets(marketsList: Market[], force = false) {
     currentMarkets = marketsList;
+    routeInvalid = false;
     if (!marketsList.length) {
       collectorOptions = [];
       marketOptions = [];
       return;
+    }
+
+    const routeMarket = route?.market;
+    if (routeMarket && !manualRouteOverride) {
+      const found = resolveRouteMarket(marketsList, routeMarket);
+      if (!found) {
+        routeInvalid = true;
+        meta.set(null);
+        collectorOptions = uniq(marketsList.map((m) => m.collector));
+        const collector = collectorOptions.includes(routeMarket.collector.toUpperCase())
+          ? routeMarket.collector.toUpperCase()
+          : local.collector;
+        marketOptions = uniq(
+          marketsList
+            .filter((m) => m.collector === collector)
+            .map((m) => combineMarket(m.exchange, m.symbol)),
+        );
+        local = {
+          ...local,
+          collector: routeMarket.collector.toUpperCase(),
+          exchange: routeMarket.exchange.toUpperCase(),
+          symbol: routeMarket.symbol,
+        };
+        localMarket = combineMarket(local.exchange, local.symbol);
+        savePrefs(local);
+        return;
+      }
+      local = {
+        ...local,
+        collector: found.collector,
+        exchange: found.exchange,
+        symbol: found.symbol,
+      };
+      localMarket = combineMarket(found.exchange, found.symbol);
     }
 
     collectorOptions = uniq(marketsList.map((m) => m.collector));
@@ -137,6 +186,7 @@
   }
 
   function handleCollectorChange(event: Event) {
+    manualRouteOverride = true;
     const value = (event.target as HTMLSelectElement).value;
     local = { ...local, collector: value, exchange: "", symbol: "" };
     localMarket = "";
@@ -145,6 +195,7 @@
   }
 
   function handleMarketChange(value: string) {
+    manualRouteOverride = true;
     localMarket = value;
     const parsed = parseMarket(value);
     if (!parsed) return;
@@ -188,6 +239,15 @@
 
 <header class="border-b border-slate-800 bg-slate-900">
   <div class="flex flex-wrap items-stretch justify-between text-sm">
+    <button
+      class="border-none px-2 py-1.5 outline-none bg-slate-900 text-slate-100 hover:bg-slate-900/60"
+      type="button"
+      aria-label="Back to timeline"
+      on:click={() => navigate({ kind: "timeline" })}
+    >
+      ←
+    </button>
+
     <Autocomplete
       options={marketOptions}
       value={localMarket}
@@ -212,6 +272,11 @@
       Settings
     </button>
   </div>
+  {#if routeInvalid}
+    <div class="px-2 pb-1 text-[11px] text-amber-300">
+      Route market was not found in registry. Select a market to continue.
+    </div>
+  {/if}
 </header>
 
 <Dropdown
