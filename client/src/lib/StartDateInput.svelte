@@ -1,5 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher, tick } from "svelte";
+  import CalendarDays from "lucide-svelte/icons/calendar-days";
   import {
     formatStartInputUtc,
     normalizeStartInput,
@@ -316,15 +317,12 @@
     on:paste={handlePaste}
   />
   <button
-    class="absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 text-slate-300 hover:bg-slate-800/80 hover:text-slate-100"
+    class="absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 text-slate-100 hover:bg-slate-800/80 hover:text-slate-100"
     type="button"
     aria-label="Open calendar"
     on:click={openCalendarPicker}
   >
-    <svg viewBox="0 0 20 20" fill="none" class="h-4 w-4" aria-hidden="true">
-      <rect x="3" y="4.5" width="14" height="12" rx="2" stroke="currentColor" stroke-width="1.5" />
-      <path d="M3 8.5h14M6.5 3v3M13.5 3v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
-    </svg>
+    <CalendarDays class="h-4 w-4 text-slate-100" aria-hidden="true" strokeWidth={1.75} />
   </button>
   <input
     bind:this={calendarEl}

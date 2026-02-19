@@ -1,5 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher, onMount } from "svelte";
+  import Ellipsis from "lucide-svelte/icons/ellipsis";
   import {
     clampTs,
     clampMarketToRange,
@@ -46,10 +47,9 @@
   export let events: TimelineEvent[] = [];
   export let range: TimelineRange;
   export let viewRange: TimelineRange;
-  export let contentWidth = 1200;
+  export let timelineWidth = 1200;
   export let rowHeight = 33;
-  export let leftWidth = 310;
-  export let rightWidth = 88;
+  export let titleWidth = 310;
 
   const dispatch = createEventDispatcher<{
     open: OpenDetail;
@@ -68,7 +68,7 @@
   let lastPointerX = 0;
   let dragDistance = 0;
 
-  $: timelineWidth = Math.max(1, Math.floor(contentWidth));
+  $: timelineWidth = Math.max(1, Math.floor(timelineWidth));
   $: if (canvasEl) {
     // Keep canvas in lockstep with view/market/event updates.
     market;
@@ -114,7 +114,7 @@
       viewRange.endTs,
     );
 
-    console.log(visibleWindow.startIndex, visibleWindow.endIndex)
+    console.log(visibleWindow.startIndex, visibleWindow.endIndex);
     for (let i = visibleWindow.startIndex; i < visibleWindow.endIndex; i += 1) {
       drawEvent(ctx, events[i], cssWidth, cssHeight);
     }
@@ -127,7 +127,8 @@
     width: number,
     height: number,
   ): void {
-    if (sourceEndTs < viewRange.startTs || sourceStartTs > viewRange.endTs) return;
+    if (sourceEndTs < viewRange.startTs || sourceStartTs > viewRange.endTs)
+      return;
 
     const startXRaw = toTimelineX(sourceStartTs, viewRange, width);
     const endXRaw = toTimelineX(sourceEndTs, viewRange, width);
@@ -180,13 +181,22 @@
     }
   }
 
-  function drawEvent(ctx: CanvasRenderingContext2D, event: TimelineEvent, width: number, height: number): void {
-    const gapMs = Number.isFinite(event.gapMs) && (event.gapMs as number) > 0 ? (event.gapMs as number) : 0;
+  function drawEvent(
+    ctx: CanvasRenderingContext2D,
+    event: TimelineEvent,
+    width: number,
+    height: number,
+  ): void {
+    const gapMs =
+      Number.isFinite(event.gapMs) && (event.gapMs as number) > 0
+        ? (event.gapMs as number)
+        : 0;
     const rawStartTs = event.ts - gapMs;
     const rawEndTs = event.ts;
     const eventStartTs = Math.max(rawStartTs, range.startTs);
     const eventEndTs = Math.min(rawEndTs, range.endTs);
-    if (eventEndTs < viewRange.startTs || eventStartTs > viewRange.endTs) return;
+    if (eventEndTs < viewRange.startTs || eventStartTs > viewRange.endTs)
+      return;
 
     const x1 = toTimelineX(eventStartTs, viewRange, width);
     const x2 = toTimelineX(eventEndTs, viewRange, width);
@@ -254,7 +264,8 @@
       return;
     }
 
-    const horizontalDelta = Math.abs(event.deltaX) >= Math.abs(event.deltaY) ? event.deltaX : 0;
+    const horizontalDelta =
+      Math.abs(event.deltaX) >= Math.abs(event.deltaY) ? event.deltaX : 0;
     if (horizontalDelta !== 0) {
       event.preventDefault();
       const span = Math.max(1, viewRange.endTs - viewRange.startTs);
@@ -323,11 +334,24 @@
 
 <div
   class="grid min-w-max items-center hover:bg-slate-900/50"
-  style={`grid-template-columns: ${leftWidth}px ${contentWidth}px ${rightWidth}px; height: ${rowHeight}px;`}
+  style={`grid-template-columns: ${titleWidth}px ${timelineWidth}px; height: ${rowHeight}px;`}
 >
-  <div class="sticky left-0 z-20 h-full border-r border-slate-800 bg-slate-900/50 px-2 text-slate-200">
+  <div
+    class="sticky left-0 z-20 h-full border-r border-slate-800 bg-slate-900/50 px-2 text-slate-200"
+  >
     <div class="flex h-full items-center gap-2 text-[13px] tracking-[0.02em]">
-      <span class="font-medium">{market.collector}:{market.exchange}:{market.symbol}</span>
+      <span class="font-medium"
+        >{market.collector}:{market.exchange}:{market.symbol}</span
+      >
+      <button
+        bind:this={actionsButton}
+        class="ml-auto flex h-6 w-6 items-center justify-center rounded-md border-none py-1 text-slate-300 hover:bg-slate-800/50 hover:text-slate-100"
+        type="button"
+        aria-label="Row actions"
+        on:click={handleActionsClick}
+      >
+        <Ellipsis class="h-4 w-4" aria-hidden="true" strokeWidth={1.9} />
+      </button>
     </div>
   </div>
 
@@ -343,18 +367,5 @@
       on:pointercancel={handlePointerUp}
       on:pointerleave={handlePointerLeave}
     ></canvas>
-  </div>
-
-  <div class="sticky right-0 z-20 h-full border-l border-slate-800 bg-slate-900/50">
-    <div class="flex h-full items-center justify-center">
-      <button
-        bind:this={actionsButton}
-        class="rounded-md border-none py-1 text-slate-300 w-full h-full"
-        type="button"
-        on:click={handleActionsClick}
-      >
-        ...
-      </button>
-    </div>
   </div>
 </div>

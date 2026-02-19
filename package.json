@@ -34,6 +34,7 @@
   },
   "dependencies": {
     "lightweight-charts": "^4.1.0",
+    "lucide-svelte": "^0.574.0",
     "ws": "^8.18.0"
   }
 }

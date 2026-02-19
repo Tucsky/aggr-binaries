@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import { get } from "svelte/store";
+  import ArrowLeft from "lucide-svelte/icons/arrow-left";
+  import Settings2 from "lucide-svelte/icons/settings-2";
   import Autocomplete from "./Autocomplete.svelte";
   import Dropdown from "./Dropdown.svelte";
   import StartDateInput from "./StartDateInput.svelte";
@@ -245,7 +247,7 @@
       aria-label="Back to timeline"
       on:click={() => navigate({ kind: "timeline" })}
     >
-      ←
+      <ArrowLeft class="h-4 w-4 text-slate-100" aria-hidden="true" strokeWidth={1.9} />
     </button>
 
     <Autocomplete
@@ -269,7 +271,8 @@
       type="button"
       bind:this={settingsDropdownButton}
     >
-      Settings
+      <Settings2 class="h-4 w-4 text-slate-100" aria-hidden="true" strokeWidth={1.85} />
+      <span>Settings</span>
     </button>
   </div>
   {#if routeInvalid}

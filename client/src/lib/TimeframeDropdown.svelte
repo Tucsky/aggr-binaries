@@ -1,7 +1,17 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import { get } from "svelte/store";
+  import ChevronDown from "lucide-svelte/icons/chevron-down";
+  import Clock3 from "lucide-svelte/icons/clock-3";
+  import Pencil from "lucide-svelte/icons/pencil";
+  import Trash2 from "lucide-svelte/icons/trash-2";
+  import X from "lucide-svelte/icons/x";
   import { parseTimeframeMs } from "../../../src/shared/timeframes.js";
   import Dropdown from "./Dropdown.svelte";
+  import {
+    filterTimeframesByQuery,
+    type TimeframeEntry,
+  } from "./timeframeDropdownUtils.js";
   import {
       addTimeframe,
       prefs,
@@ -14,6 +24,7 @@
 
   let open = false;
   let anchorEl: HTMLElement | null = null;
+  let inputEl: HTMLInputElement | null = null;
 
   let input = "";
   let editing = false;
@@ -31,11 +42,15 @@
   ];
 
   $: normalized = normalizeTimeframes($timeframes);
-  $: grouped = buildGroups(normalized);
+  $: filtered = filterTimeframesByQuery(normalized, input);
+  $: grouped = buildGroups(filtered);
   $: inputMs = parseTimeframeMs(input.trim());
   $: currentValue = $prefs.timeframe || "";
   $: removable = new Set($timeframes);
   $: serverSet = new Set($serverTimeframes);
+  $: if (open) {
+    void focusInputOnOpen();
+  }
 
   function toggle() {
     open = !open;
@@ -46,20 +61,26 @@
     editing = false;
   }
 
-  function normalizeTimeframes(list: string[]) {
+  function normalizeTimeframes(list: string[]): TimeframeEntry[] {
     return Array.from(new Set(list))
       .map((tf) => ({ value: tf, ms: parseTimeframeMs(tf) }))
       .filter((t): t is { value: string; ms: number } => Boolean(t.ms))
       .sort((a, b) => a.ms - b.ms || a.value.localeCompare(b.value));
   }
 
-  function buildGroups(list: { value: string; ms: number }[]) {
+  function buildGroups(list: TimeframeEntry[]) {
     return groups
       .map((g) => ({
         ...g,
         items: list.filter((t) => t.ms >= g.min && t.ms < g.max),
       }))
       .filter((g) => g.items.length > 0);
+  }
+
+  async function focusInputOnOpen() {
+    await tick();
+    if (!open || !inputEl) return;
+    inputEl.focus();
   }
 
   function select(tf: string) {
@@ -99,18 +120,21 @@
   type="button"
   bind:this={anchorEl}
 >
-  {currentValue || "Select TF"}
+  <Clock3 class="h-3.5 w-3.5 text-slate-500" aria-hidden="true" strokeWidth={1.9} />
+  <span>{currentValue || "Select TF"}</span>
+  <ChevronDown class="h-3.5 w-3.5 text-slate-500" aria-hidden="true" strokeWidth={2} />
 </button>
 
 <Dropdown {open} {anchorEl} on:close={close}>
   <div class="w-32">
-    <div class="p-2 sticky top-0">
+    <div class="sticky top-0">
       <div
-        class="backdrop-blur-sm flex items-center gap-2 bg-slate-800/80 border border-slate-700 rounded px-2 py-1"
+        class="backdrop-blur-sm flex items-center gap-2 bg-slate-900/80 px-2 py-1"
       >
         <input
           class="flex-1 min-w-px bg-transparent outline-none text-slate-100 placeholder:text-slate-500 text-sm"
           placeholder="ex 1m"
+          bind:this={inputEl}
           bind:value={input}
           on:keydown={(e) => e.key === "Enter" && handleSubmit()}
         />
@@ -130,9 +154,9 @@
             aria-label="Toggle edit"
           >
             {#if editing}
-              ✕
+              <X class="h-3.5 w-3.5" aria-hidden="true" strokeWidth={2.2} />
             {:else}
-              ✎
+              <Pencil class="h-3.5 w-3.5" aria-hidden="true" strokeWidth={2} />
             {/if}
           </button>
         {/if}
@@ -168,7 +192,7 @@
                   on:click|stopPropagation={() => remove(tf.value)}
                   aria-label="Remove timeframe"
                 >
-                  🗑
+                  <Trash2 class="h-3.5 w-3.5" aria-hidden="true" strokeWidth={2} />
                 </button>
               {/if}
             </button>

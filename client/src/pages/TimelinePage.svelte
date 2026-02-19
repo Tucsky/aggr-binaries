@@ -23,7 +23,6 @@
   const ROW_HEIGHT = 33;
   const OVERSCAN = 8;
   const LEFT_WIDTH = 180;
-  const RIGHT_WIDTH = 33;
   const TIMELINE_STATE_STORAGE_KEY = "aggr.timeline.state.v1";
   const PAN_OVERSCROLL_RATIO = 0.01;
   const SYMBOL_INPUT_DEBOUNCE_MS = 180;
@@ -71,7 +70,7 @@
   });
   $: groupedEvents = groupEventsByMarket(allEvents);
   $: timelineWidth = Math.max(320, Math.floor(timelineViewportWidth));
-  $: totalGridWidth = LEFT_WIDTH + timelineWidth + RIGHT_WIDTH;
+  $: totalGridWidth = LEFT_WIDTH + timelineWidth;
   $: startIndex = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
   $: endIndex = Math.min(filteredMarkets.length, Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT) + OVERSCAN);
   $: topPadding = startIndex * ROW_HEIGHT;
@@ -88,11 +87,11 @@
     void initTimeline();
     if (!scrollEl) return;
     viewportHeight = scrollEl.clientHeight;
-    timelineViewportWidth = Math.max(320, scrollEl.clientWidth - LEFT_WIDTH - RIGHT_WIDTH);
+    timelineViewportWidth = Math.max(320, scrollEl.clientWidth - LEFT_WIDTH);
     resizeObserver = new ResizeObserver(() => {
       if (!scrollEl) return;
       viewportHeight = scrollEl.clientHeight;
-      timelineViewportWidth = Math.max(320, scrollEl.clientWidth - LEFT_WIDTH - RIGHT_WIDTH);
+      timelineViewportWidth = Math.max(320, scrollEl.clientWidth - LEFT_WIDTH);
     });
     resizeObserver.observe(scrollEl);
   });
@@ -360,7 +359,6 @@
   <div class="relative flex-1 min-h-0">
     <div bind:this={scrollEl} class="relative h-full overflow-y-auto overflow-x-hidden" on:scroll={handleScroll}>
       <div class="pointer-events-none absolute inset-y-0 left-0 z-0 border-r border-slate-800 bg-slate-900/50" style={`width:${LEFT_WIDTH}px;`}></div>
-      <div class="pointer-events-none absolute inset-y-0 z-0 border-l border-slate-800 bg-slate-900/50" style={`left:${timelineEndPx}px;width:${RIGHT_WIDTH}px;`}></div>
       {#if loadingMarkets}
         <div class="relative z-10 p-3 text-sm text-slate-300">Loading markets...</div>
       {:else if marketsError}
@@ -371,7 +369,7 @@
         <div class="relative z-10 min-w-max" style={`width: ${totalGridWidth}px;`}>
           <div style={`height: ${topPadding}px;`}></div>
           {#each visibleMarkets as market (rowIdentity(market))}
-            <TimelineRow {market} events={rowEvents(market)} range={selectedRange} {viewRange} contentWidth={timelineWidth} rowHeight={ROW_HEIGHT} leftWidth={LEFT_WIDTH} rightWidth={RIGHT_WIDTH} on:open={handleOpen} on:hover={handleHover} on:zoom={handleZoom} on:pan={handlePan} on:actions={handleRowActions} />
+            <TimelineRow {market} events={rowEvents(market)} range={selectedRange} {viewRange} timelineWidth={timelineWidth} rowHeight={ROW_HEIGHT} titleWidth={LEFT_WIDTH} on:open={handleOpen} on:hover={handleHover} on:zoom={handleZoom} on:pan={handlePan} on:actions={handleRowActions} />
           {/each}
           <div style={`height: ${bottomPadding}px;`}></div>
         </div>
