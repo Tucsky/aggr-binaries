@@ -4,6 +4,7 @@
     clampTs,
     clampMarketToRange,
     eventKind,
+    findTimelineEventWindow,
     toTimelineTs,
     toTimelineX,
     type TimelineRange,
@@ -107,8 +108,15 @@
       drawSourceRect(ctx, source.startTs, source.endTs, cssWidth, cssHeight);
     }
 
-    for (const event of events) {
-      drawEvent(ctx, event, cssWidth, cssHeight);
+    const visibleWindow = findTimelineEventWindow(
+      events,
+      viewRange.startTs,
+      viewRange.endTs,
+    );
+
+    console.log(visibleWindow.startIndex, visibleWindow.endIndex)
+    for (let i = visibleWindow.startIndex; i < visibleWindow.endIndex; i += 1) {
+      drawEvent(ctx, events[i], cssWidth, cssHeight);
     }
   }
 
@@ -251,7 +259,7 @@
       event.preventDefault();
       const span = Math.max(1, viewRange.endTs - viewRange.startTs);
       const msPerPx = span / Math.max(1, timelineWidth);
-      dispatch("pan", { deltaMs: Math.round(-horizontalDelta * msPerPx) });
+      dispatch("pan", { deltaMs: Math.round(-horizontalDelta * msPerPx) * -1 });
     }
   }
 

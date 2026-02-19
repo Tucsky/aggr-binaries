@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   clampTs,
+  findTimelineEventWindow,
   groupEventsByMarket,
   toTimelineTs,
   toTimelineX,
@@ -86,4 +87,101 @@ test("groupEventsByMarket groups rows and preserves deterministic order by ts/id
   const bucket = grouped.get("RAM:BINANCE:BTCUSDT");
   assert.ok(bucket);
   assert.deepStrictEqual(bucket?.map((event) => event.id), [1, 2, 3]);
+});
+
+test("findTimelineEventWindow returns visible inclusive ts window via binary search", () => {
+  const events: TimelineEvent[] = [
+    {
+      id: 1,
+      collector: "RAM",
+      exchange: "BINANCE",
+      symbol: "BTCUSDT",
+      eventType: "gap",
+      gapFixStatus: null,
+      ts: 100,
+      startLine: 1,
+      endLine: 1,
+      gapMs: 1,
+      gapMiss: 1,
+    },
+    {
+      id: 2,
+      collector: "RAM",
+      exchange: "BINANCE",
+      symbol: "BTCUSDT",
+      eventType: "gap",
+      gapFixStatus: null,
+      ts: 200,
+      startLine: 1,
+      endLine: 1,
+      gapMs: 1,
+      gapMiss: 1,
+    },
+    {
+      id: 3,
+      collector: "RAM",
+      exchange: "BINANCE",
+      symbol: "BTCUSDT",
+      eventType: "gap",
+      gapFixStatus: null,
+      ts: 300,
+      startLine: 1,
+      endLine: 1,
+      gapMs: 1,
+      gapMiss: 1,
+    },
+    {
+      id: 4,
+      collector: "RAM",
+      exchange: "BINANCE",
+      symbol: "BTCUSDT",
+      eventType: "gap",
+      gapFixStatus: null,
+      ts: 300,
+      startLine: 1,
+      endLine: 1,
+      gapMs: 1,
+      gapMiss: 1,
+    },
+    {
+      id: 5,
+      collector: "RAM",
+      exchange: "BINANCE",
+      symbol: "BTCUSDT",
+      eventType: "gap",
+      gapFixStatus: null,
+      ts: 400,
+      startLine: 1,
+      endLine: 1,
+      gapMs: 1,
+      gapMiss: 1,
+    },
+  ];
+
+  const win = findTimelineEventWindow(events, 200, 300);
+  assert.deepStrictEqual(win, { startIndex: 1, endIndex: 4 });
+  assert.deepStrictEqual(events.slice(win.startIndex, win.endIndex).map((event) => event.id), [2, 3, 4]);
+});
+
+test("findTimelineEventWindow handles empty or invalid ranges deterministically", () => {
+  const oneEvent: TimelineEvent[] = [
+    {
+      id: 1,
+      collector: "PI",
+      exchange: "BYBIT",
+      symbol: "BTCUSDT",
+      eventType: "gap",
+      gapFixStatus: null,
+      ts: 250,
+      startLine: 1,
+      endLine: 1,
+      gapMs: 1,
+      gapMiss: 1,
+    },
+  ];
+
+  assert.deepStrictEqual(findTimelineEventWindow([], 0, 1), { startIndex: 0, endIndex: 0 });
+  assert.deepStrictEqual(findTimelineEventWindow(oneEvent, 300, 200), { startIndex: 0, endIndex: 0 });
+  assert.deepStrictEqual(findTimelineEventWindow(oneEvent, 0, 200), { startIndex: 0, endIndex: 0 });
+  assert.deepStrictEqual(findTimelineEventWindow(oneEvent, 200, 250), { startIndex: 0, endIndex: 1 });
 });

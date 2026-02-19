@@ -7,7 +7,14 @@
   import TimelineRow from "../lib/TimelineRow.svelte";
   import { navigate } from "../lib/routeStore.js";
   import { addToast } from "../lib/toastStore.js";
-  import { fetchTimelineEvents, fetchTimelineMarkets, type TimelineMarketsResponse } from "../lib/timelineApi.js";
+  import { fetchTimelineEvents, fetchTimelineMarkets } from "../lib/timelineApi.js";
+  import {
+    buildEventsQueryKey,
+    normalizeMarketRows,
+    normalizeMarketsResponse,
+    restorePersistedViewRange,
+    unique,
+  } from "../lib/timelinePageHelpers.js";
   import type { TimelineEvent, TimelineMarket } from "../lib/timelineTypes.js";
   import { prefs } from "../lib/viewerStore.js";
   import { buildInitialViewRange, formatTimelineTsLabel, panTimelineRange, resolveTimelineTimeframe, zoomTimelineRange } from "../lib/timelineViewport.js";
@@ -19,6 +26,7 @@
   const RIGHT_WIDTH = 33;
   const TIMELINE_STATE_STORAGE_KEY = "aggr.timeline.state.v1";
   const PAN_OVERSCROLL_RATIO = 0.01;
+  const SYMBOL_INPUT_DEBOUNCE_MS = 180;
   let loadingMarkets = false;
   let loadingEvents = false;
   let marketsError = "";
@@ -49,6 +57,8 @@
   let viewportHeight = 0;
   let timelineViewportWidth = 900;
   let eventAbort: AbortController | null = null;
+  let symbolInputTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastEventsQueryKey = "";
   $: collectorOptions = unique(allMarkets.map((market) => market.collector));
   $: if (collectorFilter && !collectorOptions.includes(collectorFilter)) collectorFilter = "";
   $: exchangeOptions = unique(allMarkets.filter((market) => !collectorFilter || market.collector === collectorFilter).map((market) => market.exchange));
@@ -90,6 +100,7 @@
     persistTimelineState();
     resizeObserver?.disconnect();
     eventAbort?.abort();
+    clearSymbolInputTimer();
   });
   async function initTimeline(): Promise<void> {
     await loadOverallRange();
@@ -98,7 +109,18 @@
   async function loadOverallRange(): Promise<void> {
     try {
       const response = await fetchTimelineMarkets();
-      overallRange = computeGlobalRange(normalizeMarketRows(response.markets, timeframeFilter));
+      const normalizedMarkets = normalizeMarketRows(response.markets, timeframeFilter);
+      overallRange = computeGlobalRange(normalizedMarkets);
+      const inferred = unique(
+        (response.timeframes.length ? response.timeframes : normalizedMarkets.map((market) => market.timeframe)).filter(
+          (value): value is string => typeof value === "string" && value.length > 0,
+        ),
+      );
+      if (inferred.length) {
+        timeframeOptions = inferred;
+        const resolved = resolveTimelineTimeframe(timeframeFilter.trim() || "1m", inferred);
+        if (resolved) timeframeFilter = resolved;
+      }
     } catch {
       overallRange = null;
     }
@@ -108,15 +130,12 @@
     marketsError = "";
     try {
       let requested = timeframeFilter.trim() || "1m";
+      if (timeframeOptions.length) {
+        requested = resolveTimelineTimeframe(requested, timeframeOptions) || requested;
+      }
       let response = await fetchTimelineMarkets({ timeframe: requested });
       let normalized = normalizeMarketsResponse(response, requested);
       timeframeOptions = normalized.timeframes;
-      if (normalized.selectedTimeframe !== requested) {
-        requested = normalized.selectedTimeframe;
-        response = await fetchTimelineMarkets({ timeframe: requested });
-        normalized = normalizeMarketsResponse(response, requested);
-        timeframeOptions = normalized.timeframes;
-      }
       timeframeFilter = normalized.selectedTimeframe;
       allMarkets = normalized.markets;
       const nextCollectorOptions = unique(allMarkets.map((market) => market.collector));
@@ -129,13 +148,17 @@
       if (exchangeFilter && !nextExchangeOptions.includes(exchangeFilter)) exchangeFilter = "";
       const globalRange = overallRange ?? computeGlobalRange(allMarkets);
       if (globalRange) {
+        const nextEventsQueryKey = buildEventsQueryKey(globalRange, collectorFilter, exchangeFilter, symbolFilter);
         selectedRange = globalRange;
-        viewRange = restorePersistedViewRange(globalRange) ?? buildInitialViewRange(globalRange, YEAR_MS);
-        await loadEvents();
+        viewRange =
+          restorePersistedViewRange(globalRange, persistedViewStartTs, persistedViewEndTs, PAN_OVERSCROLL_RATIO) ??
+          buildInitialViewRange(globalRange, YEAR_MS);
+        if (nextEventsQueryKey !== lastEventsQueryKey) await loadEvents();
       } else {
         selectedRange = null;
         viewRange = null;
         allEvents = [];
+        lastEventsQueryKey = "";
       }
       crosshairTs = null;
       crosshairPx = null;
@@ -149,8 +172,10 @@
   async function loadEvents(): Promise<void> {
     if (!selectedRange) {
       allEvents = [];
+      lastEventsQueryKey = "";
       return;
     }
+    const queryKey = buildEventsQueryKey(selectedRange, collectorFilter, exchangeFilter, symbolFilter);
     eventAbort?.abort();
     eventAbort = new AbortController();
     loadingEvents = true;
@@ -160,24 +185,12 @@
         { collector: collectorFilter || undefined, exchange: exchangeFilter || undefined, symbol: symbolFilter || undefined, startTs: selectedRange.startTs, endTs: selectedRange.endTs },
         eventAbort.signal,
       );
+      lastEventsQueryKey = queryKey;
     } catch (err) {
       if ((err as { name?: string }).name !== "AbortError") eventsError = err instanceof Error ? err.message : "Failed to load timeline events";
     } finally {
       loadingEvents = false;
     }
-  }
-  function normalizeMarketsResponse(response: TimelineMarketsResponse, requestedTimeframe: string): { markets: TimelineMarket[]; timeframes: string[]; selectedTimeframe: string } {
-    const inferred = unique(response.markets.map((market) => market.timeframe).filter((value): value is string => typeof value === "string" && value.length > 0));
-    const fallback = requestedTimeframe || inferred[0] || "1m";
-    const timeframes = response.timeframes.length ? response.timeframes : inferred.length ? inferred : [fallback];
-    const selectedTimeframe = resolveTimelineTimeframe(requestedTimeframe, timeframes) || fallback;
-    return { markets: normalizeMarketRows(response.markets, selectedTimeframe), timeframes, selectedTimeframe };
-  }
-  function normalizeMarketRows(markets: TimelineMarket[], fallbackTimeframe: string): TimelineMarket[] {
-    return markets.map((market) => ({ ...market, collector: market.collector.toUpperCase(), exchange: market.exchange.toUpperCase(), timeframe: market.timeframe || fallbackTimeframe }));
-  }
-  function unique(values: string[]): string[] {
-    return Array.from(new Set(values)).sort();
   }
   function zoomAround(centerTs: number, deltaY: number): void {
     if (!selectedRange || !viewRange) return;
@@ -198,22 +211,23 @@
   function handleCollectorChange(event: CustomEvent<string>): void {
     collectorFilter = event.detail;
     persistTimelineState();
-    void loadEvents();
+    scheduleEventsReload(0);
   }
   function handleExchangeChange(event: CustomEvent<string>): void {
     exchangeFilter = event.detail;
     persistTimelineState();
-    void loadEvents();
+    scheduleEventsReload(0);
   }
 
   function handleSymbolInput(event: CustomEvent<string>): void {
     symbolFilter = event.detail.trim();
     persistTimelineState();
-    void loadEvents();
+    scheduleEventsReload(SYMBOL_INPUT_DEBOUNCE_MS);
   }
   function handleTimeframeChange(event: CustomEvent<string>): void {
     timeframeFilter = event.detail;
     persistTimelineState();
+    clearSymbolInputTimer();
     void loadMarkets();
   }
 
@@ -323,28 +337,21 @@
     }
   }
 
-  function restorePersistedViewRange(selected: TimelineRange): TimelineRange | null {
-    if (persistedViewStartTs === null || persistedViewEndTs === null) return null;
-    if (persistedViewEndTs <= persistedViewStartTs) return null;
-    const candidateSpan = persistedViewEndTs - persistedViewStartTs;
-    const fullSpan = selected.endTs - selected.startTs;
-    if (candidateSpan >= fullSpan) return { ...selected };
-    const overscrollMs = Math.round(candidateSpan * PAN_OVERSCROLL_RATIO);
-    const minStartTs = selected.startTs - overscrollMs;
-    const maxEndTs = selected.endTs + overscrollMs;
-    let nextStart = persistedViewStartTs;
-    let nextEnd = persistedViewEndTs;
-    if (nextStart < minStartTs) {
-      const delta = minStartTs - nextStart;
-      nextStart += delta;
-      nextEnd += delta;
+  function clearSymbolInputTimer(): void {
+    if (!symbolInputTimer) return;
+    clearTimeout(symbolInputTimer);
+    symbolInputTimer = null;
+  }
+  function scheduleEventsReload(delayMs: number): void {
+    clearSymbolInputTimer();
+    if (delayMs <= 0) {
+      void loadEvents();
+      return;
     }
-    if (nextEnd > maxEndTs) {
-      const delta = nextEnd - maxEndTs;
-      nextStart -= delta;
-      nextEnd -= delta;
-    }
-    return nextEnd > nextStart ? { startTs: nextStart, endTs: nextEnd } : null;
+    symbolInputTimer = setTimeout(() => {
+      symbolInputTimer = null;
+      void loadEvents();
+    }, delayMs);
   }
 </script>
 <div class="flex h-full min-h-0 flex-col bg-slate-950 text-slate-100">

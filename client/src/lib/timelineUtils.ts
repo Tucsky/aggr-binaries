@@ -5,6 +5,11 @@ export interface TimelineRange {
   endTs: number;
 }
 
+export interface TimelineEventWindow {
+  startIndex: number;
+  endIndex: number;
+}
+
 export const TIMELINE_EDGE_PADDING_PX = 8;
 export interface TimelineEdgePadding {
   leftPx: number;
@@ -102,6 +107,19 @@ export function clampMarketToRange(market: TimelineMarket, range: TimelineRange)
   return { startTs, endTs };
 }
 
+export function findTimelineEventWindow(
+  events: TimelineEvent[],
+  startTs: number,
+  endTs: number,
+): TimelineEventWindow {
+  if (!events.length || endTs < startTs) {
+    return { startIndex: 0, endIndex: 0 };
+  }
+  const startIndex = lowerBoundEventTs(events, startTs);
+  const endIndex = upperBoundEventTs(events, endTs);
+  return { startIndex, endIndex };
+}
+
 function resolveTimelinePadding(
   width: number,
   edgePaddingPx: number | TimelineEdgePadding,
@@ -121,4 +139,32 @@ function normalizePadding(edgePadding: number | TimelineEdgePadding): TimelineEd
     return { leftPx: edgePadding, rightPx: edgePadding };
   }
   return edgePadding;
+}
+
+function lowerBoundEventTs(events: TimelineEvent[], minTs: number): number {
+  let lo = 0;
+  let hi = events.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (events[mid].ts < minTs) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo;
+}
+
+function upperBoundEventTs(events: TimelineEvent[], maxTs: number): number {
+  let lo = 0;
+  let hi = events.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (events[mid].ts <= maxTs) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo;
 }
