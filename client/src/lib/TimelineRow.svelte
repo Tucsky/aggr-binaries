@@ -3,7 +3,6 @@
   import Ellipsis from "lucide-svelte/icons/ellipsis";
   import {
     clampTs,
-    clampMarketToRange,
     eventKind,
     findTimelineEventWindow,
     toTimelineTs,
@@ -11,6 +10,12 @@
     type TimelineRange,
   } from "./timelineUtils.js";
   import { eventPaintStyle, roundedRectPath } from "./timelineRowCanvas.js";
+  import {
+    drawTimelineSourceRect,
+    INDEXED_SOURCE_STYLE,
+    PROCESSED_SOURCE_STYLE,
+    resolveTimelineSourceRange,
+  } from "./timelineRowSource.js";
   import type { TimelineEvent, TimelineHoverEvent, TimelineMarket } from "./timelineTypes.js";
 
   interface OpenDetail {
@@ -106,9 +111,38 @@
 
     markerHits = [];
 
-    const source = clampMarketToRange(market, range);
-    if (source) {
-      drawSourceRect(ctx, source.startTs, source.endTs, cssWidth, cssHeight);
+    const indexedSource = resolveTimelineSourceRange(
+      market.indexedStartTs,
+      market.indexedEndTs,
+      range,
+    );
+    const processedSource = resolveTimelineSourceRange(
+      market.processedStartTs,
+      market.processedEndTs,
+      range,
+    );
+
+    if (indexedSource) {
+      drawTimelineSourceRect(
+        ctx,
+        indexedSource.startTs,
+        indexedSource.endTs,
+        viewRange,
+        cssWidth,
+        cssHeight,
+        INDEXED_SOURCE_STYLE,
+      );
+    }
+    if (processedSource) {
+      drawTimelineSourceRect(
+        ctx,
+        processedSource.startTs,
+        processedSource.endTs,
+        viewRange,
+        cssWidth,
+        cssHeight,
+        PROCESSED_SOURCE_STYLE,
+      );
     }
 
     const visibleWindow = findTimelineEventWindow(
@@ -119,67 +153,6 @@
 
     for (let i = visibleWindow.startIndex; i < visibleWindow.endIndex; i += 1) {
       drawEvent(ctx, events[i], cssWidth, cssHeight);
-    }
-  }
-
-  function drawSourceRect(
-    ctx: CanvasRenderingContext2D,
-    sourceStartTs: number,
-    sourceEndTs: number,
-    width: number,
-    height: number,
-  ): void {
-    if (sourceEndTs < viewRange.startTs || sourceStartTs > viewRange.endTs)
-      return;
-
-    const startXRaw = toTimelineX(sourceStartTs, viewRange, width);
-    const endXRaw = toTimelineX(sourceEndTs, viewRange, width);
-    const x1 = Math.max(0, Math.min(width, startXRaw));
-    const x2 = Math.max(0, Math.min(width, endXRaw));
-    if (x2 <= x1) return;
-
-    const barHeight = 20;
-    const y = Math.floor((height - barHeight) / 2);
-    const radius = 4;
-    const roundLeft = sourceStartTs >= viewRange.startTs;
-    const roundRight = sourceEndTs <= viewRange.endTs;
-    const fillColor = "rgba(46,95,171,0.50)";
-    const strokeColor = "rgba(125,177,255,0.72)";
-
-    roundedRectPath(ctx, x1, y, x2 - x1, barHeight, {
-      topLeft: roundLeft ? radius : 0,
-      bottomLeft: roundLeft ? radius : 0,
-      topRight: roundRight ? radius : 0,
-      bottomRight: roundRight ? radius : 0,
-    });
-    ctx.fillStyle = fillColor;
-    ctx.fill();
-    ctx.strokeStyle = strokeColor;
-    ctx.lineWidth = 1;
-    ctx.stroke();
-
-    // Hide side borders for overflowing edges while keeping rounded corners when visible.
-    if (!roundLeft) {
-      ctx.fillStyle = fillColor;
-      ctx.fillRect(x1 - 1, y + 1, 2, Math.max(1, barHeight - 2));
-    }
-    if (!roundRight) {
-      ctx.fillStyle = fillColor;
-      ctx.fillRect(x2 - 1, y + 1, 2, Math.max(1, barHeight - 2));
-    }
-
-    if (!roundLeft || !roundRight) {
-      // Repaint top/bottom only when masking a clipped side border.
-      ctx.strokeStyle = strokeColor;
-      ctx.lineWidth = 1;
-      const top = y + 0.5;
-      const bottom = y + barHeight - 0.5;
-      ctx.beginPath();
-      ctx.moveTo(x1 + (roundLeft ? 0.5 : 0), top);
-      ctx.lineTo(x2 - (roundRight ? 0.5 : 0), top);
-      ctx.moveTo(x1 + (roundLeft ? 0.5 : 0), bottom);
-      ctx.lineTo(x2 - (roundRight ? 0.5 : 0), bottom);
-      ctx.stroke();
     }
   }
 

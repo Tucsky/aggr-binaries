@@ -11,10 +11,8 @@ export interface RectCorners {
 }
 
 export function eventPaintStyle(kind: string): EventPaintStyle {
-  if (kind === "adapter_error") return { fill: "rgba(153,27,27,0.72)", stroke: "rgba(252,165,165,0.95)" };
-  if (kind === "missing_adapter") return { fill: "rgba(88,28,135,0.64)", stroke: "rgba(216,180,254,0.94)" };
-  if (kind === "parse_error") return { fill: "rgba(127,29,29,0.58)", stroke: "rgba(254,202,202,0.90)" };
-  return { fill: "rgba(185,28,28,0.64)", stroke: "rgba(252,165,165,0.95)" };
+  if (kind === "gap") return { fill: "#d62828", stroke: "#ff5253" };
+  return { fill: "#e65100", stroke: "#f57c00" };
 }
 
 export function roundedRectPath(

@@ -8,6 +8,10 @@ export interface TimelineMarket {
   timeframe: string;
   startTs: number;
   endTs: number;
+  indexedStartTs?: number | null;
+  indexedEndTs?: number | null;
+  processedStartTs?: number | null;
+  processedEndTs?: number | null;
 }
 
 export interface TimelineEvent {
@@ -38,6 +42,23 @@ export interface TimelineMarketsResult {
   timeframes: string[];
 }
 
+interface TimelineIndexedMarketRow {
+  collector: string;
+  exchange: string;
+  symbol: string;
+  start_ts: number;
+  end_ts: number;
+}
+
+interface TimelineRegistryMarketRow {
+  collector: string;
+  exchange: string;
+  symbol: string;
+  timeframe: string;
+  start_ts: number;
+  end_ts: number;
+}
+
 export type HttpApiHandler = (
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -47,50 +68,12 @@ export type HttpApiHandler = (
 export function listTimelineMarkets(db: Db, timeframe?: string): TimelineMarketsResult {
   const timeframes = listTimelineTimeframes(db);
   const selected = timeframe?.trim();
-  if (selected) {
-    const rows =
-      (db.db
-        .prepare(
-          `SELECT collector, exchange, symbol, timeframe, start_ts, end_ts
-           FROM registry
-           WHERE timeframe = :timeframe
-           ORDER BY collector, exchange, symbol;`,
-        )
-        .all({ timeframe: selected }) as Array<{
-        collector: string;
-        exchange: string;
-        symbol: string;
-        timeframe: string;
-        start_ts: number;
-        end_ts: number;
-      }>) ?? [];
-    return { markets: mapTimelineMarkets(rows), timeframes };
-  }
-
-  const rows =
-    (db.db
-      .prepare(
-        `SELECT collector, exchange, symbol, MIN(start_ts) AS start_ts, MAX(end_ts) AS end_ts
-         FROM registry
-         GROUP BY collector, exchange, symbol
-         ORDER BY collector, exchange, symbol;`,
-      )
-      .all() as Array<{
-      collector: string;
-      exchange: string;
-      symbol: string;
-      start_ts: number;
-      end_ts: number;
-    }>) ?? [];
-
-  const markets = rows.map((row) => ({
-    collector: row.collector.toUpperCase(),
-    exchange: row.exchange.toUpperCase(),
-    symbol: row.symbol,
-    timeframe: "ALL",
-    startTs: row.start_ts,
-    endTs: row.end_ts,
-  }));
+  const indexedRows = listTimelineIndexedMarketRanges(db);
+  const registryRows = selected
+    ? listTimelineRegistryRangesByTimeframe(db, selected)
+    : listTimelineRegistryRangesAllTimeframes(db);
+  const fallbackTimeframe = selected || "ALL";
+  const markets = mergeTimelineMarketRanges(indexedRows, registryRows, fallbackTimeframe);
   return { markets, timeframes };
 }
 
@@ -235,22 +218,146 @@ function listTimelineTimeframes(db: Db): string[] {
   return rows.map((row) => row.timeframe);
 }
 
-function mapTimelineMarkets(
-  rows: Array<{
-    collector: string;
-    exchange: string;
-    symbol: string;
-    timeframe: string;
-    start_ts: number;
-    end_ts: number;
-  }>,
+function listTimelineIndexedMarketRanges(db: Db): TimelineIndexedMarketRow[] {
+  return (
+    (db.db
+      .prepare(
+        // files only stores logical start_ts, so indexed-only rows use min/max start_ts as their visible bounds.
+        `SELECT collector, exchange, symbol, MIN(start_ts) AS start_ts, MAX(start_ts) AS end_ts
+         FROM files
+         GROUP BY collector, exchange, symbol
+         ORDER BY collector, exchange, symbol;`,
+      )
+      .all() as unknown as TimelineIndexedMarketRow[]) ?? []
+  );
+}
+
+function listTimelineRegistryRangesByTimeframe(db: Db, timeframe: string): TimelineRegistryMarketRow[] {
+  return (
+    (db.db
+      .prepare(
+        `SELECT collector, exchange, symbol, timeframe, start_ts, end_ts
+         FROM registry
+         WHERE timeframe = :timeframe
+         ORDER BY collector, exchange, symbol;`,
+      )
+      .all({ timeframe }) as unknown as TimelineRegistryMarketRow[]) ?? []
+  );
+}
+
+function listTimelineRegistryRangesAllTimeframes(db: Db): TimelineRegistryMarketRow[] {
+  return (
+    (db.db
+      .prepare(
+        `SELECT collector, exchange, symbol, 'ALL' AS timeframe, MIN(start_ts) AS start_ts, MAX(end_ts) AS end_ts
+         FROM registry
+         GROUP BY collector, exchange, symbol
+         ORDER BY collector, exchange, symbol;`,
+      )
+      .all() as unknown as TimelineRegistryMarketRow[]) ?? []
+  );
+}
+
+function mergeTimelineMarketRanges(
+  indexedRows: TimelineIndexedMarketRow[],
+  registryRows: TimelineRegistryMarketRow[],
+  indexedFallbackTimeframe: string,
 ): TimelineMarket[] {
-  return rows.map((row) => ({
+  // Both inputs are pre-sorted by market identity. For shared keys, registry carries processed range and
+  // indexed carries raw source extent, so the merged row can render split coverage.
+  const merged: TimelineMarket[] = [];
+  let indexedIdx = 0;
+  let registryIdx = 0;
+
+  while (indexedIdx < indexedRows.length || registryIdx < registryRows.length) {
+    if (indexedIdx >= indexedRows.length) {
+      merged.push(mapRegistryRow(registryRows[registryIdx]));
+      registryIdx += 1;
+      continue;
+    }
+    if (registryIdx >= registryRows.length) {
+      merged.push(mapIndexedRow(indexedRows[indexedIdx], indexedFallbackTimeframe));
+      indexedIdx += 1;
+      continue;
+    }
+
+    const indexedRow = indexedRows[indexedIdx];
+    const registryRow = registryRows[registryIdx];
+    const cmp = compareMarketIdentity(indexedRow, registryRow);
+    if (cmp === 0) {
+      merged.push(mapMergedRow(indexedRow, registryRow));
+      indexedIdx += 1;
+      registryIdx += 1;
+      continue;
+    }
+    if (cmp < 0) {
+      merged.push(mapIndexedRow(indexedRow, indexedFallbackTimeframe));
+      indexedIdx += 1;
+      continue;
+    }
+    merged.push(mapRegistryRow(registryRow));
+    registryIdx += 1;
+  }
+
+  return merged;
+}
+
+function mapIndexedRow(row: TimelineIndexedMarketRow, timeframe: string): TimelineMarket {
+  return {
+    collector: row.collector.toUpperCase(),
+    exchange: row.exchange.toUpperCase(),
+    symbol: row.symbol,
+    timeframe,
+    startTs: row.start_ts,
+    endTs: row.end_ts,
+    indexedStartTs: row.start_ts,
+    indexedEndTs: row.end_ts,
+    processedStartTs: null,
+    processedEndTs: null,
+  };
+}
+
+function mapRegistryRow(row: TimelineRegistryMarketRow): TimelineMarket {
+  return {
     collector: row.collector.toUpperCase(),
     exchange: row.exchange.toUpperCase(),
     symbol: row.symbol,
     timeframe: row.timeframe,
     startTs: row.start_ts,
     endTs: row.end_ts,
-  }));
+    indexedStartTs: null,
+    indexedEndTs: null,
+    processedStartTs: row.start_ts,
+    processedEndTs: row.end_ts,
+  };
+}
+
+function mapMergedRow(indexedRow: TimelineIndexedMarketRow, registryRow: TimelineRegistryMarketRow): TimelineMarket {
+  const startTs = indexedRow.start_ts < registryRow.start_ts ? indexedRow.start_ts : registryRow.start_ts;
+  const endTs = indexedRow.end_ts > registryRow.end_ts ? indexedRow.end_ts : registryRow.end_ts;
+  return {
+    collector: registryRow.collector.toUpperCase(),
+    exchange: registryRow.exchange.toUpperCase(),
+    symbol: registryRow.symbol,
+    timeframe: registryRow.timeframe,
+    startTs,
+    endTs,
+    indexedStartTs: indexedRow.start_ts,
+    indexedEndTs: indexedRow.end_ts,
+    processedStartTs: registryRow.start_ts,
+    processedEndTs: registryRow.end_ts,
+  };
+}
+
+function compareMarketIdentity(
+  a: Pick<TimelineIndexedMarketRow, "collector" | "exchange" | "symbol">,
+  b: Pick<TimelineIndexedMarketRow, "collector" | "exchange" | "symbol">,
+): number {
+  if (a.collector < b.collector) return -1;
+  if (a.collector > b.collector) return 1;
+  if (a.exchange < b.exchange) return -1;
+  if (a.exchange > b.exchange) return 1;
+  if (a.symbol < b.symbol) return -1;
+  if (a.symbol > b.symbol) return 1;
+  return 0;
 }

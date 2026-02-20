@@ -5,6 +5,10 @@ export interface TimelineMarket {
   timeframe: string;
   startTs: number;
   endTs: number;
+  indexedStartTs?: number | null;
+  indexedEndTs?: number | null;
+  processedStartTs?: number | null;
+  processedEndTs?: number | null;
 }
 
 export interface TimelineEvent {

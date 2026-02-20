@@ -46,6 +46,10 @@ test("timeline markets aggregate min/max ranges across timeframes", async () => 
         timeframe: "ALL",
         startTs: 90,
         endTs: 300,
+        indexedStartTs: null,
+        indexedEndTs: null,
+        processedStartTs: 90,
+        processedEndTs: 300,
       },
       {
         collector: "RAM",
@@ -54,6 +58,10 @@ test("timeline markets aggregate min/max ranges across timeframes", async () => 
         timeframe: "ALL",
         startTs: 10,
         endTs: 20,
+        indexedStartTs: null,
+        indexedEndTs: null,
+        processedStartTs: 10,
+        processedEndTs: 20,
       },
     ]);
   } finally {
@@ -90,6 +98,118 @@ test("timeline markets can be filtered by timeframe", async () => {
         timeframe: "1m",
         startTs: 100,
         endTs: 300,
+        indexedStartTs: null,
+        indexedEndTs: null,
+        processedStartTs: 100,
+        processedEndTs: 300,
+      },
+    ]);
+  } finally {
+    db.close();
+  }
+});
+
+test("timeline markets include indexed rows and prefer registry ranges when available", async () => {
+  const db = await withDb();
+  try {
+    const rootId = db.ensureRoot("/tmp/source");
+    db.insertFiles([
+      {
+        rootId,
+        relativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
+        collector: Collector.PI,
+        exchange: "BYBIT",
+        symbol: "BTCUSDT",
+        startTs: 100,
+      },
+      {
+        rootId,
+        relativePath: "PI/BYBIT/BTCUSDT/2024-01-02.gz",
+        collector: Collector.PI,
+        exchange: "BYBIT",
+        symbol: "BTCUSDT",
+        startTs: 200,
+      },
+      {
+        rootId,
+        relativePath: "RAM/BINANCE/ETHUSDT/2024-01-01.gz",
+        collector: Collector.RAM,
+        exchange: "BINANCE",
+        symbol: "ETHUSDT",
+        startTs: 50,
+      },
+    ]);
+
+    db.upsertRegistry({
+      collector: "PI",
+      exchange: "BYBIT",
+      symbol: "BTCUSDT",
+      timeframe: "1m",
+      startTs: 120,
+      endTs: 180,
+    });
+    db.upsertRegistry({
+      collector: "PI",
+      exchange: "BYBIT",
+      symbol: "BTCUSDT",
+      timeframe: "5m",
+      startTs: 90,
+      endTs: 300,
+    });
+
+    const all = listTimelineMarkets(db);
+    assert.deepStrictEqual(all.markets, [
+      {
+        collector: "PI",
+        exchange: "BYBIT",
+        symbol: "BTCUSDT",
+        timeframe: "ALL",
+        startTs: 90,
+        endTs: 300,
+        indexedStartTs: 100,
+        indexedEndTs: 200,
+        processedStartTs: 90,
+        processedEndTs: 300,
+      },
+      {
+        collector: "RAM",
+        exchange: "BINANCE",
+        symbol: "ETHUSDT",
+        timeframe: "ALL",
+        startTs: 50,
+        endTs: 50,
+        indexedStartTs: 50,
+        indexedEndTs: 50,
+        processedStartTs: null,
+        processedEndTs: null,
+      },
+    ]);
+
+    const oneMinute = listTimelineMarkets(db, "1m");
+    assert.deepStrictEqual(oneMinute.markets, [
+      {
+        collector: "PI",
+        exchange: "BYBIT",
+        symbol: "BTCUSDT",
+        timeframe: "1m",
+        startTs: 100,
+        endTs: 200,
+        indexedStartTs: 100,
+        indexedEndTs: 200,
+        processedStartTs: 120,
+        processedEndTs: 180,
+      },
+      {
+        collector: "RAM",
+        exchange: "BINANCE",
+        symbol: "ETHUSDT",
+        timeframe: "1m",
+        startTs: 50,
+        endTs: 50,
+        indexedStartTs: 50,
+        indexedEndTs: 50,
+        processedStartTs: null,
+        processedEndTs: null,
       },
     ]);
   } finally {

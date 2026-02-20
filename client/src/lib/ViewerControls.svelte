@@ -35,7 +35,6 @@
   let localMarket = combineMarket(local.exchange, local.symbol);
   let initialSyncDone = false;
   let manualRouteOverride = false;
-  let routeInvalid = false;
   let routeSignature = "";
   let settingsDropdownOpened = false;
   let settingsDropdownButton: HTMLButtonElement | null = null;
@@ -91,7 +90,6 @@
 
   function syncFromMarkets(marketsList: Market[], force = false) {
     currentMarkets = marketsList;
-    routeInvalid = false;
     if (!marketsList.length) {
       collectorOptions = [];
       marketOptions = [];
@@ -102,7 +100,6 @@
     if (routeMarket && !manualRouteOverride) {
       const found = resolveRouteMarket(marketsList, routeMarket);
       if (!found) {
-        routeInvalid = true;
         meta.set(null);
         collectorOptions = uniq(marketsList.map((m) => m.collector));
         const collector = collectorOptions.includes(routeMarket.collector.toUpperCase())
@@ -275,11 +272,6 @@
       <span>Settings</span>
     </button>
   </div>
-  {#if routeInvalid}
-    <div class="px-2 pb-1 text-[11px] text-amber-300">
-      Route market was not found in registry. Select a market to continue.
-    </div>
-  {/if}
 </header>
 
 <Dropdown

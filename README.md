@@ -465,8 +465,12 @@ npm run serve
 * `GET /` → serves built frontend
 * SPA fallback to `index.html` for client routes (for example `/timeline`, `/chart/...`)
 * `GET /api/timeline/markets[?timeframe=...]`
-  * without `timeframe`: grouped market ranges using `MIN(start_ts)` and `MAX(end_ts)` per `{collector,exchange,symbol}`
-  * with `timeframe`: per-timeframe rows
+  * returns all indexed markets (`files` grouped by `{collector,exchange,symbol}` with `MIN/MAX(start_ts)`)
+  * merges processed ranges from `registry` (selected timeframe or `ALL` aggregate when timeframe is omitted)
+  * payload includes split coverage fields:
+    * indexed: `indexedStartTs`, `indexedEndTs`
+    * processed: `processedStartTs`, `processedEndTs`
+    * union range used by timeline zoom/filter: `startTs`, `endTs`
 * `GET /api/timeline/events?startTs=...&endTs=...&collector=...&exchange=...&symbol=...`
   * `startTs`/`endTs` are required
   * timestamp source is `gap_end_ts` when present, otherwise `files.start_ts` via `(root_id, relative_path)` join
@@ -500,6 +504,7 @@ npm run serve
 * `/timeline` is the default route.
 * `/chart`, `/chart/:collector/:exchange/:symbol`, and optional query `?timeframe=...&startTs=...`.
 * Timeline page uses REST endpoints (`/api/timeline/*`) and renders virtualized rows with one canvas per visible row.
+* Timeline source coverage colors: indexed-only coverage is gray, processed coverage is blue; mixed markets render both (blue over gray).
 * Timeline event markers support hover inspection with pointer-following, viewport-clamped popovers (event type + file:line; gap start/elapsed/miss context).
 * Viewer page keeps the existing single WS connection model (`/ws`) for candle metadata/slices.
 * URL is canonical route state; chart changes update URL with `replaceState`, and timeline state is restored when returning from Viewer.

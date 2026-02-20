@@ -21,6 +21,7 @@
   - reduce memory,
   - or remove duplicated logic that is already causing divergence/bugs.
 - Minimal diffs: do not reformat or reorder unrelated code.
+- Do not add compatibility fallback logic for mixed/partial deployments (old/new client-server combos) unless explicitly requested.
 
 ## Required workflow for changes
 - Start by stating the invariant(s) impacted (1–5 bullets).
