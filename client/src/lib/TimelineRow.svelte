@@ -11,7 +11,7 @@
     type TimelineRange,
   } from "./timelineUtils.js";
   import { eventPaintStyle, roundedRectPath } from "./timelineRowCanvas.js";
-  import type { TimelineEvent, TimelineMarket } from "./timelineTypes.js";
+  import type { TimelineEvent, TimelineHoverEvent, TimelineMarket } from "./timelineTypes.js";
 
   interface OpenDetail {
     market: TimelineMarket;
@@ -21,6 +21,7 @@
   interface HoverDetail {
     ts: number | null;
     x: number | null;
+    hoveredEvent: TimelineHoverEvent | null;
   }
 
   interface ZoomDetail {
@@ -40,6 +41,8 @@
   interface MarkerHit {
     x1: number;
     x2: number;
+    y1: number;
+    y2: number;
     event: TimelineEvent;
   }
 
@@ -114,7 +117,6 @@
       viewRange.endTs,
     );
 
-    console.log(visibleWindow.startIndex, visibleWindow.endIndex);
     for (let i = visibleWindow.startIndex; i < visibleWindow.endIndex; i += 1) {
       drawEvent(ctx, events[i], cssWidth, cssHeight);
     }
@@ -221,7 +223,7 @@
       ctx.strokeStyle = style.stroke;
       ctx.lineWidth = 1;
       ctx.stroke();
-      markerHits.push({ x1: left, x2: left + drawWidth, event });
+      markerHits.push({ x1: left, x2: left + drawWidth, y1: y, y2: y + barHeight, event });
       return;
     }
 
@@ -232,7 +234,7 @@
     ctx.moveTo(lineX, y);
     ctx.lineTo(lineX, y + barHeight);
     ctx.stroke();
-    markerHits.push({ x1: lineX - 2, x2: lineX + 2, event });
+    markerHits.push({ x1: lineX - 2, x2: lineX + 2, y1: y, y2: y + barHeight, event });
   }
 
   function handleCanvasClick(event: MouseEvent): void {
@@ -242,7 +244,8 @@
     }
     const rect = canvasEl.getBoundingClientRect();
     const x = clampTs(event.clientX - rect.left, 0, timelineWidth);
-    const marker = markerHits.find((hit) => x >= hit.x1 && x <= hit.x2);
+    const y = clampTs(event.clientY - rect.top, 0, rowHeight);
+    const marker = findMarkerAtPoint(x, y);
     if (marker) {
       dispatch("open", { market, ts: marker.event.ts });
       return;
@@ -276,16 +279,18 @@
 
   function handlePointerDown(event: PointerEvent): void {
     if (!canvasEl) return;
+    if (event.pointerType === "touch") return;
     pointerActive = true;
     dragMoved = false;
     dragDistance = 0;
     lastPointerX = event.clientX;
     canvasEl.setPointerCapture(event.pointerId);
-    emitHoverTs(event.clientX);
+    emitHoverTs(event.clientX, event.clientY);
   }
 
   function handlePointerMove(event: PointerEvent): void {
-    emitHoverTs(event.clientX);
+    if (event.pointerType === "touch") return;
+    emitHoverTs(event.clientX, event.clientY);
     if (!pointerActive) return;
 
     const dx = event.clientX - lastPointerX;
@@ -303,6 +308,7 @@
 
   function handlePointerUp(event: PointerEvent): void {
     if (!canvasEl) return;
+    if (event.pointerType === "touch") return;
     if (pointerActive) {
       try {
         canvasEl.releasePointerCapture(event.pointerId);
@@ -315,16 +321,38 @@
 
   function handlePointerLeave(): void {
     if (!pointerActive) {
-      dispatch("hover", { ts: null, x: null });
+      dispatch("hover", { ts: null, x: null, hoveredEvent: null });
     }
   }
 
-  function emitHoverTs(clientX: number): void {
+  function emitHoverTs(clientX: number, clientY: number): void {
     if (!canvasEl) return;
     const rect = canvasEl.getBoundingClientRect();
     const x = clampTs(clientX - rect.left, 0, timelineWidth);
+    const y = clampTs(clientY - rect.top, 0, rowHeight);
     const ts = toTimelineTs(x, viewRange, timelineWidth);
-    dispatch("hover", { ts, x });
+    const marker = findMarkerAtPoint(x, y);
+    const hoveredEvent: TimelineHoverEvent | null = marker
+      ? {
+          event: marker.event,
+          market,
+          pointerClientX: clientX,
+          pointerClientY: clientY,
+          markerLeftClientX: rect.left + marker.x1,
+          markerRightClientX: rect.left + marker.x2,
+          markerTopClientY: rect.top + marker.y1,
+          markerBottomClientY: rect.top + marker.y2,
+        }
+      : null;
+    dispatch("hover", { ts, x, hoveredEvent });
+  }
+
+  function findMarkerAtPoint(x: number, y: number): MarkerHit | null {
+    for (let i = markerHits.length - 1; i >= 0; i -= 1) {
+      const hit = markerHits[i];
+      if (x >= hit.x1 && x <= hit.x2 && y >= hit.y1 && y <= hit.y2) return hit;
+    }
+    return null;
   }
 
   function handleActionsClick(): void {
@@ -340,9 +368,10 @@
     class="sticky left-0 z-20 h-full border-r border-slate-800 bg-slate-900/50 px-2 text-slate-200"
   >
     <div class="flex h-full items-center gap-2 text-[13px] tracking-[0.02em]">
-      <span class="font-medium"
-        >{market.collector}:{market.exchange}:{market.symbol}</span
-      >
+      <div class="flex flex-col text-xs font-mono leading-none">
+        <div class="opacity-50"><span>{market.collector}</span>:<span>{market.exchange}</span></div>
+        <strong>{market.symbol}</strong>
+      </div>
       <button
         bind:this={actionsButton}
         class="ml-auto flex h-6 w-6 items-center justify-center rounded-md border-none py-1 text-slate-300 hover:bg-slate-800/50 hover:text-slate-100"

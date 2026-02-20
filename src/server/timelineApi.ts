@@ -15,6 +15,7 @@ export interface TimelineEvent {
   collector: string;
   exchange: string;
   symbol: string;
+  relativePath: string;
   eventType: string;
   gapFixStatus: string | null;
   ts: number;
@@ -127,7 +128,7 @@ export function listTimelineEvents(db: Db, filter: TimelineEventFilter): Timelin
   const rows =
     (db.db
       .prepare(
-        `SELECT e.id, e.collector, e.exchange, e.symbol, e.event_type, e.gap_fix_status,
+        `SELECT e.id, e.collector, e.exchange, e.symbol, e.relative_path, e.event_type, e.gap_fix_status,
                 COALESCE(e.gap_end_ts, f.start_ts) AS ts,
                 e.start_line, e.end_line, e.gap_ms, e.gap_miss
          FROM events e
@@ -140,6 +141,7 @@ export function listTimelineEvents(db: Db, filter: TimelineEventFilter): Timelin
       collector: string;
       exchange: string;
       symbol: string;
+      relative_path: string;
       event_type: string;
       gap_fix_status: string | null;
       ts: number;
@@ -154,6 +156,7 @@ export function listTimelineEvents(db: Db, filter: TimelineEventFilter): Timelin
     collector: row.collector.toUpperCase(),
     exchange: row.exchange.toUpperCase(),
     symbol: row.symbol,
+    relativePath: row.relative_path,
     eventType: row.event_type,
     gapFixStatus: row.gap_fix_status,
     ts: row.ts,

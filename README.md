@@ -471,6 +471,7 @@ npm run serve
   * `startTs`/`endTs` are required
   * timestamp source is `gap_end_ts` when present, otherwise `files.start_ts` via `(root_id, relative_path)` join
   * deterministic ordering: `collector, exchange, symbol, ts, id`
+  * event payload includes source and gap context fields (`relativePath`, `startLine`, `endLine`, `gapMs`, `gapMiss`, `eventType`, `gapFixStatus`) for timeline inspection UIs
 
 ### WebSocket API (message-driven, single connection)
 
@@ -499,6 +500,7 @@ npm run serve
 * `/timeline` is the default route.
 * `/chart`, `/chart/:collector/:exchange/:symbol`, and optional query `?timeframe=...&startTs=...`.
 * Timeline page uses REST endpoints (`/api/timeline/*`) and renders virtualized rows with one canvas per visible row.
+* Timeline event markers support hover inspection with pointer-following, viewport-clamped popovers (event type + file:line; gap start/elapsed/miss context).
 * Viewer page keeps the existing single WS connection model (`/ws`) for candle metadata/slices.
 * URL is canonical route state; chart changes update URL with `replaceState`, and timeline state is restored when returning from Viewer.
 

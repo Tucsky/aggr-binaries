@@ -10,12 +10,6 @@ export interface TimelineEventWindow {
   endIndex: number;
 }
 
-export const TIMELINE_EDGE_PADDING_PX = 8;
-export interface TimelineEdgePadding {
-  leftPx: number;
-  rightPx: number;
-}
-
 export function marketKey(input: Pick<TimelineMarket, "collector" | "exchange" | "symbol">): string {
   return `${input.collector.toUpperCase()}:${input.exchange.toUpperCase()}:${input.symbol}`;
 }
@@ -45,14 +39,13 @@ export function toTimelineX(
   ts: number,
   range: TimelineRange,
   width: number,
-  edgePadding: number | TimelineEdgePadding = 0,
 ): number {
-  const padded = resolveTimelinePadding(width, edgePadding);
+  const safeWidth = Math.max(1, width);
   const span = Math.max(1, range.endTs - range.startTs);
   const ratio = (ts - range.startTs) / span;
-  const x = padded.minX + ratio * padded.usableWidth;
-  if (x < padded.minX) return padded.minX;
-  if (x > padded.maxX) return padded.maxX;
+  const x = ratio * safeWidth;
+  if (x < 0) return 0;
+  if (x > safeWidth) return safeWidth;
   return x;
 }
 
@@ -60,11 +53,10 @@ export function toTimelineTs(
   x: number,
   range: TimelineRange,
   width: number,
-  edgePadding: number | TimelineEdgePadding = 0,
 ): number {
-  const padded = resolveTimelinePadding(width, edgePadding);
-  const clampedX = clampTs(x, padded.minX, padded.maxX);
-  const ratio = (clampedX - padded.minX) / padded.usableWidth;
+  const safeWidth = Math.max(1, width);
+  const clampedX = clampTs(x, 0, safeWidth);
+  const ratio = clampedX / safeWidth;
   const ts = range.startTs + ratio * (range.endTs - range.startTs);
   return Math.floor(clampTs(ts, range.startTs, range.endTs));
 }
@@ -118,27 +110,6 @@ export function findTimelineEventWindow(
   const startIndex = lowerBoundEventTs(events, startTs);
   const endIndex = upperBoundEventTs(events, endTs);
   return { startIndex, endIndex };
-}
-
-function resolveTimelinePadding(
-  width: number,
-  edgePaddingPx: number | TimelineEdgePadding,
-): { minX: number; maxX: number; usableWidth: number } {
-  const safeWidth = Math.max(1, width);
-  const padding = normalizePadding(edgePaddingPx);
-  const safeLeftPadding = Math.max(0, Math.min(padding.leftPx, safeWidth / 2));
-  const safeRightPadding = Math.max(0, Math.min(padding.rightPx, safeWidth / 2));
-  const minX = safeLeftPadding;
-  const maxX = safeWidth - safeRightPadding;
-  const usableWidth = Math.max(1, maxX - minX);
-  return { minX, maxX, usableWidth };
-}
-
-function normalizePadding(edgePadding: number | TimelineEdgePadding): TimelineEdgePadding {
-  if (typeof edgePadding === "number") {
-    return { leftPx: edgePadding, rightPx: edgePadding };
-  }
-  return edgePadding;
 }
 
 function lowerBoundEventTs(events: TimelineEvent[], minTs: number): number {

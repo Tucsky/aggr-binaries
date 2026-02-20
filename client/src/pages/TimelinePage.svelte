@@ -2,6 +2,7 @@
   import { get } from "svelte/store";
   import { onDestroy, onMount } from "svelte";
   import TimelineDebugPanel from "../lib/TimelineDebugPanel.svelte";
+  import TimelineEventPopover from "../lib/TimelineEventPopover.svelte";
   import TimelineControls from "../lib/TimelineControls.svelte";
   import TimelineRowActionsMenu from "../lib/TimelineRowActionsMenu.svelte";
   import TimelineRow from "../lib/TimelineRow.svelte";
@@ -15,7 +16,7 @@
     restorePersistedViewRange,
     unique,
   } from "../lib/timelinePageHelpers.js";
-  import type { TimelineEvent, TimelineMarket } from "../lib/timelineTypes.js";
+  import type { TimelineEvent, TimelineHoverEvent, TimelineMarket } from "../lib/timelineTypes.js";
   import { prefs } from "../lib/viewerStore.js";
   import { buildInitialViewRange, formatTimelineTsLabel, panTimelineRange, resolveTimelineTimeframe, zoomTimelineRange } from "../lib/timelineViewport.js";
   import { computeGlobalRange, groupEventsByMarket, marketKey, toTimelineTs, toTimelineX, type TimelineRange } from "../lib/timelineUtils.js";
@@ -45,6 +46,7 @@
   let persistedViewEndTs: number | null = null;
   let crosshairTs: number | null = null;
   let crosshairPx: number | null = null;
+  let hoveredEvent: TimelineHoverEvent | null = null;
   let lastZoomDelta = 0;
   let lastPanDeltaMs = 0;
   let actionsOpen = false;
@@ -195,7 +197,6 @@
     if (!selectedRange || !viewRange) return;
     viewRange = zoomTimelineRange(selectedRange, viewRange, centerTs, deltaY);
   }
-
   function panView(deltaMs: number): void {
     if (!selectedRange || !viewRange || deltaMs === 0) return;
     viewRange = panTimelineRange(selectedRange, viewRange, deltaMs, PAN_OVERSCROLL_RATIO);
@@ -206,7 +207,6 @@
     viewportHeight = scrollEl.clientHeight;
     actionsOpen = false;
   }
-
   function handleCollectorChange(event: CustomEvent<string>): void {
     collectorFilter = event.detail;
     persistTimelineState();
@@ -242,9 +242,10 @@
     crosshairTs = toTimelineTs(clampedX, viewRange, timelineWidth);
   }
 
-  function handleHover(event: CustomEvent<{ ts: number | null; x: number | null }>): void {
+  function handleHover(event: CustomEvent<{ ts: number | null; x: number | null; hoveredEvent: TimelineHoverEvent | null }>): void {
     crosshairTs = event.detail.ts;
     crosshairPx = event.detail.x;
+    hoveredEvent = event.detail.hoveredEvent;
   }
   function handleZoom(event: CustomEvent<{ centerTs: number; deltaY: number }>): void {
     lastZoomDelta = event.detail.deltaY;
@@ -388,6 +389,7 @@
       <div class="z-10 pointer-events-none absolute bottom-0 top-0 w-5 bg-gradient-to-l from-slate-950/90 to-transparent" style={`left:${timelineEndPx - 20}px;`}></div>
     {/if}
     <TimelineDebugPanel {selectedRange} {viewRange} {crosshairTs} crosshairPx={crosshairX} {timelineWidth} {lastZoomDelta} {lastPanDeltaMs} />
+    <TimelineEventPopover hoveredEvent={hoveredEvent} />
     <TimelineRowActionsMenu open={actionsOpen} anchorEl={actionsAnchorEl} market={actionsMarket} on:close={closeActionsMenu} on:openMarket={openMarketFromMenu} on:copyMarket={copyMarketFromMenu} />
   </div>
   {#if loadingEvents}

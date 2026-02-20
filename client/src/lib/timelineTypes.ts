@@ -12,6 +12,7 @@ export interface TimelineEvent {
   collector: string;
   exchange: string;
   symbol: string;
+  relativePath: string;
   eventType: string;
   gapFixStatus: string | null;
   ts: number;
@@ -19,6 +20,17 @@ export interface TimelineEvent {
   endLine: number;
   gapMs: number | null;
   gapMiss: number | null;
+}
+
+export interface TimelineHoverEvent {
+  event: TimelineEvent;
+  market: TimelineMarket;
+  pointerClientX: number;
+  pointerClientY: number;
+  markerLeftClientX: number;
+  markerRightClientX: number;
+  markerTopClientY: number;
+  markerBottomClientY: number;
 }
 
 export type TimelineEventKind =

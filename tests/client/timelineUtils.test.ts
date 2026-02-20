@@ -24,14 +24,13 @@ test("toTimelineX and toTimelineTs map deterministically and clamp to bounds", (
   assert.strictEqual(toTimelineTs(1200, range, width), 11_000);
 });
 
-test("toTimelineX and toTimelineTs honor edge padding", () => {
+test("toTimelineX and toTimelineTs clamp deterministically for non-positive widths", () => {
   const range: TimelineRange = { startTs: 1_000, endTs: 11_000 };
-  const width = 1000;
-  const padding = 8;
-  assert.strictEqual(toTimelineX(1_000, range, width, padding), 8);
-  assert.strictEqual(toTimelineX(11_000, range, width, padding), 992);
-  assert.strictEqual(toTimelineTs(8, range, width, padding), 1_000);
-  assert.strictEqual(toTimelineTs(992, range, width, padding), 11_000);
+  assert.strictEqual(toTimelineX(1_000, range, 0), 0);
+  assert.strictEqual(toTimelineX(11_000, range, 0), 1);
+  assert.strictEqual(toTimelineTs(0, range, 0), 1_000);
+  assert.strictEqual(toTimelineTs(1, range, 0), 11_000);
+  assert.strictEqual(toTimelineTs(50, range, 0), 11_000);
 });
 
 test("clampTs enforces min/max range", () => {
@@ -47,6 +46,7 @@ test("groupEventsByMarket groups rows and preserves deterministic order by ts/id
       collector: "RAM",
       exchange: "BINANCE",
       symbol: "BTCUSDT",
+      relativePath: "RAM/BINANCE/BTCUSDT/2024-01-01.gz",
       eventType: "gap",
       gapFixStatus: null,
       ts: 300,
@@ -60,6 +60,7 @@ test("groupEventsByMarket groups rows and preserves deterministic order by ts/id
       collector: "RAM",
       exchange: "BINANCE",
       symbol: "BTCUSDT",
+      relativePath: "RAM/BINANCE/BTCUSDT/2024-01-01.gz",
       eventType: "gap",
       gapFixStatus: null,
       ts: 200,
@@ -73,6 +74,7 @@ test("groupEventsByMarket groups rows and preserves deterministic order by ts/id
       collector: "RAM",
       exchange: "BINANCE",
       symbol: "BTCUSDT",
+      relativePath: "RAM/BINANCE/BTCUSDT/2024-01-01.gz",
       eventType: "gap",
       gapFixStatus: null,
       ts: 200,
@@ -96,6 +98,7 @@ test("findTimelineEventWindow returns visible inclusive ts window via binary sea
       collector: "RAM",
       exchange: "BINANCE",
       symbol: "BTCUSDT",
+      relativePath: "RAM/BINANCE/BTCUSDT/2024-01-01.gz",
       eventType: "gap",
       gapFixStatus: null,
       ts: 100,
@@ -109,6 +112,7 @@ test("findTimelineEventWindow returns visible inclusive ts window via binary sea
       collector: "RAM",
       exchange: "BINANCE",
       symbol: "BTCUSDT",
+      relativePath: "RAM/BINANCE/BTCUSDT/2024-01-01.gz",
       eventType: "gap",
       gapFixStatus: null,
       ts: 200,
@@ -122,6 +126,7 @@ test("findTimelineEventWindow returns visible inclusive ts window via binary sea
       collector: "RAM",
       exchange: "BINANCE",
       symbol: "BTCUSDT",
+      relativePath: "RAM/BINANCE/BTCUSDT/2024-01-01.gz",
       eventType: "gap",
       gapFixStatus: null,
       ts: 300,
@@ -135,6 +140,7 @@ test("findTimelineEventWindow returns visible inclusive ts window via binary sea
       collector: "RAM",
       exchange: "BINANCE",
       symbol: "BTCUSDT",
+      relativePath: "RAM/BINANCE/BTCUSDT/2024-01-01.gz",
       eventType: "gap",
       gapFixStatus: null,
       ts: 300,
@@ -148,6 +154,7 @@ test("findTimelineEventWindow returns visible inclusive ts window via binary sea
       collector: "RAM",
       exchange: "BINANCE",
       symbol: "BTCUSDT",
+      relativePath: "RAM/BINANCE/BTCUSDT/2024-01-01.gz",
       eventType: "gap",
       gapFixStatus: null,
       ts: 400,
@@ -170,6 +177,7 @@ test("findTimelineEventWindow handles empty or invalid ranges deterministically"
       collector: "PI",
       exchange: "BYBIT",
       symbol: "BTCUSDT",
+      relativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
       eventType: "gap",
       gapFixStatus: null,
       ts: 250,

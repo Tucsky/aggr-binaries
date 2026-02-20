@@ -150,6 +150,10 @@ test("timeline events use gap_end_ts first and fallback to file start_ts for non
 
     assert.strictEqual(events.length, 2);
     assert.deepStrictEqual(events.map((event) => event.ts), [200, 600]);
+    assert.deepStrictEqual(events.map((event) => event.relativePath), [
+      "PI/BYBIT/BTCUSDT/2024-01-01.gz",
+      "PI/BYBIT/BTCUSDT/2024-01-01.gz",
+    ]);
     assert.strictEqual(events[0].eventType, EventType.PartsShort);
     assert.strictEqual(events[0].gapFixStatus, null);
     assert.strictEqual(events[1].eventType, EventType.Gap);
