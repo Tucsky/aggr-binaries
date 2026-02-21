@@ -12,7 +12,6 @@ export async function runIndex(config: Config, db: Db): Promise<IndexStats> {
   let batch: IndexedFile[] = [];
   const collectorHint = deriveCollectorHint(config.root);
   let skipLogged = 0;
-
   for await (const entry of walkFiles(config.root, rootId, {
     includePaths: config.includePaths,
   })) {

@@ -12,6 +12,7 @@
   - Prefer using existing config and existing state. If you add new state, justify it in comments.
 - Minimize loops: one pass whenever possible. If you add a loop, explain why it cannot be fused.
 - Keep files small: **no file > 400 LOC**. Split by responsibility.
+  - Exception: if splitting would materially reduce readability/correctness for tightly-coupled logic, exceeding 400 LOC is allowed with a brief inline justification near the change.
 - Strict TypeScript:
   - No `any`. No implicit `unknown` without narrowing.
   - Avoid ad-hoc string unions sprinkled everywhere: use enums/constants for stable domains.

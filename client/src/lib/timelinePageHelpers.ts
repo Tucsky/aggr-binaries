@@ -37,8 +37,14 @@ export function restorePersistedViewRange(
   persistedViewEndTs: number | null,
   panOverscrollRatio: number,
 ): TimelineRange | null {
-  if (persistedViewStartTs === null || persistedViewEndTs === null) return null;
-  if (persistedViewEndTs <= persistedViewStartTs) return null;
+  if (persistedViewStartTs === null || persistedViewEndTs === null) {
+    // No persisted view range to restore
+    return null;
+  }
+  if (persistedViewEndTs <= persistedViewStartTs) {
+    // Invalid persisted view range
+    return null
+  }
   const candidateSpan = persistedViewEndTs - persistedViewStartTs;
   const fullSpan = selected.endTs - selected.startTs;
   if (candidateSpan >= fullSpan) return { ...selected };
@@ -57,6 +63,9 @@ export function restorePersistedViewRange(
     nextStart -= delta;
     nextEnd -= delta;
   }
+
+  console.log(nextEnd > nextStart ? `restored range ${new Date(nextStart).toISOString()} - ${new Date(nextEnd).toISOString()}` : `restored range null`)
+
   return nextEnd > nextStart ? { startTs: nextStart, endTs: nextEnd } : null;
 }
 

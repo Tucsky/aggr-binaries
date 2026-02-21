@@ -37,6 +37,13 @@ export interface TimelineHoverEvent {
   markerBottomClientY: number;
 }
 
+export enum TimelineMarketAction {
+  Index = "index",
+  Process = "process",
+  FixGaps = "fixgaps",
+  Registry = "registry",
+}
+
 export type TimelineEventKind =
   | "gap"
   | "parse_error"

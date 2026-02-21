@@ -476,6 +476,10 @@ npm run serve
   * timestamp source is `gap_end_ts` when present, otherwise `files.start_ts` via `(root_id, relative_path)` join
   * deterministic ordering: `collector, exchange, symbol, ts, id`
   * event payload includes source and gap context fields (`relativePath`, `startLine`, `endLine`, `gapMs`, `gapMiss`, `eventType`, `gapFixStatus`) for timeline inspection UIs
+* `POST /api/timeline/actions`
+  * triggers core pipeline actions for one market row (`index`, `process`, `fixgaps`, `registry`)
+  * request body: `{action, collector, exchange, symbol, timeframe?}`
+  * action execution is serialized server-side; concurrent requests return `409`
 
 ### WebSocket API (message-driven, single connection)
 

@@ -16,7 +16,7 @@
     restorePersistedViewRange,
     unique,
   } from "../lib/timelinePageHelpers.js";
-  import type { TimelineEvent, TimelineHoverEvent, TimelineMarket } from "../lib/timelineTypes.js";
+  import { type TimelineMarketAction, type TimelineEvent, type TimelineHoverEvent, type TimelineMarket } from "../lib/timelineTypes.js";
   import { prefs } from "../lib/viewerStore.js";
   import { buildInitialViewRange, formatTimelineTsLabel, panTimelineRange, resolveTimelineTimeframe, zoomTimelineRange } from "../lib/timelineViewport.js";
   import { computeGlobalRange, groupEventsByMarket, marketKey, toTimelineTs, toTimelineX, type TimelineRange } from "../lib/timelineUtils.js";
@@ -126,9 +126,10 @@
       overallRange = null;
     }
   }
-  async function loadMarkets(): Promise<void> {
+  async function loadMarkets(forceLoadEvents = false): Promise<void> {
     loadingMarkets = true;
     marketsError = "";
+    // console.log("Loading markets with filters", { timeframe: timeframeFilter, collector: collectorFilter, exchange: exchangeFilter });
     try {
       let requested = timeframeFilter.trim() || "1m";
       if (timeframeOptions.length) {
@@ -151,10 +152,13 @@
       if (globalRange) {
         const nextEventsQueryKey = buildEventsQueryKey(globalRange, collectorFilter, exchangeFilter, symbolFilter);
         selectedRange = globalRange;
-        viewRange =
-          restorePersistedViewRange(globalRange, persistedViewStartTs, persistedViewEndTs, PAN_OVERSCROLL_RATIO) ??
-          buildInitialViewRange(globalRange, YEAR_MS);
-        if (nextEventsQueryKey !== lastEventsQueryKey) await loadEvents();
+        if (!viewRange) {
+          // console.log("Restoring view range with global range", { globalStart: new Date(globalRange.startTs).toISOString(), globalEnd: new Date(globalRange.endTs).toISOString(), persistedStart: persistedViewStartTs ? new Date(persistedViewStartTs).toISOString() : null, persistedEnd: persistedViewEndTs ? new Date(persistedViewEndTs).toISOString() : null });
+          viewRange =
+            restorePersistedViewRange(globalRange, persistedViewStartTs, persistedViewEndTs, PAN_OVERSCROLL_RATIO) ??
+            buildInitialViewRange(globalRange, YEAR_MS);
+        }
+        if (forceLoadEvents || nextEventsQueryKey !== lastEventsQueryKey) await loadEvents();
       } else {
         selectedRange = null;
         viewRange = null;
@@ -181,11 +185,13 @@
     eventAbort = new AbortController();
     loadingEvents = true;
     eventsError = "";
+    // console.log("Loading events with filters", { collector: collectorFilter, exchange: exchangeFilter, symbol: symbolFilter, startTs: selectedRange.startTs, endTs: selectedRange.endTs });
     try {
       allEvents = await fetchTimelineEvents(
         { collector: collectorFilter || undefined, exchange: exchangeFilter || undefined, symbol: symbolFilter || undefined, startTs: selectedRange.startTs, endTs: selectedRange.endTs },
         eventAbort.signal,
       );
+      // console.log(`Loaded ${allEvents.length} events`);
       lastEventsQueryKey = queryKey;
     } catch (err) {
       if ((err as { name?: string }).name !== "AbortError") eventsError = err instanceof Error ? err.message : "Failed to load timeline events";
@@ -200,6 +206,7 @@
   function panView(deltaMs: number): void {
     if (!selectedRange || !viewRange || deltaMs === 0) return;
     viewRange = panTimelineRange(selectedRange, viewRange, deltaMs, PAN_OVERSCROLL_RATIO);
+    // console.log(`Panned view by ${deltaMs}ms`, { viewStart: new Date(viewRange.startTs).toISOString(), viewEnd: new Date(viewRange.endTs).toISOString() });
   }
   function handleScroll(): void {
     if (!scrollEl) return;
@@ -296,6 +303,14 @@
   function rowIdentity(market: TimelineMarket): string {
     return `${market.collector}:${market.exchange}:${market.symbol}:${market.timeframe}`;
   }
+
+  async function handleActionCompleted(event: CustomEvent<{ action: TimelineMarketAction; market: TimelineMarket }>): Promise<void> {
+    // console.log("Action completed", event.detail);
+    await loadOverallRange();
+    await loadMarkets(true);
+    actionsMarket = event.detail.market;
+  }
+
   function persistTimelineState(): void {
     if (typeof window === "undefined") return;
     const payload = {
@@ -332,6 +347,7 @@
       timeframeFilter = typeof parsed.timeframeFilter === "string" && parsed.timeframeFilter.length ? parsed.timeframeFilter : timeframeFilter;
       persistedViewStartTs = Number.isFinite(parsed.viewStartTs) ? Number(parsed.viewStartTs) : null;
       persistedViewEndTs = Number.isFinite(parsed.viewEndTs) ? Number(parsed.viewEndTs) : null;
+      // console.log("Restored timeline state from storage", { collectorFilter, exchangeFilter, symbolFilter, timeframeFilter, persistedViewStartTs: persistedViewStartTs ? new Date(persistedViewStartTs).toISOString() : null, persistedViewEndTs: persistedViewEndTs ? new Date(persistedViewEndTs).toISOString() : null });
     } catch {
       // ignore malformed state
     }
@@ -390,7 +406,15 @@
     {/if}
     <TimelineDebugPanel {selectedRange} {viewRange} {crosshairTs} crosshairPx={crosshairX} {timelineWidth} {lastZoomDelta} {lastPanDeltaMs} />
     <TimelineEventPopover hoveredEvent={hoveredEvent} />
-    <TimelineRowActionsMenu open={actionsOpen} anchorEl={actionsAnchorEl} market={actionsMarket} on:close={closeActionsMenu} on:openMarket={openMarketFromMenu} on:copyMarket={copyMarketFromMenu} />
+    <TimelineRowActionsMenu
+      open={actionsOpen}
+      anchorEl={actionsAnchorEl}
+      market={actionsMarket}
+      on:close={closeActionsMenu}
+      on:openMarket={openMarketFromMenu}
+      on:copyMarket={copyMarketFromMenu}
+      on:actionCompleted={handleActionCompleted}
+    />
   </div>
   {#if loadingEvents}
     <div class="border-t border-slate-800 bg-slate-900 px-3 py-1 text-[11px] text-slate-300">Loading events...</div>

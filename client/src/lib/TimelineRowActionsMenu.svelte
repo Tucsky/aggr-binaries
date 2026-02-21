@@ -8,8 +8,10 @@
   import Workflow from "lucide-svelte/icons/workflow";
   import Wrench from "lucide-svelte/icons/wrench";
   import { createEventDispatcher } from "svelte";
+  import { addToast } from "./toastStore.js";
+  import { runTimelineMarketAction } from "./timelineApi.js";
   import Dropdown from "./Dropdown.svelte";
-  import type { TimelineMarket } from "./timelineTypes.js";
+  import { TimelineMarketAction, type TimelineMarket } from "./timelineTypes.js";
 
   export let open = false;
   export let anchorEl: HTMLElement | null = null;
@@ -19,15 +21,16 @@
     close: void;
     openMarket: TimelineMarket;
     copyMarket: TimelineMarket;
+    actionCompleted: { action: TimelineMarketAction; market: TimelineMarket };
   }>();
 
-  const futureActions = [
-    { label: "Index", icon: Binary },
-    { label: "Process", icon: Workflow },
-    { label: "Fix gaps", icon: Wrench },
-    { label: "Rebuild", icon: RefreshCcw },
-    { label: "Export timeframe", icon: Download },
+  const rowActions = [
+    { label: "Index", icon: Binary, action: TimelineMarketAction.Index },
+    { label: "Process", icon: Workflow, action: TimelineMarketAction.Process },
+    { label: "Fix gaps", icon: Wrench, action: TimelineMarketAction.FixGaps },
+    { label: "Rebuild", icon: RefreshCcw, action: TimelineMarketAction.Registry },
   ];
+  let actionInFlight = false;
 
   function closeMenu(): void {
     dispatch("close");
@@ -43,6 +46,40 @@
     if (!market) return;
     dispatch("copyMarket", market);
     closeMenu();
+  }
+
+  async function runAction(action: TimelineMarketAction): Promise<void> {
+    if (!market || actionInFlight) return;
+    const target = market;
+    const marketLabel = `${target.collector}/${target.exchange}/${target.symbol}`;
+    actionInFlight = true;
+    closeMenu();
+
+    addToast(`Running ${formatActionLabel(action)} for ${marketLabel}...`, "info", 1600);
+    try {
+      const result = await runTimelineMarketAction({
+        action,
+        collector: target.collector,
+        exchange: target.exchange,
+        symbol: target.symbol,
+        timeframe: target.timeframe,
+      });
+      const durationSeconds = (result.durationMs / 1000).toFixed(1);
+      addToast(`${formatActionLabel(action)} completed for ${marketLabel} (${durationSeconds}s)`, "success", 2200);
+      dispatch("actionCompleted", { action, market: target });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : `Failed to run ${formatActionLabel(action)}`;
+      addToast(message, "error", 3200);
+    } finally {
+      actionInFlight = false;
+    }
+  }
+
+  function formatActionLabel(action: TimelineMarketAction): string {
+    if (action === TimelineMarketAction.FixGaps) return "Fix gaps";
+    if (action === TimelineMarketAction.Registry) return "Rebuild";
+    if (action === TimelineMarketAction.Index) return "Index";
+    return "Process";
   }
 </script>
 
@@ -66,21 +103,30 @@
       <Copy class="h-3.5 w-3.5 text-slate-400" aria-hidden="true" strokeWidth={2} />
       <span>Copy market key</span>
     </button>
-    {#each futureActions as action}
+    {#each rowActions as action}
       <button
-        class="flex w-full cursor-not-allowed items-center gap-2 rounded px-3 py-1.5 text-left text-xs text-slate-500"
+        class="flex w-full items-center gap-2 rounded px-3 py-1.5 text-left text-xs disabled:cursor-not-allowed disabled:text-slate-500 enabled:text-slate-200 enabled:hover:bg-slate-800/80"
         type="button"
-        disabled
+        disabled={!market || actionInFlight}
+        on:click={() => void runAction(action.action)}
       >
         <svelte:component
           this={action.icon}
-          class="h-3.5 w-3.5 text-slate-600"
+          class={`h-3.5 w-3.5 ${!market || actionInFlight ? "text-slate-600" : "text-slate-400"}`}
           aria-hidden="true"
           strokeWidth={2}
         />
         <span>{action.label}</span>
       </button>
     {/each}
+    <button
+      class="flex w-full cursor-not-allowed items-center gap-2 rounded px-3 py-1.5 text-left text-xs text-slate-500"
+      type="button"
+      disabled
+    >
+      <Download class="h-3.5 w-3.5 text-slate-600" aria-hidden="true" strokeWidth={2} />
+      <span>Export timeframe</span>
+    </button>
     <button
       class="flex w-full cursor-not-allowed items-center gap-2 rounded px-3 py-1.5 text-left text-xs text-slate-500"
       type="button"

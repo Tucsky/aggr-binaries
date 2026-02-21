@@ -44,7 +44,11 @@ export async function* walkFiles(
 }
 
 function seedDirs(rootPath: string, includePaths?: string[]): string[] {
-  if (!includePaths || !includePaths.length) return [rootPath];
+  if (!includePaths || !includePaths.length) {
+    // console.log('using default rootPath')
+    return [rootPath];
+  }
+
   const dirs: string[] = [];
   for (const rel of includePaths) {
     const abs = path.resolve(rootPath, rel);
@@ -52,6 +56,8 @@ function seedDirs(rootPath: string, includePaths?: string[]): string[] {
     if (relCheck.startsWith("..")) continue;
     dirs.push(abs);
   }
+  // console.log('seed includePath', dirs.length ? dirs : [rootPath])
+
   return dirs.length ? dirs : [rootPath];
 }
 

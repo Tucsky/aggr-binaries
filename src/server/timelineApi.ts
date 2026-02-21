@@ -1,5 +1,6 @@
 import type http from "node:http";
 import type { Db } from "../core/db.js";
+import { createTimelineActionsApiHandler, type TimelineActionsApiOptions } from "./timelineActionsApi.js";
 
 export interface TimelineMarket {
   collector: string;
@@ -150,10 +151,14 @@ export function listTimelineEvents(db: Db, filter: TimelineEventFilter): Timelin
   }));
 }
 
-export function createTimelineApiHandler(db: Db): HttpApiHandler {
+export function createTimelineApiHandler(db: Db, actionOptions: TimelineActionsApiOptions): HttpApiHandler {
+  const timelineActionsHandler = createTimelineActionsApiHandler(db, actionOptions);
   return async (req, res, url) => {
     if (!url.pathname.startsWith("/api/timeline/")) {
       return false;
+    }
+    if (url.pathname === "/api/timeline/actions") {
+      return timelineActionsHandler(req, res, url);
     }
     if (req.method !== "GET") {
       writeJson(res, 405, { error: "Method not allowed" });
@@ -193,7 +198,9 @@ export function createTimelineApiHandler(db: Db): HttpApiHandler {
 }
 
 function writeJson(res: http.ServerResponse, status: number, payload: unknown): void {
-  res.writeHead(status, { "Content-Type": "application/json" });
+  res.writeHead(status, {
+    "Content-Type": "application/json",
+  });
   res.end(JSON.stringify(payload));
 }
 

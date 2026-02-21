@@ -88,15 +88,11 @@
     drawCanvas();
   }
 
-  onMount(() => {
-    drawCanvas();
-  });
-
   function drawCanvas(): void {
     if (!canvasEl) return;
     const ctx = canvasEl.getContext("2d");
     if (!ctx) return;
-
+    // console.log(`Draw row ${market.symbol}`, market);
     const dpr = Math.max(1, window.devicePixelRatio || 1);
     const cssWidth = timelineWidth;
     const cssHeight = rowHeight;
@@ -150,6 +146,14 @@
       viewRange.startTs,
       viewRange.endTs,
     );
+    
+
+    /*if (visibleWindow.endIndex - visibleWindow.startIndex > 0) {
+      console.log(
+        `Drawing events ${visibleWindow.startIndex} to ${visibleWindow.endIndex} of ${events.length}`,
+        events.slice(visibleWindow.startIndex, visibleWindow.endIndex),
+      );
+    }*/
 
     for (let i = visibleWindow.startIndex; i < visibleWindow.endIndex; i += 1) {
       drawEvent(ctx, events[i], cssWidth, cssHeight);
@@ -276,7 +280,7 @@
 
     const span = Math.max(1, viewRange.endTs - viewRange.startTs);
     const msPerPx = span / Math.max(1, timelineWidth);
-    dispatch("pan", { deltaMs: Math.round(dx * msPerPx) });
+    dispatch("pan", { deltaMs: Math.round(dx * msPerPx) * -1 });
   }
 
   function handlePointerUp(event: PointerEvent): void {
