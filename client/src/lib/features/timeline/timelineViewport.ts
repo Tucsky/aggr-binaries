@@ -86,6 +86,28 @@ export function panTimelineRange(
   };
 }
 
+export function shiftViewRangeIntoRangeIfDisjoint(
+  range: TimelineRange,
+  viewRange: TimelineRange,
+): TimelineRange {
+  if (viewRange.endTs >= range.startTs && viewRange.startTs <= range.endTs) {
+    return viewRange;
+  }
+  const viewSpan = Math.max(1, viewRange.endTs - viewRange.startTs);
+  const rangeSpan = Math.max(0, range.endTs - range.startTs);
+  if (viewSpan >= rangeSpan) return { ...range };
+  if (viewRange.endTs < range.startTs) {
+    const startTs = range.startTs;
+    const endTs = startTs + viewSpan;
+    if (endTs <= range.endTs) return { startTs, endTs };
+    return { startTs: range.endTs - viewSpan, endTs: range.endTs };
+  }
+  const endTs = range.endTs;
+  const startTs = endTs - viewSpan;
+  if (startTs >= range.startTs) return { startTs, endTs };
+  return { ...range };
+}
+
 export function formatTimelineTsLabel(ts: number | null): string {
   if (ts === null) return "";
   const date = new Date(ts);

@@ -11,20 +11,29 @@
   import { fetchTimelineEvents, fetchTimelineMarkets } from "../lib/features/timeline/timelineApi.js";
   import {
     buildEventsQueryKey,
+    filterMarketsWithRange,
     normalizeMarketRows,
     normalizeMarketsResponse,
     restorePersistedViewRange,
+    shouldKeepFilterSelection,
     unique,
   } from "../lib/features/timeline/timelinePageHelpers.js";
   import { type TimelineMarketAction, type TimelineEvent, type TimelineHoverEvent, type TimelineMarket } from "../lib/features/timeline/timelineTypes.js";
-  import { prefs } from "../lib/features/viewer/viewerStore.js";
-  import { buildInitialViewRange, formatTimelineTsLabel, panTimelineRange, resolveTimelineTimeframe, zoomTimelineRange } from "../lib/features/timeline/timelineViewport.js";
+  import { prefs, savePrefs } from "../lib/features/viewer/viewerStore.js";
+  import {
+    mergeSharedControlsIntoPrefs,
+    persistTimelineLocalState,
+    readSharedControlsFromPrefs,
+    restoreTimelineLocalState,
+    type TimelineSharedControls,
+  } from "../lib/features/timeline/timelineControlsPersistence.js";
+  import { buildInitialViewRange, formatTimelineTsLabel, panTimelineRange, resolveTimelineTimeframe, shiftViewRangeIntoRangeIfDisjoint, zoomTimelineRange } from "../lib/features/timeline/timelineViewport.js";
   import { computeGlobalRange, groupEventsByMarket, marketKey, toTimelineTs, toTimelineX, type TimelineRange } from "../lib/features/timeline/timelineUtils.js";
   const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
   const ROW_HEIGHT = 33;
   const OVERSCAN = 8;
   const LEFT_WIDTH = 180;
-  const TIMELINE_STATE_STORAGE_KEY = "aggr.timeline.state.v1";
+  // Intentionally kept in one page: timeline viewport math, row virtualization, and pointer interactions are tightly coupled.
   const PAN_OVERSCROLL_RATIO = 0.01;
   const SYMBOL_INPUT_DEBOUNCE_MS = 180;
   let loadingMarkets = false;
@@ -32,6 +41,8 @@
   let marketsError = "";
   let eventsError = "";
   let allMarkets: TimelineMarket[] = [];
+  let filteredMarkets: TimelineMarket[] = [];
+  let filteredRange: TimelineRange | null = null;
   let allEvents: TimelineEvent[] = [];
   let groupedEvents = new Map<string, TimelineEvent[]>();
   let timeframeOptions: string[] = [];
@@ -61,15 +72,19 @@
   let symbolInputTimer: ReturnType<typeof setTimeout> | null = null;
   let lastEventsQueryKey = "";
   $: collectorOptions = unique(allMarkets.map((market) => market.collector));
-  $: if (collectorFilter && !collectorOptions.includes(collectorFilter)) collectorFilter = "";
+  $: if (!shouldKeepFilterSelection(collectorFilter, collectorOptions)) collectorFilter = "";
   $: exchangeOptions = unique(allMarkets.filter((market) => !collectorFilter || market.collector === collectorFilter).map((market) => market.exchange));
-  $: if (exchangeFilter && !exchangeOptions.includes(exchangeFilter)) exchangeFilter = "";
-  $: filteredMarkets = allMarkets.filter((market) => {
-    if (collectorFilter && market.collector !== collectorFilter) return false;
-    if (exchangeFilter && market.exchange !== exchangeFilter) return false;
-    if (symbolFilter && !market.symbol.toLowerCase().includes(symbolFilter.toLowerCase())) return false;
-    return true;
-  });
+  $: if (!shouldKeepFilterSelection(exchangeFilter, exchangeOptions)) exchangeFilter = "";
+  $: ({ markets: filteredMarkets, range: filteredRange } = filterMarketsWithRange(allMarkets, collectorFilter, exchangeFilter, symbolFilter));
+  $: selectedRange = filteredRange;
+  $: if (viewRange && filteredRange) {
+    const adjusted = shiftViewRangeIntoRangeIfDisjoint(filteredRange, viewRange);
+    if (adjusted.startTs !== viewRange.startTs || adjusted.endTs !== viewRange.endTs) {
+      viewRange = adjusted;
+      syncCrosshairTsFromPx();
+      persistTimelineState();
+    }
+  }
   $: groupedEvents = groupEventsByMarket(allEvents);
   $: timelineWidth = Math.max(320, Math.floor(timelineViewportWidth));
   $: totalGridWidth = LEFT_WIDTH + timelineWidth;
@@ -85,6 +100,7 @@
   $: hasMoreLeft = Boolean(selectedRange && viewRange && viewRange.startTs > selectedRange.startTs);
   $: hasMoreRight = Boolean(selectedRange && viewRange && viewRange.endTs < selectedRange.endTs);
   onMount(() => {
+    restoreSharedControlPrefs();
     restoreTimelineState();
     void initTimeline();
     if (!scrollEl) return;
@@ -129,13 +145,14 @@
   async function loadMarkets(forceLoadEvents = false): Promise<void> {
     loadingMarkets = true;
     marketsError = "";
-    // console.log("Loading markets with filters", { timeframe: timeframeFilter, collector: collectorFilter, exchange: exchangeFilter });
+    console.log("Loading markets with filters", { timeframe: timeframeFilter, collector: collectorFilter, exchange: exchangeFilter });
     try {
       let requested = timeframeFilter.trim() || "1m";
       if (timeframeOptions.length) {
         requested = resolveTimelineTimeframe(requested, timeframeOptions) || requested;
       }
       let response = await fetchTimelineMarkets({ timeframe: requested });
+      console.log("Loaded markets response", response.markets.length, "markets");
       let normalized = normalizeMarketsResponse(response, requested);
       timeframeOptions = normalized.timeframes;
       timeframeFilter = normalized.selectedTimeframe;
@@ -167,6 +184,7 @@
       }
       crosshairTs = null;
       crosshairPx = null;
+      persistSharedControlPrefs();
       persistTimelineState();
     } catch (err) {
       marketsError = err instanceof Error ? err.message : "Failed to load timeline markets";
@@ -185,13 +203,13 @@
     eventAbort = new AbortController();
     loadingEvents = true;
     eventsError = "";
-    // console.log("Loading events with filters", { collector: collectorFilter, exchange: exchangeFilter, symbol: symbolFilter, startTs: selectedRange.startTs, endTs: selectedRange.endTs });
+    console.log("Loading events with filters", { collector: collectorFilter, exchange: exchangeFilter, symbol: symbolFilter, startTs: selectedRange.startTs, endTs: selectedRange.endTs });
     try {
       allEvents = await fetchTimelineEvents(
         { collector: collectorFilter || undefined, exchange: exchangeFilter || undefined, symbol: symbolFilter || undefined, startTs: selectedRange.startTs, endTs: selectedRange.endTs },
         eventAbort.signal,
       );
-      // console.log(`Loaded ${allEvents.length} events`);
+      console.log("Loaded events response", allEvents.length, "events");
       lastEventsQueryKey = queryKey;
     } catch (err) {
       if ((err as { name?: string }).name !== "AbortError") eventsError = err instanceof Error ? err.message : "Failed to load timeline events";
@@ -216,11 +234,17 @@
   }
   function handleCollectorChange(event: CustomEvent<string>): void {
     collectorFilter = event.detail;
+    console.log('setting collector filter to', collectorFilter);  
+    if (exchangeFilter && !allMarkets.some((market) => (!collectorFilter || market.collector === collectorFilter) && market.exchange === exchangeFilter)) {
+      exchangeFilter = "";
+    }
+    persistSharedControlPrefs();
     persistTimelineState();
     scheduleEventsReload(0);
   }
   function handleExchangeChange(event: CustomEvent<string>): void {
     exchangeFilter = event.detail;
+    persistSharedControlPrefs();
     persistTimelineState();
     scheduleEventsReload(0);
   }
@@ -232,6 +256,7 @@
   }
   function handleTimeframeChange(event: CustomEvent<string>): void {
     timeframeFilter = event.detail;
+    persistSharedControlPrefs();
     persistTimelineState();
     clearSymbolInputTimer();
     void loadMarkets();
@@ -296,10 +321,6 @@
       addToast("Clipboard unavailable", "error", 1800);
     }
   }
-  function rowEvents(market: TimelineMarket): TimelineEvent[] {
-    return groupedEvents.get(marketKey(market)) ?? [];
-  }
-
   function rowIdentity(market: TimelineMarket): string {
     return `${market.collector}:${market.exchange}:${market.symbol}:${market.timeframe}`;
   }
@@ -311,45 +332,47 @@
     actionsMarket = event.detail.market;
   }
 
+  function persistSharedControlPrefs(): void {
+    const current = get(prefs);
+    const controls: TimelineSharedControls = { collectorFilter, exchangeFilter, timeframeFilter };
+    const next = mergeSharedControlsIntoPrefs(current, controls);
+    if (!next) return;
+    savePrefs(next);
+  }
+
+  function restoreSharedControlPrefs(): void {
+    const restored = readSharedControlsFromPrefs(get(prefs), timeframeFilter);
+    collectorFilter = restored.collectorFilter;
+    exchangeFilter = restored.exchangeFilter;
+    timeframeFilter = restored.timeframeFilter;
+  }
+
   function persistTimelineState(): void {
     if (typeof window === "undefined") return;
-    const payload = {
-      collectorFilter,
-      exchangeFilter,
+    persistTimelineLocalState(window.localStorage, {
       symbolFilter,
-      timeframeFilter,
       viewStartTs: viewRange?.startTs ?? null,
       viewEndTs: viewRange?.endTs ?? null,
-    };
-    try {
-      window.localStorage.setItem(TIMELINE_STATE_STORAGE_KEY, JSON.stringify(payload));
-    } catch {
-      // ignore storage failures
-    }
+    });
   }
 
   function restoreTimelineState(): void {
     if (typeof window === "undefined") return;
-    try {
-      const raw = window.localStorage.getItem(TIMELINE_STATE_STORAGE_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as Partial<{
-        collectorFilter: string;
-        exchangeFilter: string;
-        symbolFilter: string;
-        timeframeFilter: string;
-        viewStartTs: number | null;
-        viewEndTs: number | null;
-      }>;
-      collectorFilter = typeof parsed.collectorFilter === "string" ? parsed.collectorFilter : "";
-      exchangeFilter = typeof parsed.exchangeFilter === "string" ? parsed.exchangeFilter : "";
-      symbolFilter = typeof parsed.symbolFilter === "string" ? parsed.symbolFilter : "";
-      timeframeFilter = typeof parsed.timeframeFilter === "string" && parsed.timeframeFilter.length ? parsed.timeframeFilter : timeframeFilter;
-      persistedViewStartTs = Number.isFinite(parsed.viewStartTs) ? Number(parsed.viewStartTs) : null;
-      persistedViewEndTs = Number.isFinite(parsed.viewEndTs) ? Number(parsed.viewEndTs) : null;
-      // console.log("Restored timeline state from storage", { collectorFilter, exchangeFilter, symbolFilter, timeframeFilter, persistedViewStartTs: persistedViewStartTs ? new Date(persistedViewStartTs).toISOString() : null, persistedViewEndTs: persistedViewEndTs ? new Date(persistedViewEndTs).toISOString() : null });
-    } catch {
-      // ignore malformed state
+    const restored = restoreTimelineLocalState(window.localStorage);
+    symbolFilter = restored.symbolFilter;
+    persistedViewStartTs = restored.viewStartTs;
+    persistedViewEndTs = restored.viewEndTs;
+    if (restored.legacySharedControls) {
+      if (typeof restored.legacySharedControls.collectorFilter === "string") {
+        collectorFilter = restored.legacySharedControls.collectorFilter;
+      }
+      if (typeof restored.legacySharedControls.exchangeFilter === "string") {
+        exchangeFilter = restored.legacySharedControls.exchangeFilter;
+      }
+      if (typeof restored.legacySharedControls.timeframeFilter === "string") {
+        timeframeFilter = restored.legacySharedControls.timeframeFilter;
+      }
+      persistSharedControlPrefs();
     }
   }
 
@@ -360,14 +383,11 @@
   }
   function scheduleEventsReload(delayMs: number): void {
     clearSymbolInputTimer();
-    if (delayMs <= 0) {
-      void loadEvents();
-      return;
-    }
+    const waitMs = delayMs <= 0 ? 0 : delayMs;
     symbolInputTimer = setTimeout(() => {
       symbolInputTimer = null;
       void loadEvents();
-    }, delayMs);
+    }, waitMs);
   }
 </script>
 <div class="flex h-full min-h-0 flex-col bg-slate-950 text-slate-100">
@@ -386,7 +406,7 @@
         <div class="relative z-10 min-w-max" style={`width: ${totalGridWidth}px;`}>
           <div style={`height: ${topPadding}px;`}></div>
           {#each visibleMarkets as market (rowIdentity(market))}
-            <TimelineRow {market} events={rowEvents(market)} range={selectedRange} {viewRange} timelineWidth={timelineWidth} rowHeight={ROW_HEIGHT} titleWidth={LEFT_WIDTH} on:open={handleOpen} on:hover={handleHover} on:zoom={handleZoom} on:pan={handlePan} on:actions={handleRowActions} />
+            <TimelineRow {market} events={groupedEvents.get(marketKey(market)) ?? []} range={selectedRange} {viewRange} timelineWidth={timelineWidth} rowHeight={ROW_HEIGHT} titleWidth={LEFT_WIDTH} on:open={handleOpen} on:hover={handleHover} on:zoom={handleZoom} on:pan={handlePan} on:actions={handleRowActions} />
           {/each}
           <div style={`height: ${bottomPadding}px;`}></div>
         </div>

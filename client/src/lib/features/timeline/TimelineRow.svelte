@@ -16,6 +16,7 @@
     PROCESSED_SOURCE_STYLE,
     resolveTimelineSourceRange,
   } from "./timelineRowSource.js";
+  import { resolveOpenTsFromClick } from "./timelineRowClick.js";
   import type { TimelineEvent, TimelineHoverEvent, TimelineMarket } from "./timelineTypes.js";
 
   interface OpenDetail {
@@ -85,6 +86,8 @@
     viewRange;
     rowHeight;
     timelineWidth;
+
+    console.log(`something changed for ${market.symbol}, redrawing canvas`);
     drawCanvas();
   }
 
@@ -92,7 +95,7 @@
     if (!canvasEl) return;
     const ctx = canvasEl.getContext("2d");
     if (!ctx) return;
-    // console.log(`Draw row ${market.symbol}`, market);
+    console.log(`Draw row ${market.symbol}`, market);
     const dpr = Math.max(1, window.devicePixelRatio || 1);
     const cssWidth = timelineWidth;
     const cssHeight = rowHeight;
@@ -119,6 +122,7 @@
     );
 
     if (indexedSource) {
+      console.log('\t-> Drawing indexed source (grey rect)');
       drawTimelineSourceRect(
         ctx,
         indexedSource.startTs,
@@ -130,6 +134,7 @@
       );
     }
     if (processedSource) {
+      console.log('\t-> Drawing processed source (blue rect)');
       drawTimelineSourceRect(
         ctx,
         processedSource.startTs,
@@ -148,12 +153,11 @@
     );
     
 
-    /*if (visibleWindow.endIndex - visibleWindow.startIndex > 0) {
+    if (visibleWindow.endIndex - visibleWindow.startIndex > 0) {
       console.log(
-        `Drawing events ${visibleWindow.startIndex} to ${visibleWindow.endIndex} of ${events.length}`,
-        events.slice(visibleWindow.startIndex, visibleWindow.endIndex),
+        `\t-> drawing events ${visibleWindow.startIndex} to ${visibleWindow.endIndex} on ${market.symbol}`,
       );
-    }*/
+    }
 
     for (let i = visibleWindow.startIndex; i < visibleWindow.endIndex; i += 1) {
       drawEvent(ctx, events[i], cssWidth, cssHeight);
@@ -223,13 +227,13 @@
     const x = clampTs(event.clientX - rect.left, 0, timelineWidth);
     const y = clampTs(event.clientY - rect.top, 0, rowHeight);
     const marker = findMarkerAtPoint(x, y);
-    if (marker) {
-      dispatch("open", { market, ts: marker.event.ts });
-      return;
-    }
     const clickedTs = toTimelineTs(x, viewRange, timelineWidth);
-    const boundedTs = clampTs(clickedTs, market.startTs, market.endTs);
-    dispatch("open", { market, ts: boundedTs });
+    const targetTs = resolveOpenTsFromClick(
+      clickedTs,
+      { startTs: market.startTs, endTs: market.endTs },
+      marker?.event ?? null,
+    );
+    dispatch("open", { market, ts: targetTs });
   }
 
   function handleWheel(event: WheelEvent): void {

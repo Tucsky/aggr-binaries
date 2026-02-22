@@ -7,6 +7,36 @@ export function unique(values: string[]): string[] {
   return Array.from(new Set(values)).sort();
 }
 
+export function shouldKeepFilterSelection(filter: string, options: string[]): boolean {
+  if (!filter) return true;
+  if (options.length === 0) return true;
+  return options.includes(filter);
+}
+
+export function filterMarketsWithRange(
+  markets: TimelineMarket[],
+  collectorFilter: string,
+  exchangeFilter: string,
+  symbolFilter: string,
+): { markets: TimelineMarket[]; range: TimelineRange | null } {
+  const filtered: TimelineMarket[] = [];
+  const symbolNeedle = symbolFilter.toLowerCase();
+  let minTs = Number.POSITIVE_INFINITY;
+  let maxTs = Number.NEGATIVE_INFINITY;
+  for (const market of markets) {
+    if (collectorFilter && market.collector !== collectorFilter) continue;
+    if (exchangeFilter && market.exchange !== exchangeFilter) continue;
+    if (symbolNeedle && !market.symbol.toLowerCase().includes(symbolNeedle)) continue;
+    filtered.push(market);
+    if (market.startTs < minTs) minTs = market.startTs;
+    if (market.endTs > maxTs) maxTs = market.endTs;
+  }
+  if (!Number.isFinite(minTs) || !Number.isFinite(maxTs) || maxTs < minTs) {
+    return { markets: filtered, range: null };
+  }
+  return { markets: filtered, range: { startTs: minTs, endTs: maxTs } };
+}
+
 export function normalizeMarketRows(markets: TimelineMarket[], fallbackTimeframe: string): TimelineMarket[] {
   return markets.map((market) => ({
     ...market,
