@@ -7,6 +7,7 @@ import { runFixGaps } from "../core/gaps/index.js";
 import { runIndex } from "../core/indexer.js";
 import { runProcess } from "../core/process.js";
 import { runRegistry } from "../core/registry.js";
+import { clearTimelineMarket } from "./timelineMarketClear.js";
 
 const MAX_REQUEST_BYTES = 16_384;
 
@@ -15,6 +16,7 @@ export enum TimelineMarketAction {
   Process = "process",
   FixGaps = "fixgaps",
   Registry = "registry",
+  Clear = "clear",
 }
 
 export interface TimelineActionsApiOptions {
@@ -183,6 +185,38 @@ export async function executeTimelineAction(
     };
   }
 
+  if (payload.action === TimelineMarketAction.Clear) {
+    const clearStats = await clearTimelineMarket(db, config.outDir, {
+      collector: payload.collector,
+      exchange: payload.exchange,
+      symbol: payload.symbol,
+    });
+    const includePaths = await resolveIndexIncludePaths(config.root, payload.collector, payload.exchange, payload.symbol);
+    const indexStats = await deps.runIndex(
+      {
+        ...config,
+        includePaths,
+      },
+      db,
+    );
+    return {
+      action: payload.action,
+      market: buildResultMarket(payload),
+      durationMs: 0,
+      details: {
+        outputsDeleted: clearStats.outputsDeleted,
+        eventsDeleted: clearStats.eventsDeleted,
+        filesDeleted: clearStats.filesDeleted,
+        registryDeleted: clearStats.registryDeleted,
+        seen: indexStats.seen,
+        inserted: indexStats.inserted,
+        existing: indexStats.existing,
+        conflicts: indexStats.conflicts,
+        skipped: indexStats.skipped,
+      },
+    };
+  }
+
   throw new Error(`Unsupported action: ${payload.action}`);
 }
 
@@ -230,7 +264,8 @@ function parseAction(raw: unknown): TimelineMarketAction {
   if (action === TimelineMarketAction.Process) return TimelineMarketAction.Process;
   if (action === TimelineMarketAction.FixGaps) return TimelineMarketAction.FixGaps;
   if (action === TimelineMarketAction.Registry) return TimelineMarketAction.Registry;
-  throw new Error("action must be one of: index, process, fixgaps, registry");
+  if (action === TimelineMarketAction.Clear) return TimelineMarketAction.Clear;
+  throw new Error("action must be one of: index, process, fixgaps, registry, clear");
 }
 
 function parseRequiredField(raw: unknown, name: string): string {

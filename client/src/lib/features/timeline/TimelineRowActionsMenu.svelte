@@ -29,6 +29,7 @@
     { label: "Process", icon: Workflow, action: TimelineMarketAction.Process },
     { label: "Fix gaps", icon: Wrench, action: TimelineMarketAction.FixGaps },
     { label: "Rebuild", icon: RefreshCcw, action: TimelineMarketAction.Registry },
+    { label: "Clear", icon: Trash2, action: TimelineMarketAction.Clear },
   ];
   let actionInFlight = false;
 
@@ -78,6 +79,7 @@
   function formatActionLabel(action: TimelineMarketAction): string {
     if (action === TimelineMarketAction.FixGaps) return "Fix gaps";
     if (action === TimelineMarketAction.Registry) return "Rebuild";
+    if (action === TimelineMarketAction.Clear) return "Clear";
     if (action === TimelineMarketAction.Index) return "Index";
     return "Process";
   }
@@ -126,14 +128,6 @@
     >
       <Download class="h-3.5 w-3.5 text-slate-600" aria-hidden="true" strokeWidth={2} />
       <span>Export timeframe</span>
-    </button>
-    <button
-      class="flex w-full cursor-not-allowed items-center gap-2 rounded px-3 py-1.5 text-left text-xs text-slate-500"
-      type="button"
-      disabled
-    >
-      <Trash2 class="h-3.5 w-3.5 text-slate-600" aria-hidden="true" strokeWidth={2} />
-      <span>Delete outputs</span>
     </button>
   </div>
 </Dropdown>

@@ -43,6 +43,7 @@ export enum TimelineMarketAction {
   Process = "process",
   FixGaps = "fixgaps",
   Registry = "registry",
+  Clear = "clear",
 }
 
 export type TimelineEventKind =

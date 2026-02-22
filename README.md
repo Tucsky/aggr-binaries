@@ -484,8 +484,11 @@ npm run serve
   * deterministic ordering: `collector, exchange, symbol, ts, id`
   * event payload includes source and gap context fields (`relativePath`, `startLine`, `endLine`, `gapMs`, `gapMiss`, `eventType`, `gapFixStatus`) for timeline inspection UIs
 * `POST /api/timeline/actions`
-  * triggers core pipeline actions for one market row (`index`, `process`, `fixgaps`, `registry`)
+  * triggers core pipeline actions for one market row (`index`, `process`, `fixgaps`, `registry`, `clear`)
   * request body: `{action, collector, exchange, symbol, timeframe?}`
+  * `clear` runs two steps for the selected market key (`collector/exchange/symbol`):
+    * delete row-scoped persisted state (`events`, `files`, `registry`) and output directory (`output/{collector}/{exchange}/{symbol}`)
+    * run a row-filtered `index` pass for that same market key
   * action execution is serialized server-side; concurrent requests return `409`
 
 ### WebSocket API (message-driven, single connection)
