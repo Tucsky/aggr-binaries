@@ -1,11 +1,11 @@
 <script lang="ts">
   import { get } from "svelte/store";
-  import CandleChart from "../lib/CandleChart.svelte";
-  import ViewerControls from "../lib/ViewerControls.svelte";
-  import { currentRoute, navigate } from "../lib/routeStore.js";
-  import { applyChartRouteToPrefs, buildAppRouteUrl, chartRouteFromPrefs, isChartRoute, type ChartRoute } from "../lib/routes.js";
-  import { prefs, savePrefs } from "../lib/viewerStore.js";
-  import type { Prefs } from "../lib/types.js";
+  import CandleChart from "../lib/features/viewer/CandleChart.svelte";
+  import ViewerControls from "../lib/features/viewer/ViewerControls.svelte";
+  import { currentRoute, navigate } from "../lib/framework/routing/routeStore.js";
+  import { applyChartRouteToPrefs, buildAppRouteUrl, chartRouteFromPrefs, isChartRoute, type ChartRoute } from "../lib/framework/routing/routes.js";
+  import { prefs, savePrefs } from "../lib/features/viewer/viewerStore.js";
+  import type { Prefs } from "../lib/features/viewer/types.js";
   import { onDestroy } from "svelte";
 
   let route: ChartRoute = { kind: "chart" };

@@ -19,17 +19,17 @@
     VOLUME_POSITIVE,
     VOLUME_POSITIVE_DIM,
   } from "./candleChartSeries.js";
-  import { computeChartScaleMargins } from "../../../src/shared/chartScaleMargins.js";
+  import { computeChartScaleMargins } from "../../../../../src/shared/chartScaleMargins.js";
   import {
     computeAnchoredVisibleRange,
     computeChartInitialSlice,
-  } from "../../../src/shared/chartInitialSlice.js";
+  } from "../../../../../src/shared/chartInitialSlice.js";
   import {
     findCandleAtOrBefore,
     formatLiquidationLegend,
     formatPriceLegend,
     formatVolumeLegend,
-  } from "../../../src/shared/chartLegend.js";
+  } from "../../../../../src/shared/chartLegend.js";
   import type { Candle, Meta } from "./types.js";
   import { meta as metaStore, status as statusStore } from "./viewerStore.js";
   import { onCandles, requestSlice } from "./viewerWs.js";

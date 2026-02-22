@@ -5,7 +5,7 @@
     formatStartInputUtc,
     normalizeStartInput,
     parseStartInputUtcMs,
-  } from "../../../src/shared/startInput.js";
+  } from "../../../../../src/shared/startInput.js";
 
   interface ChangeDetail {
     value: string;

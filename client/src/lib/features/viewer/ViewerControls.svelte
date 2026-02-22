@@ -3,12 +3,12 @@
   import { get } from "svelte/store";
   import ArrowLeft from "lucide-svelte/icons/arrow-left";
   import Settings2 from "lucide-svelte/icons/settings-2";
-  import Autocomplete from "./Autocomplete.svelte";
-  import Dropdown from "./Dropdown.svelte";
-  import StartDateInput from "./StartDateInput.svelte";
+  import Autocomplete from "../../framework/ui/Autocomplete.svelte";
+  import Dropdown from "../../framework/ui/Dropdown.svelte";
+  import StartDateInput from "../../framework/ui/StartDateInput.svelte";
   import TimeframeDropdown from "./TimeframeDropdown.svelte";
   import type { Market } from "./types.js";
-  import { resolveRouteMarket, type ChartRoute } from "./routes.js";
+  import { resolveRouteMarket, type ChartRoute } from "../../framework/routing/routes.js";
   import {
       markets,
       meta,
@@ -23,8 +23,8 @@
       setStart,
       setTarget,
   } from "./viewerWs.js";
-  import { parseStartInputUtcMs } from "../../../src/shared/startInput.js";
-  import { navigate } from "./routeStore.js";
+  import { parseStartInputUtcMs } from "../../../../../src/shared/startInput.js";
+  import { navigate } from "../../framework/routing/routeStore.js";
 
   export let route: ChartRoute | null = null;
 

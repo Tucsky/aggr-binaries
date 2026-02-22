@@ -8,9 +8,9 @@
   import Workflow from "lucide-svelte/icons/workflow";
   import Wrench from "lucide-svelte/icons/wrench";
   import { createEventDispatcher } from "svelte";
-  import { addToast } from "./toastStore.js";
+  import { addToast } from "../../framework/toast/toastStore.js";
   import { runTimelineMarketAction } from "./timelineApi.js";
-  import Dropdown from "./Dropdown.svelte";
+  import Dropdown from "../../framework/ui/Dropdown.svelte";
   import { TimelineMarketAction, type TimelineMarket } from "./timelineTypes.js";
 
   export let open = false;

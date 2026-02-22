@@ -1,5 +1,5 @@
-import { formatStartInputUtc, parseStartInputUtcMs } from "../../../src/shared/startInput.js";
-import type { Prefs } from "./types.js";
+import { formatStartInputUtc, parseStartInputUtcMs } from "../../../../../src/shared/startInput.js";
+import type { Prefs } from "../../features/viewer/types.js";
 
 export interface ChartMarketRoute {
   collector: string;

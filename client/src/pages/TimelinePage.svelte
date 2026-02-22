@@ -1,25 +1,25 @@
 <script lang="ts">
   import { get } from "svelte/store";
   import { onDestroy, onMount } from "svelte";
-  import TimelineDebugPanel from "../lib/TimelineDebugPanel.svelte";
-  import TimelineEventPopover from "../lib/TimelineEventPopover.svelte";
-  import TimelineControls from "../lib/TimelineControls.svelte";
-  import TimelineRowActionsMenu from "../lib/TimelineRowActionsMenu.svelte";
-  import TimelineRow from "../lib/TimelineRow.svelte";
-  import { navigate } from "../lib/routeStore.js";
-  import { addToast } from "../lib/toastStore.js";
-  import { fetchTimelineEvents, fetchTimelineMarkets } from "../lib/timelineApi.js";
+  import TimelineDebugPanel from "../lib/features/timeline/TimelineDebugPanel.svelte";
+  import TimelineEventPopover from "../lib/features/timeline/TimelineEventPopover.svelte";
+  import TimelineControls from "../lib/features/timeline/TimelineControls.svelte";
+  import TimelineRowActionsMenu from "../lib/features/timeline/TimelineRowActionsMenu.svelte";
+  import TimelineRow from "../lib/features/timeline/TimelineRow.svelte";
+  import { navigate } from "../lib/framework/routing/routeStore.js";
+  import { addToast } from "../lib/framework/toast/toastStore.js";
+  import { fetchTimelineEvents, fetchTimelineMarkets } from "../lib/features/timeline/timelineApi.js";
   import {
     buildEventsQueryKey,
     normalizeMarketRows,
     normalizeMarketsResponse,
     restorePersistedViewRange,
     unique,
-  } from "../lib/timelinePageHelpers.js";
-  import { type TimelineMarketAction, type TimelineEvent, type TimelineHoverEvent, type TimelineMarket } from "../lib/timelineTypes.js";
-  import { prefs } from "../lib/viewerStore.js";
-  import { buildInitialViewRange, formatTimelineTsLabel, panTimelineRange, resolveTimelineTimeframe, zoomTimelineRange } from "../lib/timelineViewport.js";
-  import { computeGlobalRange, groupEventsByMarket, marketKey, toTimelineTs, toTimelineX, type TimelineRange } from "../lib/timelineUtils.js";
+  } from "../lib/features/timeline/timelinePageHelpers.js";
+  import { type TimelineMarketAction, type TimelineEvent, type TimelineHoverEvent, type TimelineMarket } from "../lib/features/timeline/timelineTypes.js";
+  import { prefs } from "../lib/features/viewer/viewerStore.js";
+  import { buildInitialViewRange, formatTimelineTsLabel, panTimelineRange, resolveTimelineTimeframe, zoomTimelineRange } from "../lib/features/timeline/timelineViewport.js";
+  import { computeGlobalRange, groupEventsByMarket, marketKey, toTimelineTs, toTimelineX, type TimelineRange } from "../lib/features/timeline/timelineUtils.js";
   const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
   const ROW_HEIGHT = 33;
   const OVERSCAN = 8;

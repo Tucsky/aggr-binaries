@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import Toasts from "./lib/Toasts.svelte";
-  import { currentRoute, initRouteStore } from "./lib/routeStore.js";
+  import Toasts from "./lib/framework/toast/Toasts.svelte";
+  import { currentRoute, initRouteStore } from "./lib/framework/routing/routeStore.js";
   import ViewerPage from "./pages/ViewerPage.svelte";
   import TimelinePage from "./pages/TimelinePage.svelte";
 

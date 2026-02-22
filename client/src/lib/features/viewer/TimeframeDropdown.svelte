@@ -6,8 +6,8 @@
   import Pencil from "lucide-svelte/icons/pencil";
   import Trash2 from "lucide-svelte/icons/trash-2";
   import X from "lucide-svelte/icons/x";
-  import { parseTimeframeMs } from "../../../src/shared/timeframes.js";
-  import Dropdown from "./Dropdown.svelte";
+  import { parseTimeframeMs } from "../../../../../src/shared/timeframes.js";
+  import Dropdown from "../../framework/ui/Dropdown.svelte";
   import {
     filterTimeframesByQuery,
     type TimeframeEntry,

@@ -1,5 +1,5 @@
 import { get, writable, type Writable } from "svelte/store";
-import { COMMON_TIMEFRAMES, sortTimeframes } from "../../../src/shared/timeframes.js";
+import { COMMON_TIMEFRAMES, sortTimeframes } from "../../../../../src/shared/timeframes.js";
 import type { Market, Meta, Prefs, Status } from "./types.js";
 
 const PREF_KEY = "aggr-viewer-prefs";

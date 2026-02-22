@@ -4,7 +4,7 @@ import type {
   Time,
   WhitespaceData,
 } from "lightweight-charts";
-import { isGapCandle, toNonZero } from "../../../src/shared/chartLegend.js";
+import { isGapCandle, toNonZero } from "../../../../../src/shared/chartLegend.js";
 import type { Candle } from "./types.js";
 
 export const VOLUME_POSITIVE = "#3bca6d";
