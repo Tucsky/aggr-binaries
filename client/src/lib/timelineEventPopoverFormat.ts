@@ -14,11 +14,15 @@ export function formatElapsedDhms(ms: number | null): string {
   return parts.join(" ");
 }
 
-export function formatEstimatedMissRange(gapMiss: number | null): string {
+export function formatEstimatedMiss(gapMiss: number | null): string {
   if (gapMiss === null || !Number.isFinite(gapMiss)) return "n/a";
-  const base = Math.max(0, Math.round(gapMiss));
-  const top = base * 2;
-  return `${formatCompactCount(base)} - ${formatCompactCount(top)}`;
+  const miss = Math.max(0, Math.round(gapMiss)) * 2 // we multiply by 2 because right now estimations are ALWAYS too low
+  return `~${formatCompactCount(miss)}`;
+}
+
+export function formatRecoveredCount(recoveredCount: number | null | undefined): string {
+  if (recoveredCount === null || recoveredCount === undefined || !Number.isFinite(recoveredCount)) return "n/a";
+  return `${formatCompactCount(Math.max(0, Math.round(recoveredCount)))}`;
 }
 
 function formatCompactCount(value: number): string {

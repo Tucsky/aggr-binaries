@@ -257,8 +257,8 @@ test("timeline events use gap_end_ts first and fallback to file start_ts for non
       },
     ]);
     db.db
-      .prepare("UPDATE events SET gap_fix_status = :status WHERE event_type = :eventType")
-      .run({ status: "adapter_error", eventType: EventType.Gap });
+      .prepare("UPDATE events SET gap_fix_status = :status, gap_fix_recovered = :recovered WHERE event_type = :eventType")
+      .run({ status: "adapter_error", recovered: 7, eventType: EventType.Gap });
 
     const events = listTimelineEvents(db, {
       collector: "PI",
@@ -276,8 +276,10 @@ test("timeline events use gap_end_ts first and fallback to file start_ts for non
     ]);
     assert.strictEqual(events[0].eventType, EventType.PartsShort);
     assert.strictEqual(events[0].gapFixStatus, null);
+    assert.strictEqual(events[0].gapFixRecovered, null);
     assert.strictEqual(events[1].eventType, EventType.Gap);
     assert.strictEqual(events[1].gapFixStatus, "adapter_error");
+    assert.strictEqual(events[1].gapFixRecovered, 7);
   } finally {
     db.close();
   }

@@ -257,8 +257,9 @@ events(
   gap_ms INTEGER,        -- max gap size within the grouped range (if gap)
   gap_miss INTEGER,      -- estimated missing trades for the max gap (if gap)
   gap_end_ts INTEGER,    -- timestamp of the trade after the max gap (if gap)
-  gap_fix_status TEXT,   -- NULL | missing_adapter | adapter_error
+  gap_fix_status TEXT,   -- NULL | fixed | missing_adapter | adapter_error
   gap_fix_error TEXT,    -- last error message for fix attempt
+  gap_fix_recovered INTEGER, -- recovered trades matched to this gap window when fixed
   gap_fix_updated_at INTEGER,
   created_at INTEGER
 )
@@ -295,6 +296,7 @@ Located in `scripts/`:
 Requires:
 * **Node ≥ 22** (uses built-in `node:sqlite` and `--experimental-strip-types`)
 * System `sort` utility (`/usr/bin/sort` on macOS, GNU/BSD sort accepted) for `fixgaps` file rewrites
+* System `unzip` utility for Kraken direct archive extraction in `fixgaps`
 
 Install:
 
@@ -387,25 +389,30 @@ For each grouped `(root_id, relative_path)` file:
    * Recovered inserts are emitted as canonical trade rows (`ts price size side`) without liquidation marker.
 4. Patch all existing timeframe binaries for that market over the affected timestamp range.
 5. Update event lifecycle:
-   * Adapter succeeded (including 0 recovered trades): delete event row(s).
+   * Adapter succeeded (including 0 recovered trades): keep row, set `gap_fix_status='fixed'`, clear `gap_fix_error`, and set `gap_fix_recovered`.
    * Missing adapter: keep row, set `gap_fix_status='missing_adapter'`.
    * Adapter/merge/patch failure: keep row, set `gap_fix_status='adapter_error'` + `gap_fix_error`.
 
 When `--dry-run` is enabled:
 * `fixgaps` still scans gaps and calls adapters, and logs `recovered X / Y`.
-* No raw file rewrites, no binary patches, and no `events` row updates/deletes are performed.
+* No raw file rewrites, no binary patches, and no `events` row updates are performed.
 
 Supported adapters in this iteration:
 * `BINANCE` / `BINANCE_FUTURES` → `data.binance.vision`
 * `BYBIT` → `public.bybit.com/trading`
-* `KRAKEN` → `api.kraken.com/0/public/Trades`
+* `KRAKEN` → direct downloadable archives from Kraken support article (Google Drive full + quarterly files, cached under `.aggr-cache/fixgaps/kraken`) plus API tail fallback via `api.kraken.com/0/public/Trades`
+* Kraken archive references (article + quarterly folder links) are refreshed once per UTC day and persisted in a local manifest.
+* Kraken zip downloads are reused across runs and only re-downloaded when remote metadata changes (for example size drift).
+* Kraken direct extraction streams `unzip -p` line-by-line from the target CSV entry; it does not unpack or load full CSVs into Node heap.
+* Kraken direct CSV rows do not include side; side is inferred deterministically from tick-price direction.
+* Kraken API calls are limited to uncovered tail windows (recent overlap) or direct-source failures.
 * `BITFINEX` → `api-pub.bitfinex.com/v2/trades/.../hist`
 * `BITMEX` → `public.bitmex.com/data/trade` daily gzip dataset
 * `OKEX` / `OKX` → direct daily trades only (`static.okx.com`, available from 2021-09-02)
 * `KUCOIN` → direct spot daily trades (`historical-data.kucoin.com`)
 * `HUOBI` / `HTX` → direct daily trades (`www.htx.com`) for spot + linear swap
 * `COINBASE` → brokerage ticker + exchange trades pagination
-* Adapter-level rate-limit handling includes host pacing/backoff. Bitfinex is clamped to conservative pacing (`4s` min interval, `14 req/min`). Kraken also retries `EGeneral:Too many requests` JSON responses.
+* Adapter-level rate-limit handling includes host pacing/backoff. Bitfinex is clamped to conservative pacing (`4s` min interval, `14 req/min`). Kraken retries `EGeneral:Too many requests` JSON responses and refreshes its archive link map once per UTC day.
 * Internal exchange ids remain `OKEX` and `HUOBI`; `OKX` / `HTX` are supported as compatibility aliases for adapter routing.
 
 ### Fixgaps output

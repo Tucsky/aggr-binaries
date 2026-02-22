@@ -160,6 +160,7 @@ export async function executeTimelineAction(
         selectedEvents: stats.selectedEvents,
         processedFiles: stats.processedFiles,
         recoveredTrades: stats.recoveredTrades,
+        fixedEvents: stats.fixedEvents,
         deletedEvents: stats.deletedEvents,
         missingAdapter: stats.missingAdapter,
         adapterError: stats.adapterError,

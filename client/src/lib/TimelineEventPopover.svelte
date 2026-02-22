@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, tick } from "svelte";
-  import { formatElapsedDhms, formatEstimatedMissRange } from "./timelineEventPopoverFormat.js";
+  import { formatElapsedDhms, formatEstimatedMiss, formatRecoveredCount } from "./timelineEventPopoverFormat.js";
   import { computeTimelinePopoverPlacement } from "./timelineEventPopoverPosition.js";
   import type { TimelineHoverEvent } from "./timelineTypes.js";
   import { formatTimelineTsLabel } from "./timelineViewport.js";
@@ -147,6 +147,11 @@
     return data.event.ts - Math.floor(gapMs);
   }
 
+  function formatGapFixStatus(status: string | null | undefined): string {
+    if (!status) return "pending";
+    return status.split("_").join(" ");
+  }
+
   $: gapStartTs = resolveGapStartTs(renderData);
 
   if (typeof window !== "undefined") {
@@ -182,7 +187,11 @@
         <span class="text-slate-500">Elapsed</span>
         <span class="text-slate-200">{formatElapsedDhms(renderData.event.gapMs)}</span>
         <span class="text-slate-500">Miss</span>
-        <span class="text-slate-200">{formatEstimatedMissRange(renderData.event.gapMiss)}</span>
+        <span class="text-slate-200">{formatEstimatedMiss(renderData.event.gapMiss)}</span>
+        <span class="text-slate-500">Status</span>
+        <span class="text-slate-200">{formatGapFixStatus(renderData.event.gapFixStatus)}</span>
+        <span class="text-slate-500">Recovered</span>
+        <span class="text-slate-200">{formatRecoveredCount(renderData.event.gapFixRecovered)}</span>
       </div>
     {/if}
   </div>

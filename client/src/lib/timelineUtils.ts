@@ -15,6 +15,7 @@ export function marketKey(input: Pick<TimelineMarket, "collector" | "exchange" |
 }
 
 export function eventKind(event: TimelineEvent): TimelineEventKind {
+  if (event.gapFixStatus === "fixed") return "gap_fixed";
   if (event.gapFixStatus === "adapter_error") return "adapter_error";
   if (event.gapFixStatus === "missing_adapter") return "missing_adapter";
   if (event.eventType === "gap") return "gap";

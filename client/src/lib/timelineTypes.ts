@@ -19,6 +19,7 @@ export interface TimelineEvent {
   relativePath: string;
   eventType: string;
   gapFixStatus: string | null;
+  gapFixRecovered?: number | null;
   ts: number;
   startLine: number;
   endLine: number;
@@ -46,6 +47,7 @@ export enum TimelineMarketAction {
 
 export type TimelineEventKind =
   | "gap"
+  | "gap_fixed"
   | "parse_error"
   | "adapter_error"
   | "missing_adapter"

@@ -24,6 +24,7 @@ export interface FixGapsStats {
   processedFiles: number;
   recoveredTrades: number;
   deletedEvents: number;
+  fixedEvents: number;
   missingAdapter: number;
   adapterError: number;
   binariesPatched: number;
@@ -36,6 +37,7 @@ export async function runFixGaps(config: Config, db: Db, options: FixGapsOptions
     processedFiles: 0,
     recoveredTrades: 0,
     deletedEvents: 0,
+    fixedEvents: 0,
     missingAdapter: 0,
     adapterError: 0,
     binariesPatched: 0,
@@ -82,7 +84,7 @@ export async function runFixGaps(config: Config, db: Db, options: FixGapsOptions
 
   const elapsed = ((Date.now() - start) / 1000).toFixed(2);
   logFixgapsLine(
-    `[fixgaps] complete selected=${stats.selectedEvents} files=${stats.processedFiles} recovered=${stats.recoveredTrades} deleted=${stats.deletedEvents} missing_adapter=${stats.missingAdapter} adapter_error=${stats.adapterError} patched_timeframes=${stats.binariesPatched} elapsed=${elapsed}s`,
+    `[fixgaps] complete selected=${stats.selectedEvents} files=${stats.processedFiles} recovered=${stats.recoveredTrades} fixed=${stats.fixedEvents} deleted=${stats.deletedEvents} missing_adapter=${stats.missingAdapter} adapter_error=${stats.adapterError} patched_timeframes=${stats.binariesPatched} elapsed=${elapsed}s`,
   );
   clearFixgapsProgress();
 
@@ -272,19 +274,26 @@ async function processGroup(
     }
   }
 
-  const deleteIds = [...resolvableEventIds];
+  const resolvedIds = [...resolvableEventIds];
   const recoveredByEvent = countRecoveredByEvent(selectedWindows, recovered);
-  for (const id of deleteIds) {
+  for (const id of resolvedIds) {
     const row = rowsById.get(id);
     if (!row) continue;
     logGapRecovered(row, recoveredByEvent.get(id) ?? 0);
   }
   if (!dryRun) {
-    db.deleteEventsByIds(deleteIds);
-    stats.deletedEvents += deleteIds.length;
+    db.updateGapFixStatus(
+      resolvedIds.map((id) => ({
+        id,
+        status: GapFixStatus.Fixed,
+        error: null,
+        recovered: recoveredByEvent.get(id) ?? 0,
+      })),
+    );
+    stats.fixedEvents += resolvedIds.length;
   }
   if (DEBUG_FIXGAPS && !dryRun) {
-    logFixgapsLine(`[fixgaps/debug] file_done path=${first.relative_path} deleted=${deleteIds.length}`);
+    logFixgapsLine(`[fixgaps/debug] file_done path=${first.relative_path} fixed=${resolvedIds.length}`);
   }
 }
 

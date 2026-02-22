@@ -11,6 +11,7 @@ export enum EventType {
 export enum GapFixStatus {
   MissingAdapter = "missing_adapter",
   AdapterError = "adapter_error",
+  Fixed = "fixed",
 }
 
 export type ParseRejectReason =

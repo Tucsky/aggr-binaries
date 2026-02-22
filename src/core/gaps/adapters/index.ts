@@ -5,7 +5,7 @@ import { createBybitAdapter } from "./bybit.js";
 import { createCoinbaseAdapter } from "./coinbase.js";
 import { createHuobiAdapter } from "./huobi.js";
 import { createRateLimitedFetch } from "./http.js";
-import { createKrakenAdapter } from "./kraken.js";
+import { createKrakenAdapter } from "./kraken/index.js";
 import { createKucoinAdapter } from "./kucoin.js";
 import { createOkexAdapter } from "./okex.js";
 import type { FetchLike, TradeRecoveryAdapter } from "./types.js";

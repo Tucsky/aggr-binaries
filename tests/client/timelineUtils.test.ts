@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   clampTs,
+  eventKind,
   findTimelineEventWindow,
   groupEventsByMarket,
   toTimelineTs,
@@ -89,6 +90,25 @@ test("groupEventsByMarket groups rows and preserves deterministic order by ts/id
   const bucket = grouped.get("RAM:BINANCE:BTCUSDT");
   assert.ok(bucket);
   assert.deepStrictEqual(bucket?.map((event) => event.id), [1, 2, 3]);
+});
+
+test("eventKind marks fixed gap rows distinctly", () => {
+  const event: TimelineEvent = {
+    id: 1,
+    collector: "RAM",
+    exchange: "BINANCE",
+    symbol: "BTCUSDT",
+    relativePath: "RAM/BINANCE/BTCUSDT/2024-01-01.gz",
+    eventType: "gap",
+    gapFixStatus: "fixed",
+    gapFixRecovered: 12,
+    ts: 100,
+    startLine: 1,
+    endLine: 1,
+    gapMs: 1,
+    gapMiss: 1,
+  };
+  assert.strictEqual(eventKind(event), "gap_fixed");
 });
 
 test("findTimelineEventWindow returns visible inclusive ts window via binary search", () => {

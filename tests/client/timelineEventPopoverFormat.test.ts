@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { formatElapsedDhms, formatEstimatedMissRange } from "../../client/src/lib/timelineEventPopoverFormat.js";
+import { formatElapsedDhms, formatEstimatedMiss } from "../../client/src/lib/timelineEventPopoverFormat.js";
 
 test("formatElapsedDhms includes days and hh:mm:ss", () => {
   assert.equal(formatElapsedDhms(null), "0s");
@@ -11,10 +11,10 @@ test("formatElapsedDhms includes days and hh:mm:ss", () => {
   assert.equal(formatElapsedDhms(90_061_000), "1d 1h 1m 1s");
 });
 
-test("formatEstimatedMissRange emits compact k/M range from base to 2x", () => {
-  assert.equal(formatEstimatedMissRange(null), "n/a");
-  assert.equal(formatEstimatedMissRange(0), "0-0");
-  assert.equal(formatEstimatedMissRange(980), "980-2k");
-  assert.equal(formatEstimatedMissRange(1_500), "1.5k-3k");
-  assert.equal(formatEstimatedMissRange(2_500_000), "2.5M-5M");
+test("formatEstimatedMiss emits compact k/M (2x)", () => {
+  assert.equal(formatEstimatedMiss(null), "n/a");
+  assert.equal(formatEstimatedMiss(0), "~0");
+  assert.equal(formatEstimatedMiss(980), "~2k");
+  assert.equal(formatEstimatedMiss(1_500), "~3k");
+  assert.equal(formatEstimatedMiss(2_500_000), "~5m");
 });

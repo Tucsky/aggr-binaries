@@ -117,10 +117,10 @@ function insertGapEvent(
   return Number(result.lastInsertRowid);
 }
 
-function readEventRows(db: Db): Array<{ id: number; status: string | null; error: string | null }> {
+function readEventRows(db: Db): Array<{ id: number; status: string | null; error: string | null; recovered: number | null }> {
   return db.db
-    .prepare("SELECT id, gap_fix_status AS status, gap_fix_error AS error FROM events ORDER BY id;")
-    .all() as Array<{ id: number; status: string | null; error: string | null }>;
+    .prepare("SELECT id, gap_fix_status AS status, gap_fix_error AS error, gap_fix_recovered AS recovered FROM events ORDER BY id;")
+    .all() as Array<{ id: number; status: string | null; error: string | null; recovered: number | null }>;
 }
 
 function readBin(outDir: string, timeframe: string): Promise<Buffer> {
@@ -160,7 +160,8 @@ test("fixgaps merges recovered trades, patches all timeframes, and is idempotent
       adapterRegistry,
     });
 
-    assert.strictEqual(stats.deletedEvents, 1);
+    assert.strictEqual(stats.deletedEvents, 0);
+    assert.strictEqual(stats.fixedEvents, 1);
     assert.strictEqual(stats.recoveredTrades, 1);
     assert.ok(stats.binariesPatched >= 2);
 
@@ -171,14 +172,20 @@ test("fixgaps merges recovered trades, patches all timeframes, and is idempotent
     const after5m = await readBin(fixture.outDir, "5m");
     assert.notStrictEqual(Buffer.compare(before1m, after1m), 0);
     assert.notStrictEqual(Buffer.compare(before5m, after5m), 0);
-    assert.strictEqual(readEventRows(db).length, 0);
+    const fixedRows = readEventRows(db);
+    assert.strictEqual(fixedRows.length, 1);
+    assert.strictEqual(fixedRows[0].status, GapFixStatus.Fixed);
+    assert.strictEqual(fixedRows[0].error, null);
+    assert.strictEqual(fixedRows[0].recovered, 1);
 
     const second = await runFixGaps(buildConfig(fixture.root, fixture.outDir, fixture.dbPath, "1m"), db, {
       adapterRegistry,
     });
     assert.strictEqual(second.selectedEvents, 0);
+    assert.strictEqual(second.fixedEvents, 0);
     assert.strictEqual(Buffer.compare(after1m, await readBin(fixture.outDir, "1m")), 0);
     assert.strictEqual(Buffer.compare(after5m, await readBin(fixture.outDir, "5m")), 0);
+    assert.deepStrictEqual(readEventRows(db), fixedRows);
   } finally {
     db.close();
   }
@@ -216,9 +223,13 @@ test("fixgaps sorts unsorted files when recovered data is before existing rows",
       }),
     });
 
-    assert.strictEqual(stats.deletedEvents, 1);
+    assert.strictEqual(stats.deletedEvents, 0);
+    assert.strictEqual(stats.fixedEvents, 1);
     assert.strictEqual(stats.recoveredTrades, 1);
-    assert.strictEqual(readEventRows(db).length, 0);
+    const rows = readEventRows(db);
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].status, GapFixStatus.Fixed);
+    assert.strictEqual(rows[0].recovered, 1);
 
     const lines = (await fs.readFile(fixture.fullPath, "utf8")).trim().split("\n");
     assert.deepStrictEqual(lines, [`${TS1} 101 1 0 0`, `${recoveredTs} 100.5 0.5 1`, `${TS2} 102 1 1 0`]);
@@ -274,10 +285,14 @@ test("fixgaps on unsorted files sorts and recovers mixed windows", async () => {
     });
 
     assert.strictEqual(seenWindowCount, 2);
-    assert.strictEqual(stats.deletedEvents, 2);
+    assert.strictEqual(stats.deletedEvents, 0);
+    assert.strictEqual(stats.fixedEvents, 2);
     assert.strictEqual(stats.recoveredTrades, 2);
     assert.strictEqual(stats.adapterError, 0);
-    assert.strictEqual(readEventRows(db).length, 0);
+    const rows = readEventRows(db);
+    assert.strictEqual(rows.length, 2);
+    assert.deepStrictEqual(rows.map((row) => row.status), [GapFixStatus.Fixed, GapFixStatus.Fixed]);
+    assert.deepStrictEqual(rows.map((row) => row.recovered), [1, 1]);
 
     const lines = (await fs.readFile(fixture.fullPath, "utf8")).trim().split("\n");
     assert.deepStrictEqual(lines, [
@@ -292,7 +307,7 @@ test("fixgaps on unsorted files sorts and recovers mixed windows", async () => {
   }
 });
 
-test("fixgaps deletes event when adapter succeeds with zero recovered trades", async () => {
+test("fixgaps marks event fixed when adapter succeeds with zero recovered trades", async () => {
   const fixture = await createFixture();
   const db = openDatabase(fixture.dbPath);
 
@@ -318,12 +333,16 @@ test("fixgaps deletes event when adapter succeeds with zero recovered trades", a
       adapterRegistry,
     });
 
-    assert.strictEqual(stats.deletedEvents, 1);
+    assert.strictEqual(stats.deletedEvents, 0);
+    assert.strictEqual(stats.fixedEvents, 1);
     assert.strictEqual(stats.recoveredTrades, 0);
     assert.strictEqual(stats.binariesPatched, 0);
     assert.strictEqual(await fs.readFile(fixture.fullPath, "utf8"), beforeFile);
     assert.strictEqual(Buffer.compare(await readBin(fixture.outDir, "1m"), beforeBin), 0);
-    assert.strictEqual(readEventRows(db).length, 0);
+    const rows = readEventRows(db);
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].status, GapFixStatus.Fixed);
+    assert.strictEqual(rows[0].recovered, 0);
   } finally {
     db.close();
   }
@@ -354,6 +373,7 @@ test("fixgaps dry-run does not mutate files, binaries, or events", async () => {
 
     assert.strictEqual(dryStats.selectedEvents, 1);
     assert.strictEqual(dryStats.deletedEvents, 0);
+    assert.strictEqual(dryStats.fixedEvents, 0);
     assert.strictEqual(dryStats.binariesPatched, 0);
     assert.strictEqual(dryStats.recoveredTrades, 1);
     assert.strictEqual(await fs.readFile(fixture.fullPath, "utf8"), beforeFile);
@@ -364,8 +384,12 @@ test("fixgaps dry-run does not mutate files, binaries, or events", async () => {
       adapterRegistry,
     });
 
-    assert.strictEqual(applyStats.deletedEvents, 1);
-    assert.strictEqual(readEventRows(db).length, 0);
+    assert.strictEqual(applyStats.deletedEvents, 0);
+    assert.strictEqual(applyStats.fixedEvents, 1);
+    const rows = readEventRows(db);
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].status, GapFixStatus.Fixed);
+    assert.strictEqual(rows[0].recovered, 1);
   } finally {
     db.close();
   }
@@ -432,10 +456,12 @@ test("fixgaps marks unsupported exchanges as missing_adapter", async () => {
     );
 
     assert.strictEqual(stats.deletedEvents, 0);
+    assert.strictEqual(stats.fixedEvents, 0);
     assert.strictEqual(stats.missingAdapter, 1);
     const rows = readEventRows(db);
     assert.strictEqual(rows.length, 1);
     assert.strictEqual(rows[0].status, GapFixStatus.MissingAdapter);
+    assert.strictEqual(rows[0].recovered, null);
   } finally {
     db.close();
   }
@@ -485,10 +511,18 @@ test("fixgaps id filter targets a single event and bypasses retry-status gating"
 
     assert.strictEqual(seenWindows, 1);
     assert.strictEqual(stats.selectedEvents, 1);
-    assert.strictEqual(stats.deletedEvents, 1);
+    assert.strictEqual(stats.deletedEvents, 0);
+    assert.strictEqual(stats.fixedEvents, 1);
     const rows = readEventRows(db);
-    assert.strictEqual(rows.length, 1);
-    assert.strictEqual(rows[0]?.id, otherId);
+    assert.strictEqual(rows.length, 2);
+    const targeted = rows.find((row) => row.id === targetedId);
+    const other = rows.find((row) => row.id === otherId);
+    assert.ok(targeted);
+    assert.ok(other);
+    assert.strictEqual(targeted?.status, GapFixStatus.Fixed);
+    assert.strictEqual(targeted?.recovered, 0);
+    assert.strictEqual(other?.status, null);
+    assert.strictEqual(other?.recovered, null);
   } finally {
     db.close();
   }
@@ -543,8 +577,12 @@ test("fixgaps supports retry-status filtering and fallback windows for shifted l
     });
 
     assert.strictEqual(seenWindows, 1);
-    assert.strictEqual(retryRun.deletedEvents, 1);
-    assert.strictEqual(readEventRows(db).length, 0);
+    assert.strictEqual(retryRun.deletedEvents, 0);
+    assert.strictEqual(retryRun.fixedEvents, 1);
+    const rows = readEventRows(db);
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].status, GapFixStatus.Fixed);
+    assert.strictEqual(rows[0].recovered, 0);
   } finally {
     db.close();
   }
@@ -585,7 +623,10 @@ test("fixgaps uses fallback window on first run when line mapping cannot be reso
     });
 
     assert.strictEqual(seenWindows, 1);
-    assert.strictEqual(readEventRows(db).length, 0);
+    const rows = readEventRows(db);
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].status, GapFixStatus.Fixed);
+    assert.strictEqual(rows[0].recovered, 0);
   } finally {
     db.close();
   }
@@ -611,11 +652,13 @@ test("fixgaps marks adapter runtime failures and keeps events", async () => {
     });
 
     assert.strictEqual(stats.deletedEvents, 0);
+    assert.strictEqual(stats.fixedEvents, 0);
     assert.strictEqual(stats.adapterError, 1);
     const rows = readEventRows(db);
     assert.strictEqual(rows.length, 1);
     assert.strictEqual(rows[0].status, GapFixStatus.AdapterError);
     assert.match(rows[0].error ?? "", /simulated adapter failure/);
+    assert.strictEqual(rows[0].recovered, null);
   } finally {
     db.close();
   }

@@ -12,7 +12,7 @@ export interface Db {
   insertEvents(rows: EventRange[]): void;
   deleteEventsForFile(rootId: number, relativePath: string): void;
   iterateGapEventsForFix(opts: GapFixQueueFilter): Iterable<GapFixQueueRow>;
-  updateGapFixStatus(rows: Array<{ id: number; status: GapFixStatus; error?: string }>): void;
+  updateGapFixStatus(rows: Array<{ id: number; status: GapFixStatus; error?: string | null; recovered?: number | null }>): void;
   deleteEventsByIds(ids: number[]): void;
   close(): void;
 }
@@ -94,6 +94,7 @@ export function openDatabase(dbPath: string): Db {
     `UPDATE events
         SET gap_fix_status = :status,
             gap_fix_error = :error,
+            gap_fix_recovered = :recovered,
             gap_fix_updated_at = (unixepoch('subsec') * 1000)
       WHERE id = :id;`,
   );
@@ -119,7 +120,7 @@ export function openDatabase(dbPath: string): Db {
       deleteEventsForFileStmt.run({ rootId, relativePath }),
     iterateGapEventsForFix: (opts: GapFixQueueFilter): Iterable<GapFixQueueRow> =>
       iterateGapEventsForFix(db, opts),
-    updateGapFixStatus: (rows: Array<{ id: number; status: GapFixStatus; error?: string }>) =>
+    updateGapFixStatus: (rows: Array<{ id: number; status: GapFixStatus; error?: string | null; recovered?: number | null }>) =>
       updateGapFixStatus(db, updateGapFixStatusStmt, rows),
     deleteEventsByIds: (ids: number[]) => deleteEventsByIds(db, deleteEventByIdStmt, ids),
     close: () => db.close(),
@@ -327,6 +328,7 @@ function migrateEvents(db: DatabaseSync): void {
   const hasGapEndTs = info.some((c) => c.name === "gap_end_ts");
   const hasFixStatus = info.some((c) => c.name === "gap_fix_status");
   const hasFixError = info.some((c) => c.name === "gap_fix_error");
+  const hasFixRecovered = info.some((c) => c.name === "gap_fix_recovered");
   const hasFixUpdatedAt = info.some((c) => c.name === "gap_fix_updated_at");
 
   if (!info.length) {
@@ -346,6 +348,7 @@ function migrateEvents(db: DatabaseSync): void {
         gap_end_ts INTEGER,
         gap_fix_status TEXT,
         gap_fix_error TEXT,
+        gap_fix_recovered INTEGER,
         gap_fix_updated_at INTEGER,
         created_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000)
       );
@@ -362,6 +365,9 @@ function migrateEvents(db: DatabaseSync): void {
     }
     if (!hasFixError) {
       db.exec("ALTER TABLE events ADD COLUMN gap_fix_error TEXT;");
+    }
+    if (!hasFixRecovered) {
+      db.exec("ALTER TABLE events ADD COLUMN gap_fix_recovered INTEGER;");
     }
     if (!hasFixUpdatedAt) {
       db.exec("ALTER TABLE events ADD COLUMN gap_fix_updated_at INTEGER;");
@@ -438,7 +444,7 @@ function insertEvents(db: DatabaseSync, stmt: StatementSync, rows: EventRange[])
 function updateGapFixStatus(
   db: DatabaseSync,
   stmt: StatementSync,
-  rows: Array<{ id: number; status: GapFixStatus; error?: string }>,
+  rows: Array<{ id: number; status: GapFixStatus; error?: string | null; recovered?: number | null }>,
 ): void {
   if (!rows.length) return;
   db.exec("BEGIN");
@@ -448,6 +454,7 @@ function updateGapFixStatus(
         id: row.id,
         status: row.status,
         error: row.error ?? null,
+        recovered: row.recovered ?? null,
       });
     }
     db.exec("COMMIT");
