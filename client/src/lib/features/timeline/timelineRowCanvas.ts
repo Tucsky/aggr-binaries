@@ -1,4 +1,11 @@
+import { toTimelineX, type TimelineRange } from "./timelineUtils.js";
+
 export interface EventPaintStyle {
+  fill: string;
+  stroke: string;
+}
+
+export interface TimelineHighlightStyle {
   fill: string;
   stroke: string;
 }
@@ -9,6 +16,16 @@ export interface RectCorners {
   bottomLeft: number;
   bottomRight: number;
 }
+
+export interface TimelineHighlightWindow {
+  x1: number;
+  x2: number;
+}
+
+export const VISIBLE_RANGE_HIGHLIGHT_STYLE: TimelineHighlightStyle = {
+  fill: "rgba(125, 177, 255, 0.12)",
+  stroke: "rgba(125, 177, 255, 0.85)",
+};
 
 export function eventPaintStyle(kind: string): EventPaintStyle {
   if (kind === "gap_fixed") return { fill: "rgba(46, 204, 113, 0.25)", stroke: "rgba(67, 238, 143, 0.25)" };
@@ -45,4 +62,48 @@ export function roundedRectPath(
   if (tl > 0) ctx.arcTo(x, y, x + tl, y, tl);
   else ctx.lineTo(x, y);
   ctx.closePath();
+}
+
+export function resolveTimelineHighlightWindow(
+  highlightRange: TimelineRange,
+  viewRange: TimelineRange,
+  width: number,
+): TimelineHighlightWindow | null {
+  if (highlightRange.endTs < viewRange.startTs || highlightRange.startTs > viewRange.endTs) return null;
+
+  const startTs = highlightRange.startTs < viewRange.startTs ? viewRange.startTs : highlightRange.startTs;
+  const endTs = highlightRange.endTs > viewRange.endTs ? viewRange.endTs : highlightRange.endTs;
+  if (endTs <= startTs) return null;
+
+  const safeWidth = Math.max(1, width);
+  const x1 = toTimelineX(startTs, viewRange, safeWidth);
+  const x2 = toTimelineX(endTs, viewRange, safeWidth);
+  if (x2 <= x1) return null;
+  return { x1, x2 };
+}
+
+export function drawTimelineVisibleRangeHighlight(
+  ctx: CanvasRenderingContext2D,
+  highlightRange: TimelineRange,
+  viewRange: TimelineRange,
+  width: number,
+  height: number,
+  style: TimelineHighlightStyle = VISIBLE_RANGE_HIGHLIGHT_STYLE,
+): void {
+  const window = resolveTimelineHighlightWindow(highlightRange, viewRange, width);
+  if (!window) return;
+
+  const insetY = 1;
+  const boxHeight = Math.max(1, height - insetY * 2);
+  roundedRectPath(ctx, window.x1, insetY, window.x2 - window.x1, boxHeight, {
+    topLeft: 2,
+    topRight: 2,
+    bottomLeft: 2,
+    bottomRight: 2,
+  });
+  ctx.fillStyle = style.fill;
+  ctx.fill();
+  ctx.strokeStyle = style.stroke;
+  ctx.lineWidth = 1;
+  ctx.stroke();
 }

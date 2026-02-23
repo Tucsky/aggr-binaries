@@ -1,55 +1,54 @@
 <script lang="ts">
-  import { get } from "svelte/store";
+  import EmbeddedTimelineNavigator from "../lib/features/timeline/EmbeddedTimelineNavigator.svelte";
+  import type { TimelineRange } from "../lib/features/timeline/timelineUtils.js";
   import CandleChart from "../lib/features/viewer/CandleChart.svelte";
   import ViewerControls from "../lib/features/viewer/ViewerControls.svelte";
   import { currentRoute, navigate } from "../lib/framework/routing/routeStore.js";
-  import { applyChartRouteToPrefs, buildAppRouteUrl, chartRouteFromPrefs, isChartRoute, type ChartRoute } from "../lib/framework/routing/routes.js";
-  import { prefs, savePrefs } from "../lib/features/viewer/viewerStore.js";
-  import type { Prefs } from "../lib/features/viewer/types.js";
+  import { isChartRoute, type ChartRoute } from "../lib/framework/routing/routes.js";
+  import { setStart } from "../lib/features/viewer/viewerWs.js";
   import { onDestroy } from "svelte";
 
   let route: ChartRoute = { kind: "chart" };
-  let syncingFromRoute = false;
+  let chartVisibleRange: TimelineRange | null = null;
 
   const unsubRoute = currentRoute.subscribe((next) => {
     if (!isChartRoute(next)) return;
     route = next;
-    const current = get(prefs);
-    const merged = applyChartRouteToPrefs(current, next);
-    if (prefsEqual(current, merged)) return;
-    syncingFromRoute = true;
-    savePrefs(merged);
-    syncingFromRoute = false;
-  });
-
-  const unsubPrefs = prefs.subscribe((nextPrefs) => {
-    if (syncingFromRoute) return;
-    const desired = chartRouteFromPrefs(nextPrefs);
-    const desiredUrl = buildAppRouteUrl(desired);
-    const currentUrl = buildAppRouteUrl(route);
-    if (desiredUrl === currentUrl) return;
-    navigate(desired, { replace: true });
   });
 
   onDestroy(() => {
     unsubRoute();
-    unsubPrefs();
   });
 
-  function prefsEqual(a: Prefs, b: Prefs): boolean {
-    return (
-      a.collector === b.collector &&
-      a.exchange === b.exchange &&
-      a.symbol === b.symbol &&
-      a.timeframe === b.timeframe &&
-      a.start === b.start
-    );
+  function handleChartVisibleRangeChange(
+    event: CustomEvent<TimelineRange | null>,
+  ): void {
+    chartVisibleRange = event.detail;
+  }
+
+  function handleNavigatorJump(event: CustomEvent<{ ts: number }>): void {
+    setStart(event.detail.ts, { force: true });
+    const nextRoute: ChartRoute = {
+      kind: "chart",
+      market: route.market,
+      timeframe: route.timeframe,
+      startTs: event.detail.ts,
+    };
+    navigate(nextRoute, { replace: true });
   }
 </script>
 
 <div class="flex h-full min-h-0 flex-col">
   <ViewerControls route={route} />
+  <EmbeddedTimelineNavigator
+    collector={route.market?.collector ?? ""}
+    exchange={route.market?.exchange ?? ""}
+    symbol={route.market?.symbol ?? ""}
+    timeframe={route.timeframe ?? "1m"}
+    {chartVisibleRange}
+    on:jump={handleNavigatorJump}
+  />
   <div class="min-h-0 flex-1">
-    <CandleChart />
+    <CandleChart on:visibleRangeChange={handleChartVisibleRangeChange} />
   </div>
 </div>

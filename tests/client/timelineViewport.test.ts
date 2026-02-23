@@ -4,8 +4,8 @@ import {
   buildInitialViewRange,
   panTimelineRange,
   zoomTimelineRange,
-} from "../../client/src/lib/timelineViewport.js";
-import type { TimelineRange } from "../../client/src/lib/timelineUtils.js";
+} from "../../client/src/lib/features/timeline/timelineViewport.js";
+import type { TimelineRange } from "../../client/src/lib/features/timeline/timelineUtils.js";
 
 test("buildInitialViewRange anchors to latest end when full span exceeds default window", () => {
   const range: TimelineRange = { startTs: 0, endTs: 2_000 };

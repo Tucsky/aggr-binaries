@@ -35,6 +35,7 @@ export interface TimelineEventFilter {
   collector?: string;
   exchange?: string;
   symbol?: string;
+  symbolMode?: TimelineSymbolMatchMode;
   startTs: number;
   endTs: number;
 }
@@ -42,6 +43,27 @@ export interface TimelineEventFilter {
 export interface TimelineMarketsResult {
   markets: TimelineMarket[];
   timeframes: string[];
+}
+
+export interface TimelineMarketIdentityFilter {
+  collector?: string;
+  exchange?: string;
+  symbol?: string;
+}
+
+export interface TimelineMarketsFilter extends TimelineMarketIdentityFilter {
+  timeframe?: string;
+}
+
+interface NormalizedTimelineMarketIdentityFilter {
+  collector?: string;
+  exchange?: string;
+  symbolLower?: string;
+}
+
+export enum TimelineSymbolMatchMode {
+  Contains = "contains",
+  Exact = "exact",
 }
 
 interface TimelineIndexedMarketRow {
@@ -67,13 +89,15 @@ export type HttpApiHandler = (
   url: URL,
 ) => Promise<boolean> | boolean;
 
-export function listTimelineMarkets(db: Db, timeframe?: string): TimelineMarketsResult {
-  const timeframes = listTimelineTimeframes(db);
-  const selected = timeframe?.trim();
-  const indexedRows = listTimelineIndexedMarketRanges(db);
+// Intentionally kept in one module: timeline SQL filter parsing and merge-order logic must stay aligned for deterministic output.
+export function listTimelineMarkets(db: Db, filter: TimelineMarketsFilter = {}): TimelineMarketsResult {
+  const normalizedFilter = normalizeTimelineMarketIdentityFilter(filter);
+  const timeframes = listTimelineTimeframes(db, normalizedFilter);
+  const selected = emptyToUndefined(filter.timeframe ?? null);
+  const indexedRows = listTimelineIndexedMarketRanges(db, normalizedFilter);
   const registryRows = selected
-    ? listTimelineRegistryRangesByTimeframe(db, selected)
-    : listTimelineRegistryRangesAllTimeframes(db);
+    ? listTimelineRegistryRangesByTimeframe(db, selected, normalizedFilter)
+    : listTimelineRegistryRangesAllTimeframes(db, normalizedFilter);
   const fallbackTimeframe = selected || "ALL";
   const markets = mergeTimelineMarketRanges(indexedRows, registryRows, fallbackTimeframe);
   return { markets, timeframes };
@@ -106,8 +130,14 @@ export function listTimelineEvents(db: Db, filter: TimelineEventFilter): Timelin
     params.exchange = filter.exchange.trim().toUpperCase();
   }
   if (filter.symbol) {
-    where.push("LOWER(e.symbol) LIKE :symbolLike");
-    params.symbolLike = `%${filter.symbol.trim().toLowerCase()}%`;
+    const symbol = filter.symbol.trim().toLowerCase();
+    if (filter.symbolMode === TimelineSymbolMatchMode.Exact) {
+      where.push("LOWER(e.symbol) = :symbolExact");
+      params.symbolExact = symbol;
+    } else {
+      where.push("LOWER(e.symbol) LIKE :symbolLike");
+      params.symbolLike = `%${symbol}%`;
+    }
   }
 
   const rows =
@@ -170,7 +200,17 @@ export function createTimelineApiHandler(db: Db, actionOptions: TimelineActionsA
 
     if (url.pathname === "/api/timeline/markets") {
       const timeframe = emptyToUndefined(url.searchParams.get("timeframe"));
-      writeJson(res, 200, listTimelineMarkets(db, timeframe));
+      const marketFilter = parseTimelineMarketIdentityFilter(url.searchParams);
+      writeJson(
+        res,
+        200,
+        listTimelineMarkets(db, {
+          timeframe,
+          collector: marketFilter.collector,
+          exchange: marketFilter.exchange,
+          symbol: marketFilter.symbol,
+        }),
+      );
       return true;
     }
     if (url.pathname === "/api/timeline/events") {
@@ -180,11 +220,17 @@ export function createTimelineApiHandler(db: Db, actionOptions: TimelineActionsA
         writeJson(res, 400, { error: "startTs and endTs are required numeric query params" });
         return true;
       }
+      const symbolMode = parseTimelineSymbolMatchMode(url.searchParams.get("symbolMode"));
+      if (symbolMode === null) {
+        writeJson(res, 400, { error: "symbolMode must be one of: contains, exact" });
+        return true;
+      }
       try {
         const events = listTimelineEvents(db, {
           collector: emptyToUndefined(url.searchParams.get("collector")),
           exchange: emptyToUndefined(url.searchParams.get("exchange")),
           symbol: emptyToUndefined(url.searchParams.get("symbol")),
+          symbolMode,
           startTs,
           endTs,
         });
@@ -220,52 +266,128 @@ function emptyToUndefined(raw: string | null): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-function listTimelineTimeframes(db: Db): string[] {
+function parseTimelineMarketIdentityFilter(search: URLSearchParams): TimelineMarketIdentityFilter {
+  return {
+    collector: emptyToUndefined(search.get("collector")),
+    exchange: emptyToUndefined(search.get("exchange")),
+    symbol: emptyToUndefined(search.get("symbol")),
+  };
+}
+
+function parseTimelineSymbolMatchMode(raw: string | null): TimelineSymbolMatchMode | null {
+  if (raw === null) return TimelineSymbolMatchMode.Contains;
+  const normalized = raw.trim().toLowerCase();
+  if (!normalized) return TimelineSymbolMatchMode.Contains;
+  if (normalized === TimelineSymbolMatchMode.Contains) return TimelineSymbolMatchMode.Contains;
+  if (normalized === TimelineSymbolMatchMode.Exact) return TimelineSymbolMatchMode.Exact;
+  return null;
+}
+
+function normalizeTimelineMarketIdentityFilter(
+  filter: TimelineMarketIdentityFilter,
+): NormalizedTimelineMarketIdentityFilter {
+  const collector = emptyToUndefined(filter.collector ?? null);
+  const exchange = emptyToUndefined(filter.exchange ?? null);
+  const symbol = emptyToUndefined(filter.symbol ?? null);
+  return {
+    collector: collector?.toUpperCase(),
+    exchange: exchange?.toUpperCase(),
+    symbolLower: symbol?.toLowerCase(),
+  };
+}
+
+function listTimelineTimeframes(db: Db, filter: NormalizedTimelineMarketIdentityFilter): string[] {
+  const where: string[] = [];
+  const params: Record<string, string | number> = {};
+  appendMarketIdentityPredicates(where, params, filter);
+  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const rows =
     (db.db
-      .prepare("SELECT DISTINCT timeframe FROM registry ORDER BY timeframe;")
-      .all() as Array<{ timeframe: string }>) ?? [];
+      .prepare(`SELECT DISTINCT timeframe FROM registry ${whereSql} ORDER BY timeframe;`)
+      .all(params) as Array<{ timeframe: string }>) ?? [];
   return rows.map((row) => row.timeframe);
 }
 
-function listTimelineIndexedMarketRanges(db: Db): TimelineIndexedMarketRow[] {
+function listTimelineIndexedMarketRanges(
+  db: Db,
+  filter: NormalizedTimelineMarketIdentityFilter,
+): TimelineIndexedMarketRow[] {
+  const where: string[] = [];
+  const params: Record<string, string | number> = {};
+  appendMarketIdentityPredicates(where, params, filter);
+  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
   return (
     (db.db
       .prepare(
         // files only stores logical start_ts, so indexed-only rows use min/max start_ts as their visible bounds.
         `SELECT collector, exchange, symbol, MIN(start_ts) AS start_ts, MAX(start_ts) AS end_ts
          FROM files
+         ${whereSql}
          GROUP BY collector, exchange, symbol
          ORDER BY collector, exchange, symbol;`,
       )
-      .all() as unknown as TimelineIndexedMarketRow[]) ?? []
+      .all(params) as unknown as TimelineIndexedMarketRow[]) ?? []
   );
 }
 
-function listTimelineRegistryRangesByTimeframe(db: Db, timeframe: string): TimelineRegistryMarketRow[] {
+function listTimelineRegistryRangesByTimeframe(
+  db: Db,
+  timeframe: string,
+  filter: NormalizedTimelineMarketIdentityFilter,
+): TimelineRegistryMarketRow[] {
+  const where: string[] = ["timeframe = :timeframe"];
+  const params: Record<string, string | number> = { timeframe };
+  appendMarketIdentityPredicates(where, params, filter);
   return (
     (db.db
       .prepare(
         `SELECT collector, exchange, symbol, timeframe, start_ts, end_ts
          FROM registry
-         WHERE timeframe = :timeframe
+         WHERE ${where.join(" AND ")}
          ORDER BY collector, exchange, symbol;`,
       )
-      .all({ timeframe }) as unknown as TimelineRegistryMarketRow[]) ?? []
+      .all(params) as unknown as TimelineRegistryMarketRow[]) ?? []
   );
 }
 
-function listTimelineRegistryRangesAllTimeframes(db: Db): TimelineRegistryMarketRow[] {
+function listTimelineRegistryRangesAllTimeframes(
+  db: Db,
+  filter: NormalizedTimelineMarketIdentityFilter,
+): TimelineRegistryMarketRow[] {
+  const where: string[] = [];
+  const params: Record<string, string | number> = {};
+  appendMarketIdentityPredicates(where, params, filter);
+  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
   return (
     (db.db
       .prepare(
         `SELECT collector, exchange, symbol, 'ALL' AS timeframe, MIN(start_ts) AS start_ts, MAX(end_ts) AS end_ts
          FROM registry
+         ${whereSql}
          GROUP BY collector, exchange, symbol
          ORDER BY collector, exchange, symbol;`,
       )
-      .all() as unknown as TimelineRegistryMarketRow[]) ?? []
+      .all(params) as unknown as TimelineRegistryMarketRow[]) ?? []
   );
+}
+
+function appendMarketIdentityPredicates(
+  where: string[],
+  params: Record<string, string | number>,
+  filter: NormalizedTimelineMarketIdentityFilter,
+): void {
+  if (filter.collector) {
+    where.push("collector = :collector");
+    params.collector = filter.collector;
+  }
+  if (filter.exchange) {
+    where.push("exchange = :exchange");
+    params.exchange = filter.exchange;
+  }
+  if (filter.symbolLower) {
+    where.push("LOWER(symbol) = :symbolLower");
+    params.symbolLower = filter.symbolLower;
+  }
 }
 
 function mergeTimelineMarketRanges(

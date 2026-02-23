@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { formatElapsedDhms, formatEstimatedMiss } from "../../client/src/lib/timelineEventPopoverFormat.js";
+import { formatElapsedDhms, formatEstimatedMiss } from "../../client/src/lib/features/timeline/timelineEventPopoverFormat.js";
 
 test("formatElapsedDhms includes days and hh:mm:ss", () => {
   assert.equal(formatElapsedDhms(null), "0s");

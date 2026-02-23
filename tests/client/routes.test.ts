@@ -6,8 +6,8 @@ import {
   parseAppRoute,
   resolveRouteMarket,
   type ChartRoute,
-} from "../../client/src/lib/routes.js";
-import type { Prefs } from "../../client/src/lib/types.js";
+} from "../../client/src/lib/framework/routing/routes.js";
+import type { Prefs } from "../../client/src/lib/features/viewer/types.js";
 
 test("parseAppRoute supports timeline and chart path/query combinations", () => {
   assert.deepStrictEqual(parseAppRoute("/", ""), { kind: "timeline" });

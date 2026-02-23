@@ -6,7 +6,11 @@ import { test } from "node:test";
 import { openDatabase, type Db } from "../../src/core/db.js";
 import { EventType } from "../../src/core/events.js";
 import { Collector } from "../../src/core/model.js";
-import { listTimelineEvents, listTimelineMarkets } from "../../src/server/timelineApi.js";
+import {
+  TimelineSymbolMatchMode,
+  listTimelineEvents,
+  listTimelineMarkets,
+} from "../../src/server/timelineApi.js";
 
 test("timeline markets aggregate min/max ranges across timeframes", async () => {
   const db = await withDb();
@@ -89,7 +93,7 @@ test("timeline markets can be filtered by timeframe", async () => {
       endTs: 210,
     });
 
-    const result = listTimelineMarkets(db, "1m");
+    const result = listTimelineMarkets(db, { timeframe: "1m" });
     assert.deepStrictEqual(result.markets, [
       {
         collector: "PI",
@@ -185,7 +189,7 @@ test("timeline markets include indexed rows and prefer registry ranges when avai
       },
     ]);
 
-    const oneMinute = listTimelineMarkets(db, "1m");
+    const oneMinute = listTimelineMarkets(db, { timeframe: "1m" });
     assert.deepStrictEqual(oneMinute.markets, [
       {
         collector: "PI",
@@ -280,6 +284,153 @@ test("timeline events use gap_end_ts first and fallback to file start_ts for non
     assert.strictEqual(events[1].eventType, EventType.Gap);
     assert.strictEqual(events[1].gapFixStatus, "adapter_error");
     assert.strictEqual(events[1].gapFixRecovered, 7);
+  } finally {
+    db.close();
+  }
+});
+
+test("timeline markets support identity filters with normalized collector/exchange", async () => {
+  const db = await withDb();
+  try {
+    const rootId = db.ensureRoot("/tmp/source");
+    db.insertFiles([
+      {
+        rootId,
+        relativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
+        collector: Collector.PI,
+        exchange: "BYBIT",
+        symbol: "BTCUSDT",
+        startTs: 100,
+      },
+      {
+        rootId,
+        relativePath: "RAM/BINANCE/ETHUSDT/2024-01-01.gz",
+        collector: Collector.RAM,
+        exchange: "BINANCE",
+        symbol: "ETHUSDT",
+        startTs: 200,
+      },
+    ]);
+    db.upsertRegistry({
+      collector: "PI",
+      exchange: "BYBIT",
+      symbol: "BTCUSDT",
+      timeframe: "1m",
+      startTs: 120,
+      endTs: 180,
+    });
+    db.upsertRegistry({
+      collector: "PI",
+      exchange: "BYBIT",
+      symbol: "BTCUSDT",
+      timeframe: "5m",
+      startTs: 110,
+      endTs: 220,
+    });
+    db.upsertRegistry({
+      collector: "RAM",
+      exchange: "BINANCE",
+      symbol: "ETHUSDT",
+      timeframe: "1m",
+      startTs: 200,
+      endTs: 260,
+    });
+
+    const filtered = listTimelineMarkets(db, {
+      collector: "pi",
+      exchange: "bybit",
+      symbol: "btcusdt",
+      timeframe: "1m",
+    });
+    assert.deepStrictEqual(filtered.timeframes, ["1m", "5m"]);
+    assert.deepStrictEqual(filtered.markets, [
+      {
+        collector: "PI",
+        exchange: "BYBIT",
+        symbol: "BTCUSDT",
+        timeframe: "1m",
+        startTs: 100,
+        endTs: 180,
+        indexedStartTs: 100,
+        indexedEndTs: 100,
+        processedStartTs: 120,
+        processedEndTs: 180,
+      },
+    ]);
+  } finally {
+    db.close();
+  }
+});
+
+test("timeline events symbol exact mode excludes partial symbol matches", async () => {
+  const db = await withDb();
+  try {
+    const rootId = db.ensureRoot("/tmp/source");
+    db.insertFiles([
+      {
+        rootId,
+        relativePath: "PI/BYBIT/BTC/2024-01-01.gz",
+        collector: Collector.PI,
+        exchange: "BYBIT",
+        symbol: "BTC",
+        startTs: 100,
+      },
+      {
+        rootId,
+        relativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
+        collector: Collector.PI,
+        exchange: "BYBIT",
+        symbol: "BTCUSDT",
+        startTs: 100,
+      },
+    ]);
+    db.insertEvents([
+      {
+        rootId,
+        relativePath: "PI/BYBIT/BTC/2024-01-01.gz",
+        collector: "PI",
+        exchange: "BYBIT",
+        symbol: "BTC",
+        type: EventType.Gap,
+        startLine: 1,
+        endLine: 1,
+        gapEndTs: 400,
+      },
+      {
+        rootId,
+        relativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
+        collector: "PI",
+        exchange: "BYBIT",
+        symbol: "BTCUSDT",
+        type: EventType.Gap,
+        startLine: 1,
+        endLine: 1,
+        gapEndTs: 500,
+      },
+    ]);
+
+    const contains = listTimelineEvents(db, {
+      collector: "PI",
+      exchange: "BYBIT",
+      symbol: "btc",
+      symbolMode: TimelineSymbolMatchMode.Contains,
+      startTs: 0,
+      endTs: 1000,
+    });
+    assert.deepStrictEqual(contains.map((event) => event.symbol), [
+      "BTC",
+      "BTCUSDT",
+    ]);
+
+    const exact = listTimelineEvents(db, {
+      collector: "PI",
+      exchange: "BYBIT",
+      symbol: "btc",
+      symbolMode: TimelineSymbolMatchMode.Exact,
+      startTs: 0,
+      endTs: 1000,
+    });
+    assert.deepStrictEqual(exact.map((event) => event.symbol), ["BTC"]);
   } finally {
     db.close();
   }

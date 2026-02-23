@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from "svelte";
+  import { createEventDispatcher, tick } from "svelte";
   import { get } from "svelte/store";
   import ChevronDown from "lucide-svelte/icons/chevron-down";
   import Clock3 from "lucide-svelte/icons/clock-3";
@@ -14,13 +14,16 @@
   } from "./timeframeDropdownUtils.js";
   import {
       addTimeframe,
-      prefs,
       removeTimeframe,
-      savePrefs,
       serverTimeframes,
       timeframes,
   } from "./viewerStore.js";
-  import { setTimeframe } from "./viewerWs.js";
+
+  export let currentValue = "";
+
+  const dispatch = createEventDispatcher<{
+    select: string;
+  }>();
 
   let open = false;
   let anchorEl: HTMLElement | null = null;
@@ -45,7 +48,6 @@
   $: filtered = filterTimeframesByQuery(normalized, input);
   $: grouped = buildGroups(filtered);
   $: inputMs = parseTimeframeMs(input.trim());
-  $: currentValue = $prefs.timeframe || "";
   $: removable = new Set($timeframes);
   $: serverSet = new Set($serverTimeframes);
   $: if (open) {
@@ -86,8 +88,7 @@
   function select(tf: string) {
     const trimmed = tf.trim();
     if (!trimmed) return;
-    savePrefs({ ...get(prefs), timeframe: trimmed });
-    setTimeframe(trimmed, { force: true });
+    dispatch("select", trimmed);
     close();
   }
 
@@ -105,11 +106,10 @@
 
   function remove(tf: string) {
     if (!removable.has(tf)) return;
-    const previous = get(prefs).timeframe;
     removeTimeframe(tf);
-    const next = get(prefs).timeframe;
-    if (next !== previous) {
-      setTimeframe(next);
+    if (tf === currentValue) {
+      const next = get(timeframes)[0] ?? "";
+      if (next) dispatch("select", next);
     }
   }
 </script>

@@ -5,10 +5,28 @@ export interface TimelineMarketsResponse {
   timeframes: string[];
 }
 
+export interface TimelineMarketsQuery {
+  timeframe?: string;
+  collector?: string;
+  exchange?: string;
+  symbol?: string;
+  signal?: AbortSignal;
+}
+
+export const TIMELINE_SYMBOL_MODE = {
+  Contains: "contains",
+  Exact: "exact",
+} as const;
+
+export type TimelineSymbolMode = (typeof TIMELINE_SYMBOL_MODE)[keyof typeof TIMELINE_SYMBOL_MODE];
+
+const TIMELINE_API_ORIGIN = "http://localhost";
+
 export interface TimelineEventsQuery {
   collector?: string;
   exchange?: string;
   symbol?: string;
+  symbolMode?: TimelineSymbolMode;
   startTs: number;
   endTs: number;
 }
@@ -35,13 +53,9 @@ export interface TimelineRunActionResponse {
 }
 
 export async function fetchTimelineMarkets(
-  opts: { timeframe?: string; signal?: AbortSignal } = {},
+  opts: TimelineMarketsQuery = {},
 ): Promise<TimelineMarketsResponse> {
-  const url = new URL("/api/timeline/markets", window.location.origin);
-  if (opts.timeframe) {
-    url.searchParams.set("timeframe", opts.timeframe);
-  }
-  const response = await fetch(url.pathname + url.search, {
+  const response = await fetch(buildTimelineMarketsPath(opts), {
     method: "GET",
     signal: opts.signal,
   });
@@ -56,14 +70,7 @@ export async function fetchTimelineMarkets(
 }
 
 export async function fetchTimelineEvents(query: TimelineEventsQuery, signal?: AbortSignal): Promise<TimelineEvent[]> {
-  const url = new URL("/api/timeline/events", window.location.origin);
-  if (query.collector) url.searchParams.set("collector", query.collector);
-  if (query.exchange) url.searchParams.set("exchange", query.exchange);
-  if (query.symbol) url.searchParams.set("symbol", query.symbol);
-  url.searchParams.set("startTs", String(Math.floor(query.startTs)));
-  url.searchParams.set("endTs", String(Math.floor(query.endTs)));
-
-  const response = await fetch(url.pathname + url.search, {
+  const response = await fetch(buildTimelineEventsPath(query), {
     method: "GET",
     signal,
   });
@@ -72,6 +79,26 @@ export async function fetchTimelineEvents(query: TimelineEventsQuery, signal?: A
     "Failed to load events",
   )) as { events?: TimelineEvent[] };
   return payload.events ?? [];
+}
+
+export function buildTimelineMarketsPath(query: TimelineMarketsQuery = {}): string {
+  const url = new URL("/api/timeline/markets", TIMELINE_API_ORIGIN);
+  if (query.timeframe) url.searchParams.set("timeframe", query.timeframe);
+  if (query.collector) url.searchParams.set("collector", query.collector);
+  if (query.exchange) url.searchParams.set("exchange", query.exchange);
+  if (query.symbol) url.searchParams.set("symbol", query.symbol);
+  return url.pathname + url.search;
+}
+
+export function buildTimelineEventsPath(query: TimelineEventsQuery): string {
+  const url = new URL("/api/timeline/events", TIMELINE_API_ORIGIN);
+  if (query.collector) url.searchParams.set("collector", query.collector);
+  if (query.exchange) url.searchParams.set("exchange", query.exchange);
+  if (query.symbol) url.searchParams.set("symbol", query.symbol);
+  if (query.symbolMode) url.searchParams.set("symbolMode", query.symbolMode);
+  url.searchParams.set("startTs", String(Math.floor(query.startTs)));
+  url.searchParams.set("endTs", String(Math.floor(query.endTs)));
+  return url.pathname + url.search;
 }
 
 export async function runTimelineMarketAction(

@@ -8,7 +8,7 @@
     type MouseEventParams,
     type Time,
   } from "lightweight-charts";
-  import { onDestroy, onMount } from "svelte";
+  import { createEventDispatcher, onDestroy, onMount } from "svelte";
   import {
     LONG_LIQ_COLOR,
     SHORT_LIQ_COLOR,
@@ -34,6 +34,16 @@
   import { meta as metaStore, status as statusStore } from "./viewerStore.js";
   import { onCandles, requestSlice } from "./viewerWs.js";
 
+  // Intentionally kept in one file: chart subscriptions, incremental merges, and range backfill share mutable state.
+  interface VisibleRange {
+    startTs: number;
+    endTs: number;
+  }
+
+  const dispatch = createEventDispatcher<{
+    visibleRangeChange: VisibleRange | null;
+  }>();
+
   let chartEl: HTMLDivElement;
   let chart: IChartApi | null = null;
   let priceSeries: ISeriesApi<"Candlestick"> | null = null;
@@ -55,6 +65,7 @@
   let hoverTimeMs: number | null = null;
   let currentMeta: Meta | null = null;
   let alignInitialRangeToAnchor = false;
+  let emittedVisibleRange: VisibleRange | null = null;
 
   let unsubCandles: (() => void) | null = null;
   let unsubMeta: (() => void) | null = null;
@@ -96,6 +107,8 @@
     unsubStatus?.();
     resizeObserver?.disconnect();
     chart?.unsubscribeCrosshairMove(handleCrosshairMove);
+    chart?.timeScale().unsubscribeVisibleTimeRangeChange(handleVisibleRangeChange);
+    emitVisibleRangeChange(null);
     chart?.remove();
   });
 
@@ -165,13 +178,15 @@
   }
 
   function handleVisibleRangeChange(range: { from: Time; to: Time } | null): void {
+    emitVisibleRangeFromTimeRange(range);
     if (suppressRangeEvent || !range || range.from == null || range.to == null || !currentMeta) return;
     if (points.length === 0 || baseIndex === null) return;
 
     const minTime = points[0].time;
     const maxTime = points[points.length - 1].time;
-    const fromMs = Number(range.from) * 1000;
-    const toMs = Number(range.to) * 1000;
+    const fromMs = toVisibleTimeMs(range.from);
+    const toMs = toVisibleTimeMs(range.to);
+    if (fromMs === null || toMs === null) return;
     const margin = currentMeta.timeframeMs * 2;
     const minIdx = loadedMin();
     const maxIdx = loadedMax();
@@ -198,6 +213,7 @@
     longLiqSeries?.setData([]);
     shortLiqSeries?.setData([]);
     resetLegendValues();
+    emitVisibleRangeChange(null);
   }
 
   function ingest(fromIndex: number, candles: Candle[]): void {
@@ -392,6 +408,46 @@
     chart.priceScale("right").applyOptions({ scaleMargins: margins.right });
     chart.priceScale("liq").applyOptions({ scaleMargins: margins.liq });
     chart.priceScale("volume").applyOptions({ scaleMargins: margins.volume });
+  }
+
+  function emitVisibleRangeFromTimeRange(range: { from: Time; to: Time } | null): void {
+    if (!range || range.from == null || range.to == null) {
+      emitVisibleRangeChange(null);
+      return;
+    }
+    const fromMs = toVisibleTimeMs(range.from);
+    const toMs = toVisibleTimeMs(range.to);
+    if (fromMs === null || toMs === null) {
+      emitVisibleRangeChange(null);
+      return;
+    }
+    const startTs = Math.min(fromMs, toMs);
+    const endTs = Math.max(fromMs, toMs);
+    emitVisibleRangeChange({ startTs, endTs });
+  }
+
+  function emitVisibleRangeChange(next: VisibleRange | null): void {
+    if (sameVisibleRange(emittedVisibleRange, next)) return;
+    emittedVisibleRange = next;
+    dispatch("visibleRangeChange", next);
+  }
+
+  function sameVisibleRange(a: VisibleRange | null, b: VisibleRange | null): boolean {
+    if (a === b) return true;
+    if (!a || !b) return false;
+    return a.startTs === b.startTs && a.endTs === b.endTs;
+  }
+
+  function toVisibleTimeMs(value: Time): number | null {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return Math.floor(value * 1000);
+    }
+    if (typeof value !== "object" || value === null) return null;
+    const rawYear = (value as { year?: unknown }).year;
+    const rawMonth = (value as { month?: unknown }).month;
+    const rawDay = (value as { day?: unknown }).day;
+    if (!Number.isFinite(rawYear) || !Number.isFinite(rawMonth) || !Number.isFinite(rawDay)) return null;
+    return Date.UTC(Number(rawYear), Number(rawMonth) - 1, Number(rawDay));
   }
 </script>
 

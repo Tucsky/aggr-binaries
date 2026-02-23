@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher, onMount } from "svelte";
+  import { createEventDispatcher } from "svelte";
   import Ellipsis from "lucide-svelte/icons/ellipsis";
   import {
     clampTs,
@@ -9,7 +9,11 @@
     toTimelineX,
     type TimelineRange,
   } from "./timelineUtils.js";
-  import { eventPaintStyle, roundedRectPath } from "./timelineRowCanvas.js";
+  import {
+    drawTimelineVisibleRangeHighlight,
+    eventPaintStyle,
+    roundedRectPath,
+  } from "./timelineRowCanvas.js";
   import {
     drawTimelineSourceRect,
     INDEXED_SOURCE_STYLE,
@@ -19,6 +23,7 @@
   import { resolveOpenTsFromClick } from "./timelineRowClick.js";
   import type { TimelineEvent, TimelineHoverEvent, TimelineMarket } from "./timelineTypes.js";
 
+  // Intentionally kept in one component: canvas hit-testing and pointer pan/zoom state share mutable row-local state.
   interface OpenDetail {
     market: TimelineMarket;
     ts: number;
@@ -59,6 +64,9 @@
   export let timelineWidth = 1200;
   export let rowHeight = 33;
   export let titleWidth = 310;
+  export let showLabel = true;
+  export let showActions = true;
+  export let highlightRange: TimelineRange | null = null;
 
   const dispatch = createEventDispatcher<{
     open: OpenDetail;
@@ -86,8 +94,8 @@
     viewRange;
     rowHeight;
     timelineWidth;
+    highlightRange;
 
-    console.log(`something changed for ${market.symbol}, redrawing canvas`);
     drawCanvas();
   }
 
@@ -95,7 +103,6 @@
     if (!canvasEl) return;
     const ctx = canvasEl.getContext("2d");
     if (!ctx) return;
-    console.log(`Draw row ${market.symbol}`, market);
     const dpr = Math.max(1, window.devicePixelRatio || 1);
     const cssWidth = timelineWidth;
     const cssHeight = rowHeight;
@@ -122,7 +129,6 @@
     );
 
     if (indexedSource) {
-      console.log('\t-> Drawing indexed source (grey rect)');
       drawTimelineSourceRect(
         ctx,
         indexedSource.startTs,
@@ -134,7 +140,6 @@
       );
     }
     if (processedSource) {
-      console.log('\t-> Drawing processed source (blue rect)');
       drawTimelineSourceRect(
         ctx,
         processedSource.startTs,
@@ -146,18 +151,21 @@
       );
     }
 
+    if (highlightRange) {
+      drawTimelineVisibleRangeHighlight(
+        ctx,
+        highlightRange,
+        viewRange,
+        cssWidth,
+        cssHeight,
+      );
+    }
+
     const visibleWindow = findTimelineEventWindow(
       events,
       viewRange.startTs,
       viewRange.endTs,
     );
-    
-
-    if (visibleWindow.endIndex - visibleWindow.startIndex > 0) {
-      console.log(
-        `\t-> drawing events ${visibleWindow.startIndex} to ${visibleWindow.endIndex} on ${market.symbol}`,
-      );
-    }
 
     for (let i = visibleWindow.startIndex; i < visibleWindow.endIndex; i += 1) {
       drawEvent(ctx, events[i], cssWidth, cssHeight);
@@ -337,35 +345,57 @@
   }
 
   function handleActionsClick(): void {
+    if (!showActions) return;
     dispatch("actions", { market, anchorEl: actionsButton });
   }
 </script>
 
-<div
-  class="grid min-w-max items-center hover:bg-slate-900/50"
-  style={`grid-template-columns: ${titleWidth}px ${timelineWidth}px; height: ${rowHeight}px;`}
->
+{#if showLabel}
   <div
-    class="sticky left-0 z-20 h-full border-r border-slate-800 bg-slate-900/50 px-2 text-slate-200"
+    class="grid min-w-max items-center hover:bg-slate-900/50"
+    style={`grid-template-columns: ${titleWidth}px ${timelineWidth}px; height: ${rowHeight}px;`}
   >
-    <div class="flex h-full items-center gap-2 text-[13px] tracking-[0.02em]">
-      <div class="flex flex-col text-xs font-mono leading-none">
-        <div class="opacity-50"><span>{market.collector}</span>:<span>{market.exchange}</span></div>
-        <strong>{market.symbol}</strong>
+    <div
+      class="sticky left-0 z-20 h-full border-r border-slate-800 bg-slate-900/50 px-2 text-slate-200"
+    >
+      <div class="flex h-full items-center gap-2 text-[13px] tracking-[0.02em]">
+        <div class="flex flex-col text-xs font-mono leading-none">
+          <div class="opacity-50"><span>{market.collector}</span>:<span>{market.exchange}</span></div>
+          <strong>{market.symbol}</strong>
+        </div>
+        {#if showActions}
+          <button
+            bind:this={actionsButton}
+            class="ml-auto flex h-6 w-6 items-center justify-center rounded-md border-none py-1 text-slate-300 hover:bg-slate-800/50 hover:text-slate-100"
+            type="button"
+            aria-label="Row actions"
+            on:click={handleActionsClick}
+          >
+            <Ellipsis class="h-4 w-4" aria-hidden="true" strokeWidth={1.9} />
+          </button>
+        {/if}
       </div>
-      <button
-        bind:this={actionsButton}
-        class="ml-auto flex h-6 w-6 items-center justify-center rounded-md border-none py-1 text-slate-300 hover:bg-slate-800/50 hover:text-slate-100"
-        type="button"
-        aria-label="Row actions"
-        on:click={handleActionsClick}
-      >
-        <Ellipsis class="h-4 w-4" aria-hidden="true" strokeWidth={1.9} />
-      </button>
+    </div>
+
+    <div class="h-full">
+      <canvas
+        bind:this={canvasEl}
+        class="h-full w-full cursor-crosshair"
+        on:click={handleCanvasClick}
+        on:wheel={handleWheel}
+        on:pointerdown={handlePointerDown}
+        on:pointermove={handlePointerMove}
+        on:pointerup={handlePointerUp}
+        on:pointercancel={handlePointerUp}
+        on:pointerleave={handlePointerLeave}
+      ></canvas>
     </div>
   </div>
-
-  <div class="h-full">
+{:else}
+  <div
+    class="min-w-max hover:bg-slate-900/50"
+    style={`height: ${rowHeight}px; width: ${timelineWidth}px;`}
+  >
     <canvas
       bind:this={canvasEl}
       class="h-full w-full cursor-crosshair"
@@ -378,4 +408,4 @@
       on:pointerleave={handlePointerLeave}
     ></canvas>
   </div>
-</div>
+{/if}

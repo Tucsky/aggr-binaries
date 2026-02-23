@@ -8,8 +8,8 @@ import {
   toTimelineTs,
   toTimelineX,
   type TimelineRange,
-} from "../../client/src/lib/timelineUtils.js";
-import type { TimelineEvent } from "../../client/src/lib/timelineTypes.js";
+} from "../../client/src/lib/features/timeline/timelineUtils.js";
+import type { TimelineEvent } from "../../client/src/lib/features/timeline/timelineTypes.js";
 
 test("toTimelineX and toTimelineTs map deterministically and clamp to bounds", () => {
   const range: TimelineRange = { startTs: 1_000, endTs: 11_000 };

@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
-  import { get } from "svelte/store";
   import ArrowLeft from "lucide-svelte/icons/arrow-left";
   import Settings2 from "lucide-svelte/icons/settings-2";
   import Autocomplete from "../../framework/ui/Autocomplete.svelte";
@@ -8,12 +7,10 @@
   import StartDateInput from "../../framework/ui/StartDateInput.svelte";
   import TimeframeDropdown from "./TimeframeDropdown.svelte";
   import type { Market } from "./types.js";
-  import { resolveRouteMarket, type ChartRoute } from "../../framework/routing/routes.js";
+  import { buildAppRouteUrl, resolveRouteMarket, type ChartRoute } from "../../framework/routing/routes.js";
   import {
       markets,
       meta,
-      prefs,
-      savePrefs,
       status,
   } from "./viewerStore.js";
   import {
@@ -23,45 +20,39 @@
       setStart,
       setTarget,
   } from "./viewerWs.js";
-  import { parseStartInputUtcMs } from "../../../../../src/shared/startInput.js";
+  import { formatStartInputUtc } from "../../../../../src/shared/startInput.js";
   import { navigate } from "../../framework/routing/routeStore.js";
 
   export let route: ChartRoute | null = null;
 
-  let local = get(prefs);
   let currentMarkets: Market[] = [];
   let collectorOptions: string[] = [];
   let marketOptions: string[] = [];
-  let localMarket = combineMarket(local.exchange, local.symbol);
+  let selectedCollector = "";
+  let selectedMarket = "";
+  let selectedTimeframe = "1m";
+  let selectedStartMs: number | null = null;
+  let selectedStartValue = "";
   let initialSyncDone = false;
-  let manualRouteOverride = false;
-  let routeSignature = "";
+  let routeSignature = "none";
   let settingsDropdownOpened = false;
   let settingsDropdownButton: HTMLButtonElement | null = null;
 
-  const unsubPrefs = prefs.subscribe((v) => (local = v));
-  const unsubMarkets = markets.subscribe((values) =>
-    syncFromMarkets(values ?? []),
-  );
+  const unsubMarkets = markets.subscribe((values) => {
+    currentMarkets = values ?? [];
+    syncFromRouteAndMarkets();
+  });
 
   onMount(() => {
-    connect(local);
+    connect();
   });
 
   onDestroy(() => {
-    unsubPrefs();
     unsubMarkets();
   });
 
-  $: routeSignature = route?.market
-    ? `${route.market.collector}:${route.market.exchange}:${route.market.symbol}:${route.timeframe ?? ""}:${route.startTs ?? ""}`
-    : "";
-  $: if (routeSignature) {
-    manualRouteOverride = false;
-  }
-
-  $: prefs.set(local);
-  $: if (!local.timeframe) local.timeframe = "1m";
+  $: routeSignature = buildRouteSignature(route);
+  $: routeSignature, syncFromRouteAndMarkets();
 
   function uniq(list: string[]): string[] {
     return Array.from(new Set(list)).sort();
@@ -88,143 +79,182 @@
     return { exchange: ex, symbol: sym };
   }
 
-  function syncFromMarkets(marketsList: Market[], force = false) {
-    currentMarkets = marketsList;
-    if (!marketsList.length) {
+  function buildRouteSignature(nextRoute: ChartRoute | null): string {
+    if (!nextRoute || !nextRoute.market) {
+      return `none:${nextRoute?.timeframe ?? ""}:${nextRoute?.startTs ?? ""}`;
+    }
+    return `${nextRoute.market.collector}:${nextRoute.market.exchange}:${nextRoute.market.symbol}:${nextRoute.timeframe ?? ""}:${nextRoute.startTs ?? ""}`;
+  }
+
+  function readRouteTimeframe(nextRoute: ChartRoute | null): string {
+    return nextRoute?.timeframe?.trim() || "1m";
+  }
+
+  function readRouteStartMs(nextRoute: ChartRoute | null): number | null {
+    if (!nextRoute || !Number.isFinite(nextRoute.startTs)) return null;
+    return Math.floor(nextRoute.startTs as number);
+  }
+
+  function syncFromRouteAndMarkets(): void {
+    selectedTimeframe = readRouteTimeframe(route);
+    selectedStartMs = readRouteStartMs(route);
+    selectedStartValue = selectedStartMs === null ? "" : formatStartInputUtc(selectedStartMs);
+
+    if (!currentMarkets.length) {
       collectorOptions = [];
       marketOptions = [];
       return;
     }
 
     const routeMarket = route?.market;
-    if (routeMarket && !manualRouteOverride) {
-      const found = resolveRouteMarket(marketsList, routeMarket);
-      if (!found) {
-        meta.set(null);
-        collectorOptions = uniq(marketsList.map((m) => m.collector));
-        const collector = collectorOptions.includes(routeMarket.collector.toUpperCase())
-          ? routeMarket.collector.toUpperCase()
-          : local.collector;
-        marketOptions = uniq(
-          marketsList
-            .filter((m) => m.collector === collector)
-            .map((m) => combineMarket(m.exchange, m.symbol)),
-        );
-        local = {
-          ...local,
-          collector: routeMarket.collector.toUpperCase(),
-          exchange: routeMarket.exchange.toUpperCase(),
-          symbol: routeMarket.symbol,
-        };
-        localMarket = combineMarket(local.exchange, local.symbol);
-        savePrefs(local);
-        return;
-      }
-      local = {
-        ...local,
-        collector: found.collector,
-        exchange: found.exchange,
-        symbol: found.symbol,
-      };
-      localMarket = combineMarket(found.exchange, found.symbol);
-    }
-
-    collectorOptions = uniq(marketsList.map((m) => m.collector));
-    const collector = collectorOptions.includes(local.collector)
-      ? local.collector
-      : pick(local.collector, collectorOptions);
+    const found = routeMarket ? resolveRouteMarket(currentMarkets, routeMarket) : null;
+    collectorOptions = uniq(currentMarkets.map((m) => m.collector));
+    const requestedCollector = routeMarket?.collector?.toUpperCase() ?? "";
+    const collector = found?.collector
+      ?? (collectorOptions.includes(requestedCollector) ? requestedCollector : pick("", collectorOptions));
 
     marketOptions = uniq(
-      marketsList
+      currentMarkets
         .filter((m) => m.collector === collector)
         .map((m) => combineMarket(m.exchange, m.symbol)),
     );
-
-    const desiredMarket =
-      localMarket || combineMarket(local.exchange, local.symbol);
-    const market = pick(desiredMarket, marketOptions);
+    const requestedMarket = routeMarket
+      ? combineMarket(routeMarket.exchange, routeMarket.symbol)
+      : "";
+    const market = found
+      ? combineMarket(found.exchange, found.symbol)
+      : pick(requestedMarket, marketOptions);
     const parsed = parseMarket(market);
-    local = {
-      ...local,
-      collector,
-      exchange: parsed?.exchange ?? "",
-      symbol: parsed?.symbol ?? "",
+    if (!collector || !parsed) return;
+
+    selectedCollector = collector;
+    selectedMarket = market;
+
+    const desiredRoute: ChartRoute = {
+      kind: "chart",
+      market: { collector, exchange: parsed.exchange, symbol: parsed.symbol },
+      timeframe: selectedTimeframe || undefined,
+      startTs: selectedStartMs === null ? undefined : selectedStartMs,
     };
-    localMarket = market;
-    savePrefs(local);
-    sendSelections(force || !initialSyncDone);
+    const desiredUrl = buildAppRouteUrl(desiredRoute);
+    const currentUrl = buildAppRouteUrl(route ?? { kind: "chart" });
+    if (desiredUrl !== currentUrl) {
+      navigate(desiredRoute, { replace: true });
+    }
+
+    sendActiveSelection(!initialSyncDone);
     initialSyncDone = true;
   }
 
-  function sendSelections(force = false) {
-    const parsed = parseMarket(
-      localMarket || combineMarket(local.exchange, local.symbol),
-    );
-    if (!local.collector || !parsed) return;
+  function sendActiveSelection(force = false): void {
+    const parsed = parseMarket(selectedMarket);
+    if (!selectedCollector || !parsed) return;
     const exists = currentMarkets.some(
       (m) =>
-        m.collector === local.collector &&
+        m.collector === selectedCollector &&
         m.exchange === parsed.exchange &&
         m.symbol === parsed.symbol,
     );
     if (!exists) return;
-    const startMs = parseStart(local.start);
     setTarget(
       {
-        collector: local.collector,
+        collector: selectedCollector,
         exchange: parsed.exchange,
         symbol: parsed.symbol,
       },
       {
         force,
         clearMeta: true,
-        timeframe: local.timeframe,
-        startMs,
+        timeframe: selectedTimeframe,
+        startMs: selectedStartMs,
       },
     );
   }
 
-  function handleCollectorChange(event: Event) {
-    manualRouteOverride = true;
-    const value = (event.target as HTMLSelectElement).value;
-    local = { ...local, collector: value, exchange: "", symbol: "" };
-    localMarket = "";
-    savePrefs(local);
-    syncFromMarkets(currentMarkets, true);
+  function handleCollectorChange(event: Event): void {
+    const collector = (event.target as HTMLSelectElement).value;
+    const nextOptions = uniq(
+      currentMarkets
+        .filter((m) => m.collector === collector)
+        .map((m) => combineMarket(m.exchange, m.symbol)),
+    );
+    const nextMarket = pick("", nextOptions);
+    const parsed = parseMarket(nextMarket);
+    if (!collector || !parsed) return;
+    navigate(
+      {
+        kind: "chart",
+        market: { collector, exchange: parsed.exchange, symbol: parsed.symbol },
+        timeframe: selectedTimeframe || undefined,
+        startTs: selectedStartMs === null ? undefined : selectedStartMs,
+      },
+      { replace: true },
+    );
   }
 
-  function handleMarketChange(value: string) {
-    manualRouteOverride = true;
-    localMarket = value;
+  function handleMarketChange(value: string): void {
     const parsed = parseMarket(value);
-    if (!parsed) return;
-    local = { ...local, exchange: parsed.exchange, symbol: parsed.symbol };
-    savePrefs(local);
-    sendSelections(true);
+    if (!parsed || !selectedCollector) return;
+    navigate(
+      {
+        kind: "chart",
+        market: {
+          collector: selectedCollector,
+          exchange: parsed.exchange,
+          symbol: parsed.symbol,
+        },
+        timeframe: selectedTimeframe || undefined,
+        startTs: selectedStartMs === null ? undefined : selectedStartMs,
+      },
+      { replace: true },
+    );
   }
 
-  function handleStartChange(event: CustomEvent<{ value: string; ms: number | null }>) {
-    const nextValue = event.detail.value;
+  function handleTimeframeSelect(event: CustomEvent<string>): void {
+    const timeframe = event.detail.trim();
+    if (!timeframe) return;
+    const parsed = parseMarket(selectedMarket);
+    if (!selectedCollector || !parsed) return;
+    navigate(
+      {
+        kind: "chart",
+        market: {
+          collector: selectedCollector,
+          exchange: parsed.exchange,
+          symbol: parsed.symbol,
+        },
+        timeframe,
+        startTs: selectedStartMs === null ? undefined : selectedStartMs,
+      },
+      { replace: true },
+    );
+  }
+
+  function handleStartChange(event: CustomEvent<{ value: string; ms: number | null }>): void {
     const nextMs = event.detail.ms;
-    const currentMs = parseStart(local.start);
-    if (nextValue !== local.start) {
-      local = { ...local, start: nextValue };
-      savePrefs(local);
-    }
-    if (nextMs !== currentMs) {
-      setStart(nextMs, { force: true });
-    }
-  }
-
-  function parseStart(value: string): number | null | undefined {
-    if (!value) return null;
-    const ms = parseStartInputUtcMs(value);
-    return ms === null ? undefined : ms;
+    const parsed = parseMarket(selectedMarket);
+    if (!selectedCollector || !parsed) return;
+    selectedStartValue = event.detail.value;
+    selectedStartMs = nextMs;
+    setStart(nextMs, { force: true });
+    navigate(
+      {
+        kind: "chart",
+        market: {
+          collector: selectedCollector,
+          exchange: parsed.exchange,
+          symbol: parsed.symbol,
+        },
+        timeframe: selectedTimeframe || undefined,
+        startTs: nextMs === null ? undefined : nextMs,
+      },
+      { replace: true },
+    );
   }
 
   function handleReconnect() {
     reconnect();
-    sendSelections(true);
+    sendActiveSelection(true);
   }
 
   function refreshMarkets() {
@@ -249,16 +279,19 @@
 
     <Autocomplete
       options={marketOptions}
-      value={localMarket}
+      value={selectedMarket}
       placeholder="EXCHANGE:SYMBOL"
       on:change={(e) => handleMarketChange(e.detail)}
     />
 
-    <TimeframeDropdown />
+    <TimeframeDropdown
+      currentValue={selectedTimeframe}
+      on:select={handleTimeframeSelect}
+    />
 
     <StartDateInput
       className="border-none bg-slate-900 outline-none px-2 py-1.5 text-slate-100 placeholder:text-slate-500"
-      value={local.start}
+      value={selectedStartValue}
       on:change={handleStartChange}
     />
 
@@ -288,13 +321,13 @@
       <select
         class="w-full rounded-md border border-slate-800 bg-slate-900/80 px-3 py-2 text-slate-100"
         on:change={handleCollectorChange}
-        value={local.collector}
+        value={selectedCollector}
       >
         {#if collectorOptions.length === 0}
           <option disabled selected>Loading...</option>
         {:else}
           {#each collectorOptions as option}
-            <option value={option} selected={option === local.collector}
+            <option value={option} selected={option === selectedCollector}
               >{option}</option
             >
           {/each}
@@ -335,7 +368,7 @@
 
       {#if $status === "connected" && $meta}
         <div class="space-y-1 text-slate-200">
-          <div>Collector: {local.collector}</div>
+          <div>Collector: {selectedCollector}</div>
           <div>
             Timeframe: {$meta.timeframe ??
               `${($meta.timeframeMs ?? 0) / 1000}s`}

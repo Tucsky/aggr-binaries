@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { computeTimelinePopoverPlacement } from "../../client/src/lib/timelineEventPopoverPosition.js";
+import { computeTimelinePopoverPlacement } from "../../client/src/lib/features/timeline/timelineEventPopoverPosition.js";
 
 test("computeTimelinePopoverPlacement follows pointer movement on the same marker", () => {
   const base = {

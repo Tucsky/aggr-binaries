@@ -3,7 +3,7 @@ import { test } from "node:test";
 import {
   filterTimeframesByQuery,
   type TimeframeEntry,
-} from "../../client/src/lib/timeframeDropdownUtils.js";
+} from "../../client/src/lib/features/viewer/timeframeDropdownUtils.js";
 
 test("filterTimeframesByQuery returns original list for empty query", () => {
   const list: TimeframeEntry[] = [

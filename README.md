@@ -471,15 +471,17 @@ npm run serve
 
 * `GET /` → serves built frontend
 * SPA fallback to `index.html` for client routes (for example `/timeline`, `/chart/...`)
-* `GET /api/timeline/markets[?timeframe=...]`
+* `GET /api/timeline/markets[?timeframe=...&collector=...&exchange=...&symbol=...]`
   * returns all indexed markets (`files` grouped by `{collector,exchange,symbol}` with `MIN/MAX(start_ts)`)
   * merges processed ranges from `registry` (selected timeframe or `ALL` aggregate when timeframe is omitted)
+  * optional `collector/exchange/symbol` narrows the response to matching market identity (symbol match is exact, case-insensitive)
   * payload includes split coverage fields:
     * indexed: `indexedStartTs`, `indexedEndTs`
     * processed: `processedStartTs`, `processedEndTs`
     * union range used by timeline zoom/filter: `startTs`, `endTs`
-* `GET /api/timeline/events?startTs=...&endTs=...&collector=...&exchange=...&symbol=...`
+* `GET /api/timeline/events?startTs=...&endTs=...&collector=...&exchange=...&symbol=...&symbolMode=contains|exact`
   * `startTs`/`endTs` are required
+  * optional `symbolMode` defaults to `contains`; use `exact` for exact symbol matching
   * timestamp source is `gap_end_ts` when present, otherwise `files.start_ts` via `(root_id, relative_path)` join
   * deterministic ordering: `collector, exchange, symbol, ts, id`
   * event payload includes source and gap context fields (`relativePath`, `startLine`, `endLine`, `gapMs`, `gapMiss`, `eventType`, `gapFixStatus`) for timeline inspection UIs
@@ -521,7 +523,10 @@ npm run serve
 * Timeline source coverage colors: indexed-only coverage is gray, processed coverage is blue; mixed markets render both (blue over gray).
 * Timeline event markers support hover inspection with pointer-following, viewport-clamped popovers (event type + file:line; gap start/elapsed/miss context).
 * Viewer page keeps the existing single WS connection model (`/ws`) for candle metadata/slices.
-* URL is canonical route state; chart changes update URL with `replaceState`, and timeline state is restored when returning from Viewer.
+* Viewer embeds a single-row timeline navigator above the chart for the active market/timeframe.
+* Embedded navigator keeps timeline interactions (pan/zoom + hover popovers), highlights the chart-visible UTC range, and keeps pan/zoom local until click.
+* Clicking embedded timeline sets a deterministic clamped `startTs` and updates the chart route with `replaceState`.
+* Viewer route state (`collector/exchange/symbol/timeframe/startTs`) is canonical for chart selection and does not overwrite timeline filter state.
 
 ### Preview chart scales and overlays
 
@@ -540,4 +545,4 @@ npm run serve
 
 ## XIII. Development
 
-- `npm test` builds `dist-tests` via `tsconfig.tests.json` and runs `node --test dist-tests/tests/core/**/*.test.js`.
+- `npm test` builds `dist-tests` via `tsconfig.tests.json` and runs `node --test dist-tests/tests/**/*.test.js`.
