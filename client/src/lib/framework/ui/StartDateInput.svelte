@@ -317,12 +317,12 @@
     on:paste={handlePaste}
   />
   <button
-    class="absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 text-slate-100 hover:bg-slate-800/80 hover:text-slate-100"
+    class="absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 text-slate-500 hover:bg-slate-800/80 hover:text-slate-200"
     type="button"
     aria-label="Open calendar"
     on:click={openCalendarPicker}
   >
-    <CalendarDays class="h-4 w-4 text-slate-100" aria-hidden="true" strokeWidth={1.75} />
+    <CalendarDays class="h-3.5 w-3.5" aria-hidden="true" strokeWidth={1.9} />
   </button>
   <input
     bind:this={calendarEl}

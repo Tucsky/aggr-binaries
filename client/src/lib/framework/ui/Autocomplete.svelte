@@ -18,14 +18,14 @@
   }
 </script>
 
-<div class="relative bg-slate-900">
+<div class="relative">
   <Search
     class="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500"
     aria-hidden="true"
     strokeWidth={2}
   />
   <input
-    class="border-none bg-slate-900 py-1.5 pl-7 pr-2 outline-none text-sm text-slate-100"
+    class="w-64 border-none bg-transparent py-1.5 pl-7 pr-2 text-xs text-slate-100 outline-none placeholder:text-slate-500"
     type="text"
     {id}
     {placeholder}

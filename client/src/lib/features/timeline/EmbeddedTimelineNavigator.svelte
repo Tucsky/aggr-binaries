@@ -57,6 +57,8 @@
     normalizedCollector && normalizedExchange && normalizedSymbol
       ? `${normalizedCollector}:${normalizedExchange}:${normalizedSymbol}:${normalizedTimeframe}`
       : "";
+  $: hasMoreLeft = Boolean(market && viewRange && viewRange.startTs > market.startTs);
+  $: hasMoreRight = Boolean(market && viewRange && viewRange.endTs < market.endTs);
 
   $: if (loadKey && loadKey !== lastLoadKey) {
     lastLoadKey = loadKey;
@@ -220,30 +222,38 @@
   }
 </script>
 
-<section class="border-b border-slate-800 bg-slate-900/70 px-1 py-1">
-  <div bind:this={hostEl} class="relative overflow-x-auto overflow-y-hidden">
-    {#if loading}
-      <div class="px-2 py-1 text-xs text-slate-400">Loading timeline...</div>
-    {:else if error}
-      <div class="px-2 py-1 text-xs text-red-300">{error}</div>
-    {:else if market && viewRange}
-      <TimelineRow
-        {market}
-        {events}
-        range={{ startTs: market.startTs, endTs: market.endTs }}
-        {viewRange}
-        {timelineWidth}
-        rowHeight={ROW_HEIGHT}
-        showLabel={false}
-        showActions={false}
-        highlightRange={chartVisibleRange}
-        on:open={handleOpen}
-        on:hover={handleHover}
-        on:zoom={handleZoom}
-        on:pan={handlePan}
-      />
-    {:else}
-      <div class="px-2 py-1 text-xs text-slate-500">No market selected.</div>
+<section class="border-b border-slate-800 bg-slate-900/70 py-1">
+  <div class="relative">
+    <div bind:this={hostEl} class="relative overflow-x-auto overflow-y-hidden">
+      {#if loading}
+        <div class="px-2 py-1 text-xs text-slate-400">Loading timeline...</div>
+      {:else if error}
+        <div class="px-2 py-1 text-xs text-red-300">{error}</div>
+      {:else if market && viewRange}
+        <TimelineRow
+          {market}
+          {events}
+          range={{ startTs: market.startTs, endTs: market.endTs }}
+          {viewRange}
+          {timelineWidth}
+          rowHeight={ROW_HEIGHT}
+          showLabel={false}
+          showActions={false}
+          highlightRange={chartVisibleRange}
+          on:open={handleOpen}
+          on:hover={handleHover}
+          on:zoom={handleZoom}
+          on:pan={handlePan}
+        />
+      {:else}
+        <div class="px-2 py-1 text-xs text-slate-500">No market selected.</div>
+      {/if}
+    </div>
+    {#if hasMoreLeft}
+      <div class="pointer-events-none absolute inset-y-0 left-0 z-10 w-5 bg-gradient-to-r from-slate-950/90 to-transparent"></div>
+    {/if}
+    {#if hasMoreRight}
+      <div class="pointer-events-none absolute inset-y-0 right-0 z-10 w-5 bg-gradient-to-l from-slate-950/90 to-transparent"></div>
     {/if}
   </div>
   <TimelineEventPopover hoveredEvent={hoveredEvent} />

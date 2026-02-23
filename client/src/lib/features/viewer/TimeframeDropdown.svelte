@@ -115,32 +115,36 @@
 </script>
 
 <button
-  class="flex bg-slate-900 items-center gap-2 px-3 py-1.5 text-slate-100 hover:bg-slate-900/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-slate-600"
+  class="relative flex items-center gap-1.5 border-l border-slate-800 bg-transparent py-1.5 pl-7 pr-2 text-xs text-slate-100 hover:bg-slate-800/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-slate-600"
   on:click={toggle}
   type="button"
   bind:this={anchorEl}
 >
-  <Clock3 class="h-3.5 w-3.5 text-slate-500" aria-hidden="true" strokeWidth={1.9} />
+  <Clock3
+    class="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500"
+    aria-hidden="true"
+    strokeWidth={1.9}
+  />
   <span>{currentValue || "Select TF"}</span>
   <ChevronDown class="h-3.5 w-3.5 text-slate-500" aria-hidden="true" strokeWidth={2} />
 </button>
 
-<Dropdown {open} {anchorEl} on:close={close}>
+<Dropdown {open} {anchorEl} on:close={close} margin={8}>
   <div class="w-32">
     <div class="sticky top-0">
       <div
-        class="backdrop-blur-sm flex items-center gap-2 bg-slate-900/80 px-2 py-1"
+        class="backdrop-blur-sm flex items-center gap-2 bg-slate-900/80 px-1 py-1"
       >
         <input
-          class="flex-1 min-w-px bg-transparent outline-none text-slate-100 placeholder:text-slate-500 text-sm"
-          placeholder="ex 1m"
+          class="min-w-px flex-1 bg-transparent text-xs text-slate-100 outline-none placeholder:text-slate-500"
+          placeholder="Search"
           bind:this={inputEl}
           bind:value={input}
           on:keydown={(e) => e.key === "Enter" && handleSubmit()}
         />
         {#if inputMs}
           <button
-            class="text-xs text-emerald-300 hover:text-emerald-200"
+            class="text-[11px] text-emerald-300 hover:text-emerald-200"
             on:click={handleSubmit}
             type="button"
           >
@@ -148,7 +152,7 @@
           </button>
         {:else}
           <button
-            class="text-xs text-slate-400 hover:text-slate-200"
+            class="text-slate-400 hover:text-slate-200"
             type="button"
             on:click={toggleEdit}
             aria-label="Toggle edit"
@@ -163,41 +167,39 @@
       </div>
     </div>
 
-    <div class="p-2 pt-0">
+    <div class="px-1 pb-1">
       {#each grouped as group}
         <div
-          class="flex items-center justify-between text-[10px] uppercase tracking-[0.08em] text-slate-400 font-semibold mt-2 mb-1"
+          class="mb-1 mt-2 flex items-center justify-between px-3 text-[10px] font-mono uppercase tracking-[0.08em] text-slate-400"
         >
           <span>{group.title}</span>
         </div>
-        <div class="flex flex-col gap-px">
-          {#each group.items as tf}
-            <button
-              type="button"
-              class={`text-left px-3 py-2 rounded hover:bg-slate-800/80 text-sm flex items-center justify-between ${
-                tf.value === currentValue
-                  ? "bg-slate-800/80 text-slate-100"
-                  : "text-slate-200"
-              }`}
-              on:click={() => select(tf.value)}
+        {#each group.items as tf}
+          <button
+            type="button"
+            class={`flex w-full items-center justify-between rounded px-3 py-1.5 text-left text-xs  ${
+              tf.value === currentValue
+                ? "font-bold underline decoration-amber-300"
+                : "text-slate-200 hover:bg-slate-800/80"
+            }`}
+            on:click={() => select(tf.value)}
+          >
+            <span
+              class={`font-mono ${serverSet.has(tf.value) ? "text-amber-300" : ""}`}
+              >{tf.value}</span
             >
-              <span
-                class={`font-mono ${serverSet.has(tf.value) ? "text-amber-300" : ""}`}
-                >{tf.value}</span
+            {#if editing && removable.has(tf.value)}
+              <button
+                type="button"
+                class="text-xs text-rose-300 hover:text-rose-200"
+                on:click|stopPropagation={() => remove(tf.value)}
+                aria-label="Remove timeframe"
               >
-              {#if editing && removable.has(tf.value)}
-                <button
-                  type="button"
-                  class="text-xs text-rose-300 hover:text-rose-200"
-                  on:click|stopPropagation={() => remove(tf.value)}
-                  aria-label="Remove timeframe"
-                >
-                  <Trash2 class="h-3.5 w-3.5" aria-hidden="true" strokeWidth={2} />
-                </button>
-              {/if}
-            </button>
-          {/each}
-        </div>
+                <Trash2 class="h-3.5 w-3.5" aria-hidden="true" strokeWidth={2} />
+              </button>
+            {/if}
+          </button>
+        {/each}
       {/each}
     </div>
   </div>
