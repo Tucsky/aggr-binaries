@@ -1,58 +1,26 @@
-const ANSI_CLEAR_LINE = "\r\x1b[2K";
-const MAX_STATUS_LEN = 180;
-const MIN_UPDATE_INTERVAL_MS = 150;
+import { createProgressReporter, formatProgressUrl } from "../progress.js";
 
-let hasTransientLine = false;
-let lastRendered = "";
-let lastRenderedAt = 0;
+const reporter = createProgressReporter({
+  envVar: "AGGR_FIXGAPS_PROGRESS",
+  prefix: "[fixgaps]",
+  maxLen: 180,
+  minUpdateIntervalMs: 150,
+});
 
-function canRenderTransientLine(): boolean {
-  return process.stdout.isTTY === true && process.env.AGGR_FIXGAPS_PROGRESS !== "0";
+export function setFixgapsProgressContext(context?: string): void {
+  reporter.setContext(context);
 }
 
 export function setFixgapsProgress(message: string): void {
-  if (!canRenderTransientLine()) return;
-  const sanitized = sanitizeMessage(message);
-  const truncated = truncateMessage(sanitized, MAX_STATUS_LEN);
-  const now = Date.now();
-  if (truncated === lastRendered && now - lastRenderedAt < MIN_UPDATE_INTERVAL_MS) {
-    return;
-  }
-  process.stdout.write(`${ANSI_CLEAR_LINE}${truncated}`);
-  hasTransientLine = true;
-  lastRendered = truncated;
-  lastRenderedAt = now;
+  reporter.update(message);
 }
 
 export function clearFixgapsProgress(): void {
-  if (!canRenderTransientLine() || !hasTransientLine) return;
-  process.stdout.write(ANSI_CLEAR_LINE);
-  hasTransientLine = false;
-  lastRendered = "";
-  lastRenderedAt = 0;
+  reporter.clear();
 }
 
 export function logFixgapsLine(line: string): void {
-  clearFixgapsProgress();
-  console.log(line);
+  reporter.log(line);
 }
 
-export function formatProgressUrl(url: string): string {
-  try {
-    const parsed = new URL(url);
-    const path = `${parsed.host}${parsed.pathname}`;
-    if (!parsed.search) return path;
-    return truncateMessage(`${path}${parsed.search}`, 150);
-  } catch {
-    return truncateMessage(url, 150);
-  }
-}
-
-function sanitizeMessage(message: string): string {
-  return message.replaceAll("\n", " ").replaceAll("\r", " ");
-}
-
-function truncateMessage(message: string, maxLen: number): string {
-  if (message.length <= maxLen) return message;
-  return `${message.slice(0, maxLen - 3)}...`;
-}
+export { formatProgressUrl };

@@ -373,6 +373,19 @@ npm start -- <subcommand> [flags]
 
 `--id` selection is applied directly on `events.id`; when present, it takes precedence over `--retry-status` queue gating.
 
+### Progress log rendering (optional)
+
+Long-running commands share the same progress renderer behavior:
+* default (TTY): transient single-line updates
+* `0`/`off`/`false`: disable progress updates
+* `line`: print each update as a full line
+
+Per-command env vars:
+* `AGGR_INDEX_PROGRESS`
+* `AGGR_PROCESS_PROGRESS`
+* `AGGR_REGISTRY_PROGRESS`
+* `AGGR_FIXGAPS_PROGRESS`
+
 ### Fixgaps behavior
 
 `fixgaps` is event-driven recovery over `events.event_type='gap'`.
@@ -387,8 +400,11 @@ For each grouped `(root_id, relative_path)` file:
    * Write sorted output atomically; existing rows win duplicates, recovered rows are inserted only when missing.
    * Preserve non-trade lines by appending them unchanged after sorted trade rows.
    * Recovered inserts are emitted as canonical trade rows (`ts price size side`) without liquidation marker.
-4. Patch all existing timeframe binaries for that market over the affected timestamp range.
-5. Update event lifecycle:
+4. Patch the configured base timeframe binary (default `1m`) over the recovered-trade range.
+   * Patch input is reconstructed from all indexed source files overlapping the affected timestamp window (plus boundary predecessor file), not only the currently rewritten file.
+   * Base patching requires an existing base companion+binary for the market (typically created by `process`).
+5. After grouped file processing finishes, roll up all existing higher timeframes for each dirty market from the base binary over the merged affected range.
+6. Update event lifecycle:
    * Adapter succeeded (including 0 recovered trades): keep row, set `gap_fix_status='fixed'`, clear `gap_fix_error`, and set `gap_fix_recovered`.
    * Missing adapter: keep row, set `gap_fix_status='missing_adapter'`.
    * Adapter/merge/patch failure: keep row, set `gap_fix_status='adapter_error'` + `gap_fix_error`.
@@ -418,10 +434,12 @@ Supported adapters in this iteration:
 ### Fixgaps output
 
 Definitive per-gap lines:
-* Success: `[fixgaps] [EXCHANGE/SYMBOL/YYYY-MM-DD] {gap_ms}ms gap @ HH:mm : recovered {recovered} / {gap_miss}`
-* Failure: `[fixgaps] [EXCHANGE/SYMBOL/YYYY-MM-DD] {gap_ms}ms gap @ HH:mm : error (reason)`
+* Success: `[fixgaps] [EXCHANGE/SYMBOL/YYYY-MM-DD] {gap_elapsed} gap @ HH:mm : recovered {recovered} / {gap_miss}`
+* Failure: `[fixgaps] [EXCHANGE/SYMBOL/YYYY-MM-DD] {gap_elapsed} gap @ HH:mm : error (reason)`
+  where `{gap_elapsed}` is a compact duration (`1h 2m 3s`, `2m`, `5s`).
+  where `HH:mm` is the UTC minute of the gap start (`gap_end_ts - gap_ms` when available).
 
-Transient status line (single-line TTY progress) shows fetch/wait/sort/patch phases while work is in flight.
+Transient status line (single-line TTY progress) shows per-gap fetch/wait/sort/patch phases while work is in flight.
 
 ### Fixgaps debug (optional)
 
@@ -429,7 +447,8 @@ Set env vars to inspect long-running retries and per-file progress:
 * `AGGR_FIXGAPS_DEBUG=1` — high-level file/window + adapter + HTTP retry logs
 * `AGGR_FIXGAPS_DEBUG_ADAPTERS=1` — adapter pagination logs only
 * `AGGR_FIXGAPS_DEBUG_HTTP=1` — HTTP retry/backoff logs only
-* `AGGR_FIXGAPS_PROGRESS=0` — disable transient one-line progress rendering
+* `AGGR_FIXGAPS_PROGRESS=0` — disable progress rendering
+* `AGGR_FIXGAPS_PROGRESS=line` — print full progress lines instead of transient carriage-return updates
 
 ### Examples
 
@@ -485,6 +504,7 @@ npm run serve
   * timestamp source is `gap_end_ts` when present, otherwise `files.start_ts` via `(root_id, relative_path)` join
   * deterministic ordering: `collector, exchange, symbol, ts, id`
   * event payload includes source and gap context fields (`relativePath`, `startLine`, `endLine`, `gapMs`, `gapMiss`, `eventType`, `gapFixStatus`) for timeline inspection UIs
+* Timeline JSON API responses are emitted with no-cache headers (`Cache-Control: no-store`, `Pragma: no-cache`, `Expires: 0`).
 * `POST /api/timeline/actions`
   * triggers core pipeline actions for one market row (`index`, `process`, `fixgaps`, `registry`, `clear`)
   * request body: `{action, collector, exchange, symbol, timeframe?}`

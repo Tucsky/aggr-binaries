@@ -24,6 +24,7 @@ import {
   type Candle,
   type ParseRejectReason,
 } from "./trades.js";
+import { createProgressReporter } from "./progress.js";
 
 interface Accumulator {
   collector: string;
@@ -75,44 +76,53 @@ enum BinaryState {
   Missing = "missing",
 }
 
+const processProgress = createProgressReporter({
+  envVar: "AGGR_PROCESS_PROGRESS",
+  prefix: "[process]",
+});
+
 export async function runProcess(config: Config, db: Db): Promise<void> {
-  const collectors = await resolveCollectors(config, db);
-  if (!collectors.length) {
-    throw new Error("No collectors found; specify --collector or ensure index has rows.");
+  try {
+    const collectors = await resolveCollectors(config, db);
+    if (!collectors.length) {
+      throw new Error("No collectors found; specify --collector or ensure index has rows.");
+    }
+
+    const allowExchange = config.exchange?.toUpperCase();
+    const allowSymbol = config.symbol;
+    const totalCandidates = countCandidateFiles(db, collectors, allowExchange, allowSymbol);
+    const totalMarkets = countMarkets(db, collectors, allowExchange, allowSymbol);
+    if (!totalCandidates) {
+      processProgress.log("No files to process for selected collectors.");
+      return;
+    }
+
+    const timeframe = config.timeframe;
+    const markets = iterateMarkets(db, collectors, allowExchange, allowSymbol);
+
+    processProgress.log(
+      `[process] collectors=${collectors.join(",")} markets=${totalMarkets} files=${totalCandidates} timeframe=${timeframe} filters=${allowExchange || "ALL"}/${allowSymbol || "ALL"} (market-first)`,
+    );
+
+    const startAll = Date.now();
+    const stats = await processByMarket({
+      markets,
+      totalCandidates,
+      totalMarkets,
+      db,
+      config,
+      startAll,
+    });
+
+    const totalElapsed = (Date.now() - startAll) / 1000;
+    processProgress.log(
+      `[process] complete markets=${stats.processedMarkets} files=${stats.processedFiles}/${totalCandidates} lines=${stats.totalLines} kept=${stats.totalTradesKept} maxBuckets=${stats.maxBuckets} elapsed=${totalElapsed.toFixed(
+        2,
+      )}s`,
+    );
+  } finally {
+    processProgress.clear();
   }
-
-  const allowExchange = config.exchange?.toUpperCase();
-  const allowSymbol = config.symbol;
-  const totalCandidates = countCandidateFiles(db, collectors, allowExchange, allowSymbol);
-  const totalMarkets = countMarkets(db, collectors, allowExchange, allowSymbol);
-  if (!totalCandidates) {
-    console.log("No files to process for selected collectors.");
-    return;
-  }
-
-  const timeframe = config.timeframe;
-  const markets = iterateMarkets(db, collectors, allowExchange, allowSymbol);
-
-  console.log(
-    `[process] collectors=${collectors.join(",")} markets=${totalMarkets} files=${totalCandidates} timeframe=${timeframe} filters=${allowExchange || "ALL"}/${allowSymbol || "ALL"} (market-first)`,
-  );
-
-  const startAll = Date.now();
-  const stats = await processByMarket({
-    markets,
-    totalCandidates,
-    totalMarkets,
-    db,
-    config,
-    startAll,
-  });
-
-  const totalElapsed = (Date.now() - startAll) / 1000;
-  console.log(
-    `[process] complete markets=${stats.processedMarkets} files=${stats.processedFiles}/${totalCandidates} lines=${stats.totalLines} kept=${stats.totalTradesKept} maxBuckets=${stats.maxBuckets} elapsed=${totalElapsed.toFixed(
-      2,
-    )}s`,
-  );
 }
 
 async function resolveCollectors(config: Config, db: Db): Promise<string[]> {
@@ -200,7 +210,7 @@ async function startAccumulatorForMarket(
 ): Promise<Accumulator> {
   const companionPath = path.join(config.outDir, collector, exchange, symbol, `${config.timeframe}.json`);
   const companion = config.force ? undefined : await readCompanion(companionPath);
-  console.log(
+  processProgress.log(
     `[${collector}/${exchange}/${symbol}] init accumulator companion=${companion ? "present" : "missing"} path=${companionPath}`,
   );
   const gapTracker = createGapTracker(companion);
@@ -247,7 +257,7 @@ async function processByMarket(opts: {
   let maxBuckets = 0;
   const logHeartbeat = () => {
     const elapsed = ((Date.now() - startAll) / 1000).toFixed(1);
-    console.log(
+    processProgress.update(
       `[process] heartbeat markets=${processedMarkets}/${totalMarkets} files=${processedFiles}/${totalCandidates} buckets=${maxBuckets} current=${acc ? makeMarketKey(acc.collector, acc.exchange, acc.symbol) : "idle"} elapsed=${elapsed}s`,
     );
   };
@@ -259,7 +269,7 @@ async function processByMarket(opts: {
     if (!config.force && acc.companion) {
       const binaryState = await getBinaryState(outBase + ".bin");
       if (binaryState === BinaryState.Missing) {
-        console.log(
+        processProgress.log(
           `[${acc.collector}/${acc.exchange}/${acc.symbol}/${timeframe}] companion present but binary missing; rebuilding full output`,
         );
         acc.companion = undefined;
@@ -273,7 +283,7 @@ async function processByMarket(opts: {
       !config.force && acc.companion && acc.companion.endTs !== undefined
         ? acc.companion.endTs - timeframeMs
         : undefined;
-    console.log(
+    processProgress.log(
       `[${acc.collector}/${acc.exchange}/${acc.symbol}/${timeframe}] start market companion=${Boolean(acc.companion)} minStartTs=${minStartTs} resumeSlot=${resumeSlot}`,
     );
     const files = iterateFilesForMarket(db, market, minStartTs);
@@ -485,7 +495,7 @@ async function flushMarketOutput(
 
   if (!acc.bucketCount || !isFinite(acc.minMinute) || !isFinite(acc.maxMinute)) {
     if (opts.final) {
-      console.log(`[${acc.collector}/${acc.exchange}/${acc.symbol}] no trades; skipping output`);
+      processProgress.log(`[${acc.collector}/${acc.exchange}/${acc.symbol}] no trades; skipping output`);
     }
     return false;
   }
@@ -525,7 +535,7 @@ async function flushMarketOutput(
   const usingResumeRewrite = state.needsResumeRewrite && !state.hasFlushed;
   if (state.lastFlushedEndTs !== undefined && flushEndExclusive <= state.lastFlushedEndTs && !usingResumeRewrite) {
     if (opts.final && state.hasFlushed) {
-      console.log(
+      processProgress.log(
         `[${acc.collector}/${acc.exchange}/${acc.symbol}/${timeframe}] final flush already persisted through ${new Date(
           state.lastFlushedEndTs,
         ).toISOString()}`,
@@ -574,7 +584,7 @@ async function flushMarketOutput(
   const modeLabel = usingResumeRewrite ? "resume" : state.hasFlushed ? "append" : "fresh";
   const verb = opts.final ? "final" : "flush";
 
-  console.log(
+  processProgress.log(
     `[${acc.collector}/${acc.exchange}/${acc.symbol}/${timeframe}] ${verb} +${newCandles} candles (total=${totalCandles}, ~${estimatedMb} MB) range ${new Date(
       writeFrom,
     ).toISOString()} -> ${new Date(flushEndExclusive).toISOString()} (${modeLabel})`,
@@ -613,7 +623,7 @@ async function flushMarketOutput(
   });
 
   if (opts.final) {
-    console.log(
+    processProgress.log(
       `[${acc.collector}/${acc.exchange}/${acc.symbol}/${timeframe}] processed ${acc.bucketCount} populated candles into ${totalCandles} slots -> ${state.outBase}.bin`,
     );
   }

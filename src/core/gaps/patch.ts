@@ -21,8 +21,18 @@ interface PatchTarget {
   buckets: Map<number, Candle>;
 }
 
+interface PatchSourceFile {
+  absolutePath: string;
+  relativePath: string;
+  startTs: number;
+}
+
 export interface PatchBinariesResult {
   patchedTimeframes: number;
+}
+
+export interface PatchBinariesOptions {
+  timeframes?: string[];
 }
 
 export async function patchBinariesForRecoveredTrades(
@@ -30,29 +40,39 @@ export async function patchBinariesForRecoveredTrades(
   db: Db,
   market: { collector: string; exchange: string; symbol: string },
   filePath: string,
-  insertedTrades: RecoveredTrade[],
+  rangeTrades: RecoveredTrade[],
+  options: PatchBinariesOptions = {},
 ): Promise<PatchBinariesResult> {
-  if (!insertedTrades.length) return { patchedTimeframes: 0 };
+  if (!rangeTrades.length) return { patchedTimeframes: 0 };
 
-  const minTs = insertedTrades.reduce((min, t) => (t.ts < min ? t.ts : min), Number.POSITIVE_INFINITY);
-  const maxTs = insertedTrades.reduce((max, t) => (t.ts > max ? t.ts : max), Number.NEGATIVE_INFINITY);
+  const minTs = rangeTrades.reduce((min, t) => (t.ts < min ? t.ts : min), Number.POSITIVE_INFINITY);
+  const maxTs = rangeTrades.reduce((max, t) => (t.ts > max ? t.ts : max), Number.NEGATIVE_INFINITY);
 
-  const targets = await loadPatchTargets(config, market, minTs, maxTs);
+  const timeframeFilter = options.timeframes?.length ? new Set(options.timeframes) : undefined;
+  const targets = await loadPatchTargets(config, market, minTs, maxTs, timeframeFilter);
   if (!targets.length) {
     throw new Error(`No patchable binaries for ${market.collector}/${market.exchange}/${market.symbol}`);
   }
 
   let globalMinTs = Number.POSITIVE_INFINITY;
   let globalMaxTsExclusive = Number.NEGATIVE_INFINITY;
+  let maxTargetTimeframeMs = 0;
   for (const target of targets) {
     const min = target.fromSlot;
     const maxExclusive = target.toSlot + target.timeframeMs;
     if (min < globalMinTs) globalMinTs = min;
     if (maxExclusive > globalMaxTsExclusive) globalMaxTsExclusive = maxExclusive;
+    if (target.timeframeMs > maxTargetTimeframeMs) maxTargetTimeframeMs = target.timeframeMs;
   }
 
-  const stream = await openTradeReadStream(filePath);
-  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  const sourceFiles = loadPatchSourceFiles(
+    db,
+    market,
+    globalMinTs,
+    globalMaxTsExclusive,
+    Math.max(maxTargetTimeframeMs, 1),
+    filePath,
+  );
   const accumulators = targets.map((target) => ({
     target,
     acc: {
@@ -62,18 +82,22 @@ export async function patchBinariesForRecoveredTrades(
     },
   }));
 
-  for await (const line of rl) {
-    const trade = parseTradeLine(line);
-    if (!trade) continue;
-    if (trade.ts < globalMinTs || trade.ts >= globalMaxTsExclusive) continue;
+  for (const source of sourceFiles) {
+    const stream = await openTradeReadStream(source.absolutePath);
+    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+    for await (const line of rl) {
+      const trade = parseTradeLine(line);
+      if (!trade) continue;
+      if (trade.ts < globalMinTs || trade.ts >= globalMaxTsExclusive) continue;
 
-    for (const item of accumulators) {
-      const slot = Math.floor(trade.ts / item.target.timeframeMs) * item.target.timeframeMs;
-      if (slot < item.target.fromSlot || slot > item.target.toSlot) continue;
-      accumulate(item.acc, trade, item.target.timeframeMs);
+      for (const item of accumulators) {
+        const slot = Math.floor(trade.ts / item.target.timeframeMs) * item.target.timeframeMs;
+        if (slot < item.target.fromSlot || slot > item.target.toSlot) continue;
+        accumulate(item.acc, trade, item.target.timeframeMs);
+      }
     }
+    rl.close();
   }
-  rl.close();
 
   for (const target of targets) {
     await writePatchedRange(target);
@@ -95,6 +119,7 @@ async function loadPatchTargets(
   market: { collector: string; exchange: string; symbol: string },
   minTs: number,
   maxTs: number,
+  timeframeFilter?: Set<string>,
 ): Promise<PatchTarget[]> {
   const symbolDir = path.join(config.outDir, market.collector, market.exchange, market.symbol);
   const entries = await fs.readdir(symbolDir, { withFileTypes: true }).catch(() => []);
@@ -103,6 +128,7 @@ async function loadPatchTargets(
   for (const entry of entries) {
     if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
     const timeframe = entry.name.slice(0, -5);
+    if (timeframeFilter && !timeframeFilter.has(timeframe)) continue;
     const companionPath = path.join(symbolDir, entry.name);
     const binPath = path.join(symbolDir, `${timeframe}.bin`);
 
@@ -148,6 +174,74 @@ async function loadPatchTargets(
   }
 
   return targets;
+}
+
+function loadPatchSourceFiles(
+  db: Db,
+  market: { collector: string; exchange: string; symbol: string },
+  fromTsInclusive: number,
+  toTsExclusive: number,
+  maxTimeframeMs: number,
+  currentFilePath: string,
+): PatchSourceFile[] {
+  const scanFromTs = fromTsInclusive - maxTimeframeMs;
+  const scanToTsInclusive = toTsExclusive + maxTimeframeMs;
+  const rowsInWindow =
+    (db.db
+      .prepare(
+        `SELECT r.path AS root_path, f.relative_path, f.start_ts
+         FROM files f
+         JOIN roots r ON r.id = f.root_id
+         WHERE f.collector = :collector AND f.exchange = :exchange AND f.symbol = :symbol
+           AND f.start_ts >= :scanFromTs AND f.start_ts <= :scanToTsInclusive
+         ORDER BY f.start_ts, f.relative_path;`,
+      )
+      .all({
+        collector: market.collector,
+        exchange: market.exchange,
+        symbol: market.symbol,
+        scanFromTs,
+        scanToTsInclusive,
+      }) as Array<{ root_path: string; relative_path: string; start_ts: number }>) ?? [];
+
+  const predecessorRows =
+    (db.db
+      .prepare(
+        `SELECT r.path AS root_path, f.relative_path, f.start_ts
+         FROM files f
+         JOIN roots r ON r.id = f.root_id
+         WHERE f.collector = :collector AND f.exchange = :exchange AND f.symbol = :symbol
+           AND f.start_ts < :scanFromTs
+         ORDER BY f.start_ts DESC, f.relative_path DESC
+         LIMIT 1;`,
+      )
+      .all({
+        collector: market.collector,
+        exchange: market.exchange,
+        symbol: market.symbol,
+        scanFromTs,
+      }) as Array<{ root_path: string; relative_path: string; start_ts: number }>) ?? [];
+
+  const dedup = new Map<string, PatchSourceFile>();
+  for (const row of [...rowsInWindow, ...predecessorRows]) {
+    const absolutePath = path.join(row.root_path, row.relative_path);
+    dedup.set(absolutePath, {
+      absolutePath,
+      relativePath: row.relative_path,
+      startTs: row.start_ts,
+    });
+  }
+  if (!dedup.has(currentFilePath)) {
+    dedup.set(currentFilePath, {
+      absolutePath: currentFilePath,
+      relativePath: path.posix.basename(currentFilePath),
+      startTs: Number.NEGATIVE_INFINITY,
+    });
+  }
+
+  const files = [...dedup.values()];
+  files.sort((a, b) => (a.startTs - b.startTs) || a.relativePath.localeCompare(b.relativePath));
+  return files;
 }
 
 async function writePatchedRange(target: PatchTarget): Promise<void> {

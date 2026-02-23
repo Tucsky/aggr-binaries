@@ -376,6 +376,9 @@ async function isDirectory(absPath: string): Promise<boolean> {
 function writeJson(res: http.ServerResponse, status: number, payload: unknown): void {
   res.writeHead(status, {
     "Content-Type": "application/json",
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    Pragma: "no-cache",
+    Expires: "0",
   });
   res.end(JSON.stringify(payload));
 }

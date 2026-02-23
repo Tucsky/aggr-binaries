@@ -395,7 +395,7 @@ test("fixgaps dry-run does not mutate files, binaries, or events", async () => {
   }
 });
 
-test("fixgaps success logs include date, gap ms, and minute in recovered line", async () => {
+test("fixgaps success logs include date, gap duration, and minute in recovered line", async () => {
   const fixture = await createFixture();
   const db = openDatabase(fixture.dbPath);
 
@@ -428,7 +428,52 @@ test("fixgaps success logs include date, gap ms, and minute in recovered line", 
     const recoveredLine = logs.find((line) => line.includes(": recovered 0 / 1"));
     assert.match(
       recoveredLine ?? "",
-      /^\[fixgaps\] \[BITFINEX\/BTCUSD\/2024-01-01\] 120000ms gap @ 00:02 : recovered 0 \/ 1$/,
+      /^\[fixgaps\] \[BITFINEX\/BTCUSD\/2024-01-01\] 2m gap @ 00:00 : recovered 0 \/ 1$/,
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test("fixgaps progress line mode prefixes active gap context", async () => {
+  const fixture = await createFixture();
+  const db = openDatabase(fixture.dbPath);
+
+  try {
+    const { rootId } = insertIndexedFile(db, fixture.root, fixture.relativePath);
+    await runProcess(buildConfig(fixture.root, fixture.outDir, fixture.dbPath, "1m"), db);
+    db.db.exec("DELETE FROM events;");
+    insertGapEvent(db, { rootId, relativePath: fixture.relativePath });
+
+    const logs: string[] = [];
+    const originalLog = console.log;
+    const previousProgressMode = process.env.AGGR_FIXGAPS_PROGRESS;
+    process.env.AGGR_FIXGAPS_PROGRESS = "line";
+    console.log = (...args: unknown[]) => {
+      logs.push(args.map((arg) => String(arg)).join(" "));
+    };
+
+    try {
+      await runFixGaps(buildConfig(fixture.root, fixture.outDir, fixture.dbPath, "1m"), db, {
+        adapterRegistry: createAdapterRegistry({
+          BITFINEX: {
+            name: "empty",
+            async recover() {
+              return [];
+            },
+          },
+        }),
+      });
+    } finally {
+      console.log = originalLog;
+      if (previousProgressMode === undefined) delete process.env.AGGR_FIXGAPS_PROGRESS;
+      else process.env.AGGR_FIXGAPS_PROGRESS = previousProgressMode;
+    }
+
+    const progressLine = logs.find((line) => line.includes(": scanning 2024-01-01-00"));
+    assert.match(
+      progressLine ?? "",
+      /^\[fixgaps\] \[BITFINEX\/BTCUSD\/2024-01-01\] 2m gap @ 00:00 : scanning 2024-01-01-00 \.\.\.$/,
     );
   } finally {
     db.close();

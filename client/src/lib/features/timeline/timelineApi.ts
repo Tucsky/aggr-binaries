@@ -57,6 +57,7 @@ export async function fetchTimelineMarkets(
 ): Promise<TimelineMarketsResponse> {
   const response = await fetch(buildTimelineMarketsPath(opts), {
     method: "GET",
+    cache: "no-store",
     signal: opts.signal,
   });
   const payload = (await parseJsonResponse(
@@ -72,6 +73,7 @@ export async function fetchTimelineMarkets(
 export async function fetchTimelineEvents(query: TimelineEventsQuery, signal?: AbortSignal): Promise<TimelineEvent[]> {
   const response = await fetch(buildTimelineEventsPath(query), {
     method: "GET",
+    cache: "no-store",
     signal,
   });
   const payload = (await parseJsonResponse(

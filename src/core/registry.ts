@@ -4,6 +4,7 @@ import type { Config } from "./config.js";
 import type { Db } from "./db.js";
 import type { CompanionMetadata, RegistryEntry, RegistryFilter } from "./model.js";
 import { normalizeCompanionRange } from "./model.js";
+import { createProgressReporter } from "./progress.js";
 
 export interface RegistryStats {
   scanned: number;
@@ -11,38 +12,51 @@ export interface RegistryStats {
   deleted: number;
 }
 
+const registryProgress = createProgressReporter({
+  envVar: "AGGR_REGISTRY_PROGRESS",
+  prefix: "[registry]",
+});
+
 export async function runRegistry(config: Config, db: Db): Promise<RegistryStats> {
-  const outRoot = config.outDir;
-  const filter: RegistryFilter = {
-    collector: config.collector?.toUpperCase(),
-    exchange: config.exchange?.toUpperCase(),
-    symbol: config.symbol,
-  };
+  try {
+    const outRoot = config.outDir;
+    const filter: RegistryFilter = {
+      collector: config.collector?.toUpperCase(),
+      exchange: config.exchange?.toUpperCase(),
+      symbol: config.symbol,
+    };
 
-  const rootStat = await fs
-    .stat(outRoot)
-    .catch((err: NodeJS.ErrnoException) => {
-      if (err.code === "ENOENT") {
-        throw new Error(`Output directory does not exist: ${outRoot}`);
+    const rootStat = await fs
+      .stat(outRoot)
+      .catch((err: NodeJS.ErrnoException) => {
+        if (err.code === "ENOENT") {
+          throw new Error(`Output directory does not exist: ${outRoot}`);
+        }
+        throw err;
+      });
+    if (!rootStat.isDirectory()) {
+      throw new Error(`Output path is not a directory: ${outRoot}`);
+    }
+
+    const entries: RegistryEntry[] = [];
+    let scanned = 0;
+    for await (const entry of walkCompanions(outRoot, filter)) {
+      entries.push(entry);
+      scanned += 1;
+      if (scanned % 1000 === 0) {
+        registryProgress.update(`[registry] scan_progress scanned=${scanned}`);
       }
-      throw err;
-    });
-  if (!rootStat.isDirectory()) {
-    throw new Error(`Output path is not a directory: ${outRoot}`);
-  }
+    }
 
-  const entries: RegistryEntry[] = [];
-  for await (const entry of walkCompanions(outRoot, filter)) {
-    entries.push(entry);
+    const res = db.replaceRegistry(entries, filter);
+    return { scanned: entries.length, upserted: res.upserted, deleted: res.deleted };
+  } finally {
+    registryProgress.clear();
   }
-
-  const res = db.replaceRegistry(entries, filter);
-  return { scanned: entries.length, upserted: res.upserted, deleted: res.deleted };
 }
 
 async function* walkCompanions(outRoot: string, filter: RegistryFilter): AsyncGenerator<RegistryEntry> {
   const collectors = await fs.readdir(outRoot, { withFileTypes: true });
-  console.log(outRoot)
   for (const collectorDir of collectors) {
     if (!collectorDir.isDirectory()) continue;
     const collector = collectorDir.name.toUpperCase();

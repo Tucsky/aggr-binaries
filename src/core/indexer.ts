@@ -3,7 +3,13 @@ import type { Db } from "./db.js";
 import type { Config } from "./config.js";
 import { classifyPath } from "./normalize.js";
 import type { IndexStats, IndexedFile } from "./model.js";
+import { createProgressReporter } from "./progress.js";
 import { walkFiles } from "./walker.js";
+
+const indexProgress = createProgressReporter({
+  envVar: "AGGR_INDEX_PROGRESS",
+  prefix: "[index]",
+});
 
 export async function runIndex(config: Config, db: Db): Promise<IndexStats> {
   const rootId = db.ensureRoot(config.root);
@@ -21,7 +27,7 @@ export async function runIndex(config: Config, db: Db): Promise<IndexStats> {
     if (!row) {
       stats.skipped += 1;
       if (skipLogged < 50) {
-        console.log(`[skip] ${entry.relativePath}`);
+        indexProgress.log(`[skip] ${entry.relativePath}`);
         skipLogged++;
       }
       continue;
@@ -46,12 +52,13 @@ export async function runIndex(config: Config, db: Db): Promise<IndexStats> {
     stats.existing += res.existing;
   }
 
+  indexProgress.clear();
   return stats;
 }
 
 function logProgress(stats: IndexStats, pendingBatch: number): void {
-  console.log(
-    `[progress] seen=${stats.seen} inserted=${stats.inserted} existing=${stats.existing} conflicts=${stats.conflicts} skipped=${stats.skipped} pendingBatch=${pendingBatch}`,
+  indexProgress.update(
+    `[index] progress seen=${stats.seen} inserted=${stats.inserted} existing=${stats.existing} conflicts=${stats.conflicts} skipped=${stats.skipped} pendingBatch=${pendingBatch}`,
   );
 }
 

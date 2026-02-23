@@ -13,8 +13,6 @@ import { parseTradeLine } from "../trades.js";
 export interface MergeRecoveredTradesResult {
   inserted: number;
   insertedTrades: RecoveredTrade[];
-  insertedMinTs?: number;
-  insertedMaxTs?: number;
 }
 
 interface ExistingTradeScan {
@@ -116,8 +114,6 @@ async function rewriteWithSortedTrades(
 
     let inserted = 0;
     const insertedTrades: RecoveredTrade[] = [];
-    let insertedMinTs = Number.POSITIVE_INFINITY;
-    let insertedMaxTs = Number.NEGATIVE_INFINITY;
 
     let currentKey = "";
     let keyHasExisting = false;
@@ -152,8 +148,6 @@ async function rewriteWithSortedTrades(
 
         inserted += 1;
         insertedTrades.push(trade);
-        if (trade.ts < insertedMinTs) insertedMinTs = trade.ts;
-        if (trade.ts > insertedMaxTs) insertedMaxTs = trade.ts;
       });
 
       if (hasInvalid) {
@@ -169,8 +163,6 @@ async function rewriteWithSortedTrades(
       return {
         inserted,
         insertedTrades,
-        insertedMinTs: inserted ? insertedMinTs : undefined,
-        insertedMaxTs: inserted ? insertedMaxTs : undefined,
       };
     } catch (err) {
       await outputWriter.abort();
