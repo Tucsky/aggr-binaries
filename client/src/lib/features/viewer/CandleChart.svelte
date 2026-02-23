@@ -88,10 +88,19 @@
 
     unsubMeta = metaStore.subscribe((meta) => {
       currentMeta = meta;
-      reset();
       if (!meta) return;
+      const logical = chart?.timeScale().getVisibleLogicalRange();
+      const preservedSpan =
+        logical && Number.isFinite(logical.to) && Number.isFinite(logical.from)
+          ? logical.to - logical.from
+          : null;
+      reset();
       alignInitialRangeToAnchor = meta.anchorIndex < meta.records - 1;
-      const slice = computeChartInitialSlice(meta.anchorIndex, meta.records);
+      const initialWindow =
+        preservedSpan !== null && Number.isFinite(preservedSpan)
+          ? Math.max(500, Math.max(1, Math.round(preservedSpan)) + 1)
+          : 500;
+      const slice = computeChartInitialSlice(meta.anchorIndex, meta.records, initialWindow);
       if (!slice) return;
       requestSlice(slice.fromIndex, slice.toIndex);
     });
@@ -192,11 +201,15 @@
     const maxIdx = loadedMax();
 
     if (fromMs < minTime + margin && minIdx !== null && minIdx > 0) {
-      requestSlice(Math.max(0, minIdx - 500), minIdx - 1);
+      const requestFromIndex = Math.max(0, minIdx - 500);
+      const requestToIndex = minIdx - 1;
+      requestSlice(requestFromIndex, requestToIndex);
     }
 
     if (toMs > maxTime - margin && maxIdx !== null && maxIdx < currentMeta.records - 1) {
-      requestSlice(maxIdx + 1, Math.min(currentMeta.records - 1, maxIdx + 500));
+      const requestFromIndex = maxIdx + 1;
+      const requestToIndex = Math.min(currentMeta.records - 1, maxIdx + 500);
+      requestSlice(requestFromIndex, requestToIndex);
       suppressRangeEvent = true;
     }
   }
@@ -227,7 +240,9 @@
       points = candles.slice();
       suppressRangeEvent = true;
       setSeriesData(points);
-      if (alignInitialRangeToAnchor) alignVisibleRangeToStart();
+      if (alignInitialRangeToAnchor) {
+        alignVisibleRangeToStart();
+      }
       suppressRangeEvent = false;
       alignInitialRangeToAnchor = false;
       return;
@@ -247,7 +262,10 @@
       }
 
       refreshLegendFromCurrentPoint();
-      if (prevPos > 0) ts?.scrollToPosition(prevPos - sliceLen, false);
+      if (Number.isFinite(prevPos) && sliceLen > 0) {
+        const nextPos = prevPos - sliceLen;
+        ts?.scrollToPosition(nextPos, false);
+      }
 
       setTimeout(() => {
         suppressRangeEvent = false;
@@ -258,9 +276,10 @@
     if (sliceMax === min - 1) {
       baseIndex = fromIndex;
       points = candles.concat(points);
+      const wasSuppressed = suppressRangeEvent;
       suppressRangeEvent = true;
       setSeriesData(points);
-      suppressRangeEvent = false;
+      suppressRangeEvent = wasSuppressed;
       return;
     }
 
@@ -279,9 +298,10 @@
     baseIndex = newMin + first;
     points = merged.slice(first, last + 1).filter(Boolean) as Candle[];
 
+    const wasSuppressed = suppressRangeEvent;
     suppressRangeEvent = true;
     setSeriesData(points);
-    suppressRangeEvent = false;
+    suppressRangeEvent = wasSuppressed;
   }
 
   function setSeriesData(data: readonly Candle[]): void {

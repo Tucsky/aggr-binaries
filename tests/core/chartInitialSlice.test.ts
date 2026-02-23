@@ -30,6 +30,17 @@ test("initial slice clamps anchor and bounds", () => {
   );
 });
 
+test("initial slice honors wider caller-provided window sizes", () => {
+  assert.deepEqual(
+    computeChartInitialSlice(5006, 9756, 1276),
+    { fromIndex: 5006, toIndex: 6282 },
+  );
+  assert.deepEqual(
+    computeChartInitialSlice(9000, 9756, 1276),
+    { fromIndex: 9000, toIndex: 9755 },
+  );
+});
+
 test("initial slice returns null for empty datasets", () => {
   assert.equal(computeChartInitialSlice(0, 0), null);
 });
