@@ -1,6 +1,6 @@
 <script lang="ts">
   import { get } from "svelte/store";
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, tick } from "svelte";
   import TimelineDebugPanel from "../lib/features/timeline/TimelineDebugPanel.svelte";
   import TimelineEventPopover from "../lib/features/timeline/TimelineEventPopover.svelte";
   import TimelineControls from "../lib/features/timeline/TimelineControls.svelte";
@@ -29,6 +29,11 @@
   } from "../lib/features/timeline/timelineControlsPersistence.js";
   import { computeTimelineVirtualWindow } from "../lib/features/timeline/timelineVirtualRows.js";
   import { buildInitialViewRange, formatTimelineTsLabel, panTimelineRange, resolveTimelineTimeframe, shiftViewRangeIntoRangeIfDisjoint, zoomTimelineRange } from "../lib/features/timeline/timelineViewport.js";
+  import {
+    captureTimelineScrollAnchor,
+    resolveTimelineRestoredScrollTop,
+    type TimelineScrollAnchor,
+  } from "../lib/features/timeline/timelineScrollAnchor.js";
   import { computeGlobalRange, groupEventsByMarket, marketKey, toTimelineTs, toTimelineX, type TimelineRange } from "../lib/features/timeline/timelineUtils.js";
   const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
   const ROW_HEIGHT = 33;
@@ -151,6 +156,7 @@
     }
   }
   async function loadMarkets(forceLoadEvents = false): Promise<void> {
+    const scrollAnchor = captureCurrentScrollAnchor();
     loadingMarkets = true;
     marketsError = "";
     try {
@@ -196,6 +202,7 @@
       marketsError = err instanceof Error ? err.message : "Failed to load timeline markets";
     } finally {
       loadingMarkets = false;
+      await restoreScrollAnchor(scrollAnchor);
     }
   }
   async function loadEvents(): Promise<void> {
@@ -328,6 +335,21 @@
     return `${market.collector}:${market.exchange}:${market.symbol}:${market.timeframe}`;
   }
 
+  function captureCurrentScrollAnchor(): TimelineScrollAnchor | null {
+    if (!scrollEl) return null;
+    return captureTimelineScrollAnchor(filteredMarkets, scrollEl.scrollTop, ROW_HEIGHT, rowIdentity);
+  }
+
+  async function restoreScrollAnchor(anchor: TimelineScrollAnchor | null): Promise<void> {
+    if (!scrollEl || !anchor) return;
+    await tick();
+    if (!scrollEl) return;
+    const maxScrollTop = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+    const restored = resolveTimelineRestoredScrollTop(filteredMarkets, anchor, ROW_HEIGHT, maxScrollTop, rowIdentity);
+    scrollEl.scrollTop = restored;
+    scrollTop = restored;
+  }
+
   async function handleActionCompleted(event: CustomEvent<{ action: TimelineMarketAction; market: TimelineMarket }>): Promise<void> {
     // console.log("Action completed", event.detail);
     await loadOverallRange();
@@ -399,12 +421,14 @@
   <div class="relative flex-1 min-h-0">
     <div bind:this={scrollEl} class="relative h-full overflow-y-auto overflow-x-hidden" on:scroll={handleScroll}>
       <div class="pointer-events-none absolute inset-y-0 left-0 z-0 border-r border-slate-800 bg-slate-900/50" style={`width:${LEFT_WIDTH}px;`}></div>
-      {#if loadingMarkets}
-        <div class="relative z-10 p-3 text-sm text-slate-300">Loading markets...</div>
-      {:else if marketsError}
+      {#if marketsError}
         <div class="relative z-10 p-3 text-sm text-red-300">{marketsError}</div>
       {:else if !selectedRange || !viewRange}
-        <div class="relative z-10 p-3 text-sm text-slate-400">No markets in registry for selected timeframe.</div>
+        {#if loadingMarkets}
+          <div class="relative z-10 p-3 text-sm text-slate-300">Loading markets...</div>
+        {:else}
+          <div class="relative z-10 p-3 text-sm text-slate-400">No markets in registry for selected timeframe.</div>
+        {/if}
       {:else}
         <div class="relative z-10 min-w-max" style={`width: ${totalGridWidth}px;`}>
           <div style={`height: ${topPadding}px;`}></div>
@@ -415,6 +439,11 @@
         </div>
       {/if}
     </div>
+    {#if loadingMarkets && selectedRange && viewRange}
+      <div class="pointer-events-none absolute right-2 top-2 z-20 rounded border border-slate-700/70 bg-slate-900/85 px-2 py-1 text-[11px] text-slate-300">
+        Refreshing markets...
+      </div>
+    {/if}
     {#if crosshairLeft !== null && crosshairTs !== null && viewRange}
       <div class="pointer-events-none absolute inset-0 overflow-hidden z-11">
         <div class="absolute bottom-0 top-0 w-px bg-white/30" style={`left: ${crosshairLeft}px;`}></div>
