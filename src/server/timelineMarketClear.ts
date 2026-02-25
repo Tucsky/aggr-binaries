@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Db } from "../core/db.js";
+import { runSqliteWriteTransaction } from "../core/sqliteWrite.js";
 
 interface TimelineClearMarket {
   collector: string;
@@ -68,15 +69,10 @@ function deleteMarketRows(
      WHERE collector = :collector AND exchange = :exchange AND symbol = :symbol;`,
   );
 
-  db.db.exec("BEGIN");
-  try {
+  return runSqliteWriteTransaction(db.db, () => {
     const eventsDeleted = Number(deleteEventsStmt.run(params).changes ?? 0);
     const filesDeleted = Number(deleteFilesStmt.run(params).changes ?? 0);
     const registryDeleted = Number(deleteRegistryStmt.run(params).changes ?? 0);
-    db.db.exec("COMMIT");
     return { eventsDeleted, filesDeleted, registryDeleted };
-  } catch (err) {
-    db.db.exec("ROLLBACK");
-    throw err;
-  }
+  });
 }

@@ -1,7 +1,9 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import type { EventRange, GapFixStatus } from "./events.js";
 import type { IndexedFile, RegistryEntry, RegistryFilter, RegistryKey } from "./model.js";
+import { configureSqliteWriteContention, runSqliteWrite, runSqliteWriteTransaction } from "./sqliteWrite.js";
 
+// This file intentionally stays centralized despite its size: migrations and prepared write paths are tightly coupled.
 export interface Db {
   db: DatabaseSync;
   ensureRoot(path: string): number;
@@ -48,6 +50,7 @@ export function openDatabase(dbPath: string): Db {
   db.exec("PRAGMA synchronous=NORMAL;");
   db.exec("PRAGMA temp_store=MEMORY;");
   db.exec("PRAGMA wal_autocheckpoint=10000;");
+  configureSqliteWriteContention(db);
 
   migrate(db);
 
@@ -113,12 +116,14 @@ export function openDatabase(dbPath: string): Db {
   const api: Db = {
     db,
     ensureRoot: (path: string): number => {
-      ensureRootStmt.run({ path });
-      const row = getRootIdStmt.get({ path }) as { id: number } | undefined;
-      if (!row) {
-        throw new Error(`Failed to resolve root id for ${path}`);
-      }
-      return row.id;
+      return runSqliteWrite(() => {
+        ensureRootStmt.run({ path });
+        const row = getRootIdStmt.get({ path }) as { id: number } | undefined;
+        if (!row) {
+          throw new Error(`Failed to resolve root id for ${path}`);
+        }
+        return row.id;
+      });
     },
     insertFiles: (rows: IndexedFile[]) => insertMany(db, insertStmt, upsertIndexedMarketRangeStmt, rows),
     upsertRegistry: (entry: RegistryEntry) => upsertRegistry(upsertRegistryStmt, entry),
@@ -127,7 +132,9 @@ export function openDatabase(dbPath: string): Db {
     getRegistryEntry: (key: RegistryKey) => getRegistry(getRegistryStmt, key),
     insertEvents: (rows: EventRange[]) => insertEvents(db, insertEventStmt, rows),
     deleteEventsForFile: (rootId: number, relativePath: string) =>
-      deleteEventsForFileStmt.run({ rootId, relativePath }),
+      runSqliteWrite(() => {
+        deleteEventsForFileStmt.run({ rootId, relativePath });
+      }),
     iterateGapEventsForFix: (opts: GapFixQueueFilter): Iterable<GapFixQueueRow> =>
       iterateGapEventsForFix(db, opts),
     updateGapFixStatus: (rows: Array<{ id: number; status: GapFixStatus; error?: string | null; recovered?: number | null }>) =>
@@ -140,6 +147,12 @@ export function openDatabase(dbPath: string): Db {
 }
 
 function migrate(db: DatabaseSync): void {
+  createTables(db);
+  createIndexes(db);
+  assertSchema(db);
+}
+
+function createTables(db: DatabaseSync): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS roots (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -161,38 +174,42 @@ function migrate(db: DatabaseSync): void {
     );
   `);
 
-  db.exec("CREATE INDEX IF NOT EXISTS idx_files_exchange_symbol ON files(exchange, symbol);");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_files_start_ts ON files(start_ts);");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_files_collector ON files(collector);");
-
-  migrateRegistry(db);
-  migrateEvents(db);
-
-  const columns = db.prepare("PRAGMA table_info(files);").all() as Array<{ name: string; notnull: number }>;
-  const missingNotNull = ["exchange", "symbol", "start_ts"].filter(
-    (col) => !columns.some((c) => c.name === col && c.notnull === 1),
-  );
-  if (missingNotNull.length) {
-    throw new Error(
-      `files table missing NOT NULL constraints for: ${missingNotNull.join(
-        ", ",
-      )}. Please rebuild the index (drop index.sqlite and rerun index).`,
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS registry (
+      collector TEXT NOT NULL,
+      exchange TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      timeframe TEXT NOT NULL,
+      start_ts INTEGER NOT NULL,
+      end_ts INTEGER NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
+      PRIMARY KEY (collector, exchange, symbol, timeframe)
     );
-  }
+  `);
 
-  const nullCountRow = db
-    .prepare("SELECT COUNT(*) as cnt FROM files WHERE exchange IS NULL OR symbol IS NULL OR start_ts IS NULL;")
-    .get() as { cnt?: number };
-  if (nullCountRow?.cnt && nullCountRow.cnt > 0) {
-    throw new Error(
-      `files table contains ${nullCountRow.cnt} rows with NULL exchange/symbol/start_ts. Please rebuild the index.`,
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
+      relative_path TEXT NOT NULL,
+      collector TEXT NOT NULL,
+      exchange TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      start_line INTEGER NOT NULL,
+      end_line INTEGER NOT NULL,
+      gap_ms INTEGER,
+      gap_miss INTEGER,
+      gap_end_ts INTEGER,
+      gap_fix_status TEXT,
+      gap_fix_error TEXT,
+      gap_fix_recovered INTEGER,
+      gap_fix_updated_at INTEGER,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000)
     );
-  }
+  `);
 
-  migrateIndexedMarketRanges(db);
-}
-
-function migrateIndexedMarketRanges(db: DatabaseSync): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS indexed_market_ranges (
       collector TEXT NOT NULL,
@@ -205,221 +222,124 @@ function migrateIndexedMarketRanges(db: DatabaseSync): void {
       PRIMARY KEY (collector, exchange, symbol)
     );
   `);
-  db.exec("CREATE INDEX IF NOT EXISTS idx_indexed_market_ranges_exchange_symbol ON indexed_market_ranges(exchange, symbol);");
-
-  const rowCount = db.prepare("SELECT COUNT(*) AS cnt FROM indexed_market_ranges;").get() as { cnt?: number } | undefined;
-  if ((rowCount?.cnt ?? 0) > 0) return;
-
-  const fileCount = db.prepare("SELECT COUNT(*) AS cnt FROM files;").get() as { cnt?: number } | undefined;
-  if ((fileCount?.cnt ?? 0) === 0) return;
-
-  db.exec(`
-    INSERT INTO indexed_market_ranges (collector, exchange, symbol, start_ts, end_ts)
-    SELECT collector, exchange, symbol, MIN(start_ts) AS start_ts, MAX(start_ts) AS end_ts
-    FROM files
-    GROUP BY collector, exchange, symbol;
-  `);
 }
 
-function migrateRegistry(db: DatabaseSync): void {
-  const info = db.prepare("PRAGMA table_info(registry);").all() as Array<{ name: string }>;
-  if (!info.length) {
-    createRegistry(db);
-    return;
-  }
-
-  const hasMetadata = info.some((c) => c.name === "metadata");
-  const hasStart = info.some((c) => c.name === "start_ts");
-  const hasEnd = info.some((c) => c.name === "end_ts");
-  const hasSparse = info.some((c) => c.name === "sparse");
-
-  if (!hasMetadata && hasStart && hasEnd && !hasSparse) {
-    db.exec("CREATE INDEX IF NOT EXISTS idx_registry_exchange_symbol ON registry(exchange, symbol);");
-    return;
-  }
-
-  if (hasMetadata) {
-    migrateRegistryFromMetadata(db);
-    return;
-  }
-
-  if (hasSparse) {
-    migrateRegistryDropSparse(db);
-    return;
-  }
-
-  db.exec("DROP TABLE IF EXISTS registry;");
-  createRegistry(db);
-}
-
-function createRegistry(db: DatabaseSync, tableName = "registry"): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS ${tableName} (
-      collector TEXT NOT NULL,
-      exchange TEXT NOT NULL,
-      symbol TEXT NOT NULL,
-      timeframe TEXT NOT NULL,
-      start_ts INTEGER NOT NULL,
-      end_ts INTEGER NOT NULL,
-      created_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
-      updated_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
-      PRIMARY KEY (collector, exchange, symbol, timeframe)
-    );
-  `);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_registry_exchange_symbol ON ${tableName}(exchange, symbol);`);
-}
-
-function migrateRegistryFromMetadata(db: DatabaseSync): void {
-  createRegistry(db, "registry_new");
-  const rows = db
-    .prepare("SELECT collector, exchange, symbol, timeframe, metadata, created_at, updated_at FROM registry;")
-    .all() as Array<{ collector: string; exchange: string; symbol: string; timeframe: string; metadata: string; created_at?: number; updated_at?: number }>;
-  const insert = db.prepare(
-    `INSERT INTO registry_new
-      (collector, exchange, symbol, timeframe, start_ts, end_ts, created_at, updated_at)
-     VALUES
-      (:collector, :exchange, :symbol, :timeframe, :startTs, :endTs, :created_at, :updated_at);`,
-  );
-
-  db.exec("BEGIN");
-  try {
-    for (const row of rows) {
-      try {
-        const parsed = JSON.parse(row.metadata) as Partial<RegistryEntry> &
-          Partial<{ start_ts: number; end_ts: number }>;
-        const startTs = (parsed as any).startTs ?? (parsed as any).start_ts;
-        const endTs = (parsed as any).endTs ?? (parsed as any).end_ts;
-        if (!Number.isFinite(startTs) || !Number.isFinite(endTs)) {
-          continue;
-        }
-        insert.run({
-          collector: row.collector,
-          exchange: row.exchange,
-          symbol: row.symbol,
-          timeframe: row.timeframe,
-          startTs,
-          endTs,
-          created_at: row.created_at ?? Date.now(),
-          updated_at: row.updated_at ?? row.created_at ?? Date.now(),
-        });
-      } catch {
-        // skip bad rows
-      }
-    }
-    db.exec("COMMIT");
-  } catch (err) {
-    db.exec("ROLLBACK");
-    throw err;
-  }
-
-  db.exec("DROP TABLE registry;");
-  db.exec("ALTER TABLE registry_new RENAME TO registry;");
+function createIndexes(db: DatabaseSync): void {
+  db.exec("CREATE INDEX IF NOT EXISTS idx_files_exchange_symbol ON files(exchange, symbol);");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_files_start_ts ON files(start_ts);");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_files_collector ON files(collector);");
   db.exec("CREATE INDEX IF NOT EXISTS idx_registry_exchange_symbol ON registry(exchange, symbol);");
-}
-
-function migrateRegistryDropSparse(db: DatabaseSync): void {
-  createRegistry(db, "registry_new");
-  const rows = db
-    .prepare("SELECT collector, exchange, symbol, timeframe, start_ts, end_ts, created_at, updated_at FROM registry;")
-    .all() as Array<{
-      collector: string;
-      exchange: string;
-      symbol: string;
-      timeframe: string;
-      start_ts: number;
-      end_ts: number;
-      created_at?: number;
-      updated_at?: number;
-    }>;
-  const insert = db.prepare(
-    `INSERT INTO registry_new
-      (collector, exchange, symbol, timeframe, start_ts, end_ts, created_at, updated_at)
-     VALUES
-      (:collector, :exchange, :symbol, :timeframe, :startTs, :endTs, :created_at, :updated_at);`,
-  );
-
-  db.exec("BEGIN");
-  try {
-    for (const row of rows) {
-      insert.run({
-        collector: row.collector,
-        exchange: row.exchange,
-        symbol: row.symbol,
-        timeframe: row.timeframe,
-        startTs: row.start_ts,
-        endTs: row.end_ts,
-        created_at: row.created_at ?? Date.now(),
-        updated_at: row.updated_at ?? row.created_at ?? Date.now(),
-      });
-    }
-    db.exec("COMMIT");
-  } catch (err) {
-    db.exec("ROLLBACK");
-    throw err;
-  }
-
-  db.exec("DROP TABLE registry;");
-  db.exec("ALTER TABLE registry_new RENAME TO registry;");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_registry_exchange_symbol ON registry(exchange, symbol);");
-}
-
-function migrateEvents(db: DatabaseSync): void {
-  const info = db.prepare("PRAGMA table_info(events);").all() as Array<{ name: string }>;
-  const hasGapMiss = info.some((c) => c.name === "gap_miss");
-  const hasGapEndTs = info.some((c) => c.name === "gap_end_ts");
-  const hasFixStatus = info.some((c) => c.name === "gap_fix_status");
-  const hasFixError = info.some((c) => c.name === "gap_fix_error");
-  const hasFixRecovered = info.some((c) => c.name === "gap_fix_recovered");
-  const hasFixUpdatedAt = info.some((c) => c.name === "gap_fix_updated_at");
-
-  if (!info.length) {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
-        relative_path TEXT NOT NULL,
-        collector TEXT NOT NULL,
-        exchange TEXT NOT NULL,
-        symbol TEXT NOT NULL,
-        event_type TEXT NOT NULL,
-        start_line INTEGER NOT NULL,
-        end_line INTEGER NOT NULL,
-        gap_ms INTEGER,
-        gap_miss INTEGER,
-        gap_end_ts INTEGER,
-        gap_fix_status TEXT,
-        gap_fix_error TEXT,
-        gap_fix_recovered INTEGER,
-        gap_fix_updated_at INTEGER,
-        created_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000)
-      );
-    `);
-  } else {
-    if (!hasGapMiss) {
-      db.exec("ALTER TABLE events ADD COLUMN gap_miss INTEGER;");
-    }
-    if (!hasGapEndTs) {
-      db.exec("ALTER TABLE events ADD COLUMN gap_end_ts INTEGER;");
-    }
-    if (!hasFixStatus) {
-      db.exec("ALTER TABLE events ADD COLUMN gap_fix_status TEXT;");
-    }
-    if (!hasFixError) {
-      db.exec("ALTER TABLE events ADD COLUMN gap_fix_error TEXT;");
-    }
-    if (!hasFixRecovered) {
-      db.exec("ALTER TABLE events ADD COLUMN gap_fix_recovered INTEGER;");
-    }
-    if (!hasFixUpdatedAt) {
-      db.exec("ALTER TABLE events ADD COLUMN gap_fix_updated_at INTEGER;");
-    }
-  }
   db.exec("CREATE INDEX IF NOT EXISTS idx_events_file ON events(root_id, relative_path);");
   db.exec("CREATE INDEX IF NOT EXISTS idx_events_market ON events(collector, exchange, symbol);");
   db.exec("CREATE INDEX IF NOT EXISTS idx_events_market_gap_end_ts ON events(collector, exchange, symbol, gap_end_ts, id);");
   db.exec(
     "CREATE INDEX IF NOT EXISTS idx_events_fix_queue ON events(event_type, gap_fix_status, collector, exchange, symbol, root_id, relative_path, id);",
   );
+  db.exec("CREATE INDEX IF NOT EXISTS idx_indexed_market_ranges_exchange_symbol ON indexed_market_ranges(exchange, symbol);");
+}
+
+interface TableInfo {
+  name: string;
+  notnull: number;
+}
+
+function assertSchema(db: DatabaseSync): void {
+  assertExactColumns(db, "roots", ["id", "path"]);
+  assertExactColumns(db, "files", [
+    "root_id",
+    "relative_path",
+    "collector",
+    "exchange",
+    "symbol",
+    "start_ts",
+    "ext",
+    "created_at",
+  ]);
+  assertExactColumns(db, "registry", [
+    "collector",
+    "exchange",
+    "symbol",
+    "timeframe",
+    "start_ts",
+    "end_ts",
+    "created_at",
+    "updated_at",
+  ]);
+  assertExactColumns(db, "events", [
+    "id",
+    "root_id",
+    "relative_path",
+    "collector",
+    "exchange",
+    "symbol",
+    "event_type",
+    "start_line",
+    "end_line",
+    "gap_ms",
+    "gap_miss",
+    "gap_end_ts",
+    "gap_fix_status",
+    "gap_fix_error",
+    "gap_fix_recovered",
+    "gap_fix_updated_at",
+    "created_at",
+  ]);
+  assertExactColumns(db, "indexed_market_ranges", [
+    "collector",
+    "exchange",
+    "symbol",
+    "start_ts",
+    "end_ts",
+    "created_at",
+    "updated_at",
+  ]);
+
+  assertColumnsNotNull(db, "files", ["exchange", "symbol", "start_ts"]);
+
+  const nullCountRow = db
+    .prepare("SELECT COUNT(*) as cnt FROM files WHERE exchange IS NULL OR symbol IS NULL OR start_ts IS NULL;")
+    .get() as { cnt?: number };
+  if (nullCountRow?.cnt && nullCountRow.cnt > 0) {
+    throw new Error(
+      `files table contains ${nullCountRow.cnt} rows with NULL exchange/symbol/start_ts. ${rebuildDbHint()}`,
+    );
+  }
+
+  const fileCount = db.prepare("SELECT COUNT(*) AS cnt FROM files;").get() as { cnt?: number } | undefined;
+  const rangeCount = db
+    .prepare("SELECT COUNT(*) AS cnt FROM indexed_market_ranges;")
+    .get() as { cnt?: number } | undefined;
+  if ((fileCount?.cnt ?? 0) > 0 && (rangeCount?.cnt ?? 0) === 0) {
+    throw new Error(
+      `indexed_market_ranges is empty while files has data. ${rebuildDbHint()}`,
+    );
+  }
+}
+
+function assertExactColumns(db: DatabaseSync, table: string, expected: string[]): void {
+  const info = db.prepare(`PRAGMA table_info(${table});`).all() as unknown as TableInfo[];
+  const actual = info.map((c) => c.name);
+  const missing = expected.filter((name) => !actual.includes(name));
+  const unexpected = actual.filter((name) => !expected.includes(name));
+  if (!missing.length && !unexpected.length) return;
+
+  const details: string[] = [];
+  if (missing.length) details.push(`missing: ${missing.join(", ")}`);
+  if (unexpected.length) details.push(`unexpected: ${unexpected.join(", ")}`);
+  throw new Error(`Incompatible schema for table '${table}' (${details.join("; ")}). ${rebuildDbHint()}`);
+}
+
+function assertColumnsNotNull(db: DatabaseSync, table: string, required: string[]): void {
+  const info = db.prepare(`PRAGMA table_info(${table});`).all() as unknown as TableInfo[];
+  const missingNotNull = required.filter((name) => !info.some((c) => c.name === name && c.notnull === 1));
+  if (!missingNotNull.length) return;
+  throw new Error(
+    `Table '${table}' missing NOT NULL constraints for: ${missingNotNull.join(", ")}. ${rebuildDbHint()}`,
+  );
+}
+
+function rebuildDbHint(): string {
+  return "Delete index.sqlite and run index again.";
 }
 
 function insertMany(
@@ -428,11 +348,10 @@ function insertMany(
   upsertIndexedMarketRangeStmt: StatementSync,
   rows: IndexedFile[],
 ): { inserted: number; existing: number } {
-  let inserted = 0;
-  let existing = 0;
-  const pendingRanges = new Map<string, PendingIndexedMarketRange>();
-  db.exec("BEGIN");
-  try {
+  return runSqliteWriteTransaction(db, () => {
+    let inserted = 0;
+    let existing = 0;
+    const pendingRanges = new Map<string, PendingIndexedMarketRange>();
     for (const row of rows) {
       if (!row.exchange || !row.symbol || !Number.isFinite(row.startTs)) {
         throw new Error(`Invalid indexed row ${row.relativePath}: missing exchange/symbol/startTs`);
@@ -464,12 +383,8 @@ function insertMany(
         endTs: range.endTs,
       });
     }
-    db.exec("COMMIT");
-  } catch (err) {
-    db.exec("ROLLBACK");
-    throw err;
-  }
-  return { inserted, existing };
+    return { inserted, existing };
+  });
 }
 
 interface PendingIndexedMarketRange {
@@ -499,8 +414,7 @@ function accumulateIndexedMarketRange(
 
 function insertEvents(db: DatabaseSync, stmt: StatementSync, rows: EventRange[]): void {
   if (!rows.length) return;
-  db.exec("BEGIN");
-  try {
+  runSqliteWriteTransaction(db, () => {
     for (const row of rows) {
       stmt.run({
         rootId: row.rootId,
@@ -516,11 +430,7 @@ function insertEvents(db: DatabaseSync, stmt: StatementSync, rows: EventRange[])
         gapEndTs: row.gapEndTs ?? null,
       });
     }
-    db.exec("COMMIT");
-  } catch (err) {
-    db.exec("ROLLBACK");
-    throw err;
-  }
+  });
 }
 
 function updateGapFixStatus(
@@ -529,8 +439,7 @@ function updateGapFixStatus(
   rows: Array<{ id: number; status: GapFixStatus; error?: string | null; recovered?: number | null }>,
 ): void {
   if (!rows.length) return;
-  db.exec("BEGIN");
-  try {
+  runSqliteWriteTransaction(db, () => {
     for (const row of rows) {
       stmt.run({
         id: row.id,
@@ -539,25 +448,16 @@ function updateGapFixStatus(
         recovered: row.recovered ?? null,
       });
     }
-    db.exec("COMMIT");
-  } catch (err) {
-    db.exec("ROLLBACK");
-    throw err;
-  }
+  });
 }
 
 function deleteEventsByIds(db: DatabaseSync, stmt: StatementSync, ids: number[]): void {
   if (!ids.length) return;
-  db.exec("BEGIN");
-  try {
+  runSqliteWriteTransaction(db, () => {
     for (const id of ids) {
       stmt.run({ id });
     }
-    db.exec("COMMIT");
-  } catch (err) {
-    db.exec("ROLLBACK");
-    throw err;
-  }
+  });
 }
 
 function upsertRegistry(stmt: StatementSync, entry: RegistryEntry): void {
@@ -569,7 +469,9 @@ function upsertRegistry(stmt: StatementSync, entry: RegistryEntry): void {
     startTs: entry.startTs,
     endTs: entry.endTs,
   };
-  stmt.run(payload);
+  runSqliteWrite(() => {
+    stmt.run(payload);
+  });
 }
 
 function replaceRegistry(
@@ -579,29 +481,30 @@ function replaceRegistry(
   entries: RegistryEntry[],
   filter?: RegistryFilter,
 ): { upserted: number; deleted: number } {
-  let deleted = 0;
-  let upserted = 0;
-  db.exec("BEGIN");
-  try {
+  return runSqliteWriteTransaction(db, () => {
     const delRes = deleteStmt.run({
       collector: filter?.collector ?? null,
       exchange: filter?.exchange ?? null,
       symbol: filter?.symbol ?? null,
       timeframe: filter?.timeframe ?? null,
     });
-    deleted = Number(delRes.changes ?? 0);
+    const deleted = Number(delRes.changes ?? 0);
+    let upserted = 0;
 
     for (const entry of entries) {
-      upsertRegistry(upsertStmt, entry);
+      upsertStmt.run({
+        collector: entry.collector,
+        exchange: entry.exchange,
+        symbol: entry.symbol,
+        timeframe: entry.timeframe,
+        startTs: entry.startTs,
+        endTs: entry.endTs,
+      });
       upserted += 1;
     }
 
-    db.exec("COMMIT");
-  } catch (err) {
-    db.exec("ROLLBACK");
-    throw err;
-  }
-  return { upserted, deleted };
+    return { upserted, deleted };
+  });
 }
 
 function getRegistry(stmt: StatementSync, key: RegistryKey): RegistryEntry | null {

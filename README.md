@@ -194,7 +194,9 @@ CREATE INDEX idx_indexed_market_ranges_exchange_symbol ON indexed_market_ranges(
 * Parse filename → `start_ts` (UTC).
 * Append-only via `INSERT OR IGNORE`.
 * Maintain `indexed_market_ranges` incrementally during inserted-file batches (per-market min/max `start_ts`).
-* On legacy DBs, if `indexed_market_ranges` exists but is empty while `files` has rows, open-time migration backfills it once from `files`.
+* Schema policy is **fresh-schema only**: no in-place migrations are performed.
+* On startup, table columns and required `NOT NULL` constraints are validated; incompatible schemas fail fast with a rebuild instruction.
+* If `files` has rows while `indexed_market_ranges` is empty, startup fails fast (rebuild required) instead of backfilling.
 * `--include` allows subtree-restricted walks.
 * No mutation or “processed” flags.
 
@@ -240,6 +242,7 @@ CREATE INDEX idx_indexed_market_ranges_exchange_symbol ON indexed_market_ranges(
 * Periodic checkpoint flushes keep outputs resumable mid-market and prune old buckets to cap memory.
 * Binary writes chunked in **4096-candle blocks** to avoid millions of syscalls.
 * One accumulator at a time (per market) → predictable memory use even across many markets.
+* SQLite write contention (`SQLITE_BUSY`/`SQLITE_LOCKED`) is handled with `busy_timeout` + bounded retry/backoff on mutation paths (index/process/registry/clear/events updates).
 
 ---
 
