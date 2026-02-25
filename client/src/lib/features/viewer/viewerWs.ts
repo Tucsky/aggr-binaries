@@ -5,6 +5,10 @@ import { markets as marketsStore, meta, status, setServerTimeframes } from "./vi
 import { parseStartInputUtcMs } from "../../../../../src/shared/startInput.js";
 
 type CandlesHandler = (fromIndex: number, candles: Candle[]) => void;
+interface ViewerWsLocation {
+  protocol: string;
+  host: string;
+}
 
 let ws: WebSocket | null = null;
 let currentMeta: Meta | null = null;
@@ -65,6 +69,19 @@ export function onCandles(cb: CandlesHandler): () => void {
   return () => subs.delete(cb);
 }
 
+function resolveViewerWsLocation(): ViewerWsLocation | null {
+  if (typeof window === "undefined") return null;
+  const { protocol, host } = window.location;
+  if (!host) return null;
+  return { protocol, host };
+}
+
+export function buildViewerWsUrl(location: ViewerWsLocation | null = resolveViewerWsLocation()): string {
+  if (!location) return "ws://localhost:3000/ws";
+  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${location.host}/ws`;
+}
+
 export function connect(initial?: Prefs): void {
   if (initial) {
     currentTarget = normalizeTarget(initial);
@@ -73,7 +90,7 @@ export function connect(initial?: Prefs): void {
   }
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
 
-  ws = new WebSocket("ws://localhost:3000/ws");
+  ws = new WebSocket(buildViewerWsUrl());
   ws.onopen = () => {
     status.set("connected");
     notify("Connected to preview server", "success", 1800);
