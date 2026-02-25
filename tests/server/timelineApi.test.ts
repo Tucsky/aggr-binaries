@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { openDatabase, type Db } from "../../src/core/db.js";
 import { EventType } from "../../src/core/events.js";
@@ -218,6 +219,83 @@ test("timeline markets include indexed rows and prefer registry ranges when avai
     ]);
   } finally {
     db.close();
+  }
+});
+
+test("timeline markets backfill indexed ranges for legacy databases on reopen", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aggr-timeline-api-backfill-"));
+  const dbPath = path.join(root, "index.sqlite");
+  const db = openDatabase(dbPath);
+  try {
+    const rootId = db.ensureRoot("/tmp/source");
+    db.insertFiles([
+      {
+        rootId,
+        relativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
+        collector: Collector.PI,
+        exchange: "BYBIT",
+        symbol: "BTCUSDT",
+        startTs: 100,
+      },
+      {
+        rootId,
+        relativePath: "PI/BYBIT/BTCUSDT/2024-01-02.gz",
+        collector: Collector.PI,
+        exchange: "BYBIT",
+        symbol: "BTCUSDT",
+        startTs: 140,
+      },
+      {
+        rootId,
+        relativePath: "RAM/BINANCE/ETHUSDT/2024-01-01.gz",
+        collector: Collector.RAM,
+        exchange: "BINANCE",
+        symbol: "ETHUSDT",
+        startTs: 50,
+      },
+    ]);
+  } finally {
+    db.close();
+  }
+
+  const rawDb = new DatabaseSync(dbPath);
+  try {
+    rawDb.exec("DELETE FROM indexed_market_ranges;");
+  } finally {
+    rawDb.close();
+  }
+
+  const reopened = openDatabase(dbPath);
+  try {
+    const result = listTimelineMarkets(reopened);
+    assert.deepStrictEqual(result.markets, [
+      {
+        collector: "PI",
+        exchange: "BYBIT",
+        symbol: "BTCUSDT",
+        timeframe: "ALL",
+        startTs: 100,
+        endTs: 140,
+        indexedStartTs: 100,
+        indexedEndTs: 140,
+        processedStartTs: null,
+        processedEndTs: null,
+      },
+      {
+        collector: "RAM",
+        exchange: "BINANCE",
+        symbol: "ETHUSDT",
+        timeframe: "ALL",
+        startTs: 50,
+        endTs: 50,
+        indexedStartTs: 50,
+        indexedEndTs: 50,
+        processedStartTs: null,
+        processedEndTs: null,
+      },
+    ]);
+  } finally {
+    reopened.close();
   }
 });
 

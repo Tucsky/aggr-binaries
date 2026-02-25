@@ -322,11 +322,9 @@ function listTimelineIndexedMarketRanges(
   return (
     (db.db
       .prepare(
-        // files only stores logical start_ts, so indexed-only rows use min/max start_ts as their visible bounds.
-        `SELECT collector, exchange, symbol, MIN(start_ts) AS start_ts, MAX(start_ts) AS end_ts
-         FROM files
+        `SELECT collector, exchange, symbol, start_ts, end_ts
+         FROM indexed_market_ranges
          ${whereSql}
-         GROUP BY collector, exchange, symbol
          ORDER BY collector, exchange, symbol;`,
       )
       .all(params) as unknown as TimelineIndexedMarketRow[]) ?? []

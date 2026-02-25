@@ -36,6 +36,16 @@
 - README is project documentation, not an iteration changelog.
 - When asked to document "relevant changes", only update durable project-level docs when behavior/capabilities materially change for operators or developers.
 - Do not add per-iteration UI details; prefer small edits to existing sections over new deep-dive subsections.
+- If the user asks to document relevant changes in README, always end the final response with a detailed conventional commit message following the commit format rules below.
+
+## Commit message format
+- When asked for a detailed conventional commit message, use this structure:
+  - Line 1: single-line subject in Conventional Commit format (`type(scope): summary`).
+  - Line 2: blank line.
+  - Remaining lines (optional): flat bullet list of concrete code changes.
+- Do not add a prose paragraph between the subject and the bullet list.
+- Do not mention documentation changes in the commit message body.
+- Do not mention tests or validation commands in the commit message body.
 
 ## Node / npm execution
 - Agent shells do NOT load NVM or interactive shell config.

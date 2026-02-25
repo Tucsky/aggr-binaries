@@ -27,6 +27,7 @@
     restoreTimelineLocalState,
     type TimelineSharedControls,
   } from "../lib/features/timeline/timelineControlsPersistence.js";
+  import { computeTimelineVirtualWindow } from "../lib/features/timeline/timelineVirtualRows.js";
   import { buildInitialViewRange, formatTimelineTsLabel, panTimelineRange, resolveTimelineTimeframe, shiftViewRangeIntoRangeIfDisjoint, zoomTimelineRange } from "../lib/features/timeline/timelineViewport.js";
   import { computeGlobalRange, groupEventsByMarket, marketKey, toTimelineTs, toTimelineX, type TimelineRange } from "../lib/features/timeline/timelineUtils.js";
   const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
@@ -68,6 +69,10 @@
   let scrollTop = 0;
   let viewportHeight = 0;
   let timelineViewportWidth = 900;
+  let startIndex = 0;
+  let endIndex = 0;
+  let topPadding = 0;
+  let bottomPadding = 0;
   let eventAbort: AbortController | null = null;
   let symbolInputTimer: ReturnType<typeof setTimeout> | null = null;
   let lastEventsQueryKey = "";
@@ -88,10 +93,13 @@
   $: groupedEvents = groupEventsByMarket(allEvents);
   $: timelineWidth = Math.max(320, Math.floor(timelineViewportWidth));
   $: totalGridWidth = LEFT_WIDTH + timelineWidth;
-  $: startIndex = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
-  $: endIndex = Math.min(filteredMarkets.length, Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT) + OVERSCAN);
-  $: topPadding = startIndex * ROW_HEIGHT;
-  $: bottomPadding = Math.max(0, (filteredMarkets.length - endIndex) * ROW_HEIGHT);
+  $: ({ startIndex, endIndex, topPadding, bottomPadding } = computeTimelineVirtualWindow(
+    filteredMarkets.length,
+    scrollTop,
+    viewportHeight,
+    ROW_HEIGHT,
+    OVERSCAN,
+  ));
   $: visibleMarkets = filteredMarkets.slice(startIndex, endIndex);
   $: crosshairX = crosshairPx !== null ? crosshairPx : crosshairTs !== null && viewRange ? toTimelineX(crosshairTs, viewRange, timelineWidth) : null;
   $: crosshairLeft = crosshairX === null ? null : LEFT_WIDTH + crosshairX;
@@ -145,14 +153,12 @@
   async function loadMarkets(forceLoadEvents = false): Promise<void> {
     loadingMarkets = true;
     marketsError = "";
-    console.log("Loading markets with filters", { timeframe: timeframeFilter, collector: collectorFilter, exchange: exchangeFilter });
     try {
       let requested = timeframeFilter.trim() || "1m";
       if (timeframeOptions.length) {
         requested = resolveTimelineTimeframe(requested, timeframeOptions) || requested;
       }
       let response = await fetchTimelineMarkets({ timeframe: requested });
-      console.log("Loaded markets response", response.markets.length, "markets");
       let normalized = normalizeMarketsResponse(response, requested);
       timeframeOptions = normalized.timeframes;
       timeframeFilter = normalized.selectedTimeframe;
@@ -203,13 +209,11 @@
     eventAbort = new AbortController();
     loadingEvents = true;
     eventsError = "";
-    console.log("Loading events with filters", { collector: collectorFilter, exchange: exchangeFilter, symbol: symbolFilter, startTs: selectedRange.startTs, endTs: selectedRange.endTs });
     try {
       allEvents = await fetchTimelineEvents(
         { collector: collectorFilter || undefined, exchange: exchangeFilter || undefined, symbol: symbolFilter || undefined, startTs: selectedRange.startTs, endTs: selectedRange.endTs },
         eventAbort.signal,
       );
-      console.log("Loaded events response", allEvents.length, "events");
       lastEventsQueryKey = queryKey;
     } catch (err) {
       if ((err as { name?: string }).name !== "AbortError") eventsError = err instanceof Error ? err.message : "Failed to load timeline events";
@@ -234,7 +238,6 @@
   }
   function handleCollectorChange(event: CustomEvent<string>): void {
     collectorFilter = event.detail;
-    console.log('setting collector filter to', collectorFilter);  
     if (exchangeFilter && !allMarkets.some((market) => (!collectorFilter || market.collector === collectorFilter) && market.exchange === exchangeFilter)) {
       exchangeFilter = "";
     }

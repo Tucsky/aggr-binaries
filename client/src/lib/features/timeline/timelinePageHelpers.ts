@@ -94,8 +94,6 @@ export function restorePersistedViewRange(
     nextEnd -= delta;
   }
 
-  console.log(nextEnd > nextStart ? `restored range ${new Date(nextStart).toISOString()} - ${new Date(nextEnd).toISOString()}` : `restored range null`)
-
   return nextEnd > nextStart ? { startTs: nextStart, endTs: nextEnd } : null;
 }
 

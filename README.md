@@ -173,6 +173,19 @@ CREATE TABLE files (
 CREATE INDEX idx_files_exchange_symbol ON files(exchange, symbol);
 CREATE INDEX idx_files_start_ts ON files(start_ts);
 CREATE INDEX idx_files_collector ON files(collector);
+
+CREATE TABLE indexed_market_ranges (
+  collector TEXT NOT NULL,
+  exchange TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  start_ts INTEGER NOT NULL,
+  end_ts INTEGER NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
+  PRIMARY KEY (collector, exchange, symbol)
+);
+
+CREATE INDEX idx_indexed_market_ranges_exchange_symbol ON indexed_market_ranges(exchange, symbol);
 ```
 
 ### Behavior
@@ -180,6 +193,8 @@ CREATE INDEX idx_files_collector ON files(collector);
 * Walk input tree once.
 * Parse filename → `start_ts` (UTC).
 * Append-only via `INSERT OR IGNORE`.
+* Maintain `indexed_market_ranges` incrementally during inserted-file batches (per-market min/max `start_ts`).
+* On legacy DBs, if `indexed_market_ranges` exists but is empty while `files` has rows, open-time migration backfills it once from `files`.
 * `--include` allows subtree-restricted walks.
 * No mutation or “processed” flags.
 
@@ -491,7 +506,8 @@ npm run serve
 * `GET /` → serves built frontend
 * SPA fallback to `index.html` for client routes (for example `/timeline`, `/chart/...`)
 * `GET /api/timeline/markets[?timeframe=...&collector=...&exchange=...&symbol=...]`
-  * returns all indexed markets (`files` grouped by `{collector,exchange,symbol}` with `MIN/MAX(start_ts)`)
+  * returns indexed markets from `indexed_market_ranges` (cached `{collector,exchange,symbol}` min/max `start_ts`, maintained during `index`)
+  * avoids per-request `GROUP BY` over the full `files` table in the hot path
   * merges processed ranges from `registry` (selected timeframe or `ALL` aggregate when timeframe is omitted)
   * optional `collector/exchange/symbol` narrows the response to matching market identity (symbol match is exact, case-insensitive)
   * payload includes split coverage fields:

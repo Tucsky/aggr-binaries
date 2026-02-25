@@ -57,6 +57,16 @@ export function openDatabase(dbPath: string): Db {
      VALUES
       (:rootId, :relativePath, :collector, :exchange, :symbol, :startTs, :ext);`,
   );
+  const upsertIndexedMarketRangeStmt = db.prepare(
+    `INSERT INTO indexed_market_ranges
+      (collector, exchange, symbol, start_ts, end_ts)
+     VALUES
+      (:collector, :exchange, :symbol, :startTs, :endTs)
+     ON CONFLICT(collector, exchange, symbol) DO UPDATE SET
+      start_ts = MIN(indexed_market_ranges.start_ts, excluded.start_ts),
+      end_ts = MAX(indexed_market_ranges.end_ts, excluded.end_ts),
+      updated_at = (unixepoch('subsec') * 1000);`,
+  );
 
   const ensureRootStmt = db.prepare("INSERT OR IGNORE INTO roots(path) VALUES(:path);");
   const getRootIdStmt = db.prepare("SELECT id FROM roots WHERE path = :path;");
@@ -110,7 +120,7 @@ export function openDatabase(dbPath: string): Db {
       }
       return row.id;
     },
-    insertFiles: (rows: IndexedFile[]) => insertMany(db, insertStmt, rows),
+    insertFiles: (rows: IndexedFile[]) => insertMany(db, insertStmt, upsertIndexedMarketRangeStmt, rows),
     upsertRegistry: (entry: RegistryEntry) => upsertRegistry(upsertRegistryStmt, entry),
     replaceRegistry: (entries: RegistryEntry[], filter?: RegistryFilter) =>
       replaceRegistry(db, upsertRegistryStmt, deleteRegistryStmt, entries, filter),
@@ -178,6 +188,37 @@ function migrate(db: DatabaseSync): void {
       `files table contains ${nullCountRow.cnt} rows with NULL exchange/symbol/start_ts. Please rebuild the index.`,
     );
   }
+
+  migrateIndexedMarketRanges(db);
+}
+
+function migrateIndexedMarketRanges(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS indexed_market_ranges (
+      collector TEXT NOT NULL,
+      exchange TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      start_ts INTEGER NOT NULL,
+      end_ts INTEGER NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
+      PRIMARY KEY (collector, exchange, symbol)
+    );
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_indexed_market_ranges_exchange_symbol ON indexed_market_ranges(exchange, symbol);");
+
+  const rowCount = db.prepare("SELECT COUNT(*) AS cnt FROM indexed_market_ranges;").get() as { cnt?: number } | undefined;
+  if ((rowCount?.cnt ?? 0) > 0) return;
+
+  const fileCount = db.prepare("SELECT COUNT(*) AS cnt FROM files;").get() as { cnt?: number } | undefined;
+  if ((fileCount?.cnt ?? 0) === 0) return;
+
+  db.exec(`
+    INSERT INTO indexed_market_ranges (collector, exchange, symbol, start_ts, end_ts)
+    SELECT collector, exchange, symbol, MIN(start_ts) AS start_ts, MAX(start_ts) AS end_ts
+    FROM files
+    GROUP BY collector, exchange, symbol;
+  `);
 }
 
 function migrateRegistry(db: DatabaseSync): void {
@@ -384,10 +425,12 @@ function migrateEvents(db: DatabaseSync): void {
 function insertMany(
   db: DatabaseSync,
   stmt: StatementSync,
+  upsertIndexedMarketRangeStmt: StatementSync,
   rows: IndexedFile[],
 ): { inserted: number; existing: number } {
   let inserted = 0;
   let existing = 0;
+  const pendingRanges = new Map<string, PendingIndexedMarketRange>();
   db.exec("BEGIN");
   try {
     for (const row of rows) {
@@ -406,6 +449,20 @@ function insertMany(
       const delta = Number(res.changes ?? 0);
       inserted += delta;
       existing += delta === 0 ? 1 : 0;
+      if (delta > 0) {
+        accumulateIndexedMarketRange(pendingRanges, row.collector, row.exchange, row.symbol, row.startTs);
+      }
+    }
+
+    // This second loop is intentional: batch by market key to avoid one indexed-range upsert per inserted file.
+    for (const range of pendingRanges.values()) {
+      upsertIndexedMarketRangeStmt.run({
+        collector: range.collector,
+        exchange: range.exchange,
+        symbol: range.symbol,
+        startTs: range.startTs,
+        endTs: range.endTs,
+      });
     }
     db.exec("COMMIT");
   } catch (err) {
@@ -413,6 +470,31 @@ function insertMany(
     throw err;
   }
   return { inserted, existing };
+}
+
+interface PendingIndexedMarketRange {
+  collector: string;
+  exchange: string;
+  symbol: string;
+  startTs: number;
+  endTs: number;
+}
+
+function accumulateIndexedMarketRange(
+  ranges: Map<string, PendingIndexedMarketRange>,
+  collector: string,
+  exchange: string,
+  symbol: string,
+  startTs: number,
+): void {
+  const key = `${collector}\u0000${exchange}\u0000${symbol}`;
+  const existing = ranges.get(key);
+  if (!existing) {
+    ranges.set(key, { collector, exchange, symbol, startTs, endTs: startTs });
+    return;
+  }
+  if (startTs < existing.startTs) existing.startTs = startTs;
+  if (startTs > existing.endTs) existing.endTs = startTs;
 }
 
 function insertEvents(db: DatabaseSync, stmt: StatementSync, rows: EventRange[]): void {
