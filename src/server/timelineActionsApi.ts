@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type http from "node:http";
-import { loadConfig, type CliOverrides } from "../core/config.js";
+import { loadConfig, type CliOverrides, type Config } from "../core/config.js";
 import type { Db } from "../core/db.js";
 import { runFixGaps } from "../core/gaps/index.js";
 import { runIndex } from "../core/indexer.js";
@@ -19,9 +19,7 @@ export enum TimelineMarketAction {
   Clear = "clear",
 }
 
-export interface TimelineActionsApiOptions {
-  dbPath: string;
-  outDir: string;
+export interface TimelineActionsApiOptions extends Pick<Config, "dbPath" | "outDir"> {
   configPath?: string;
 }
 
