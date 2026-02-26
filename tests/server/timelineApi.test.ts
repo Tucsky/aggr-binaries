@@ -587,6 +587,66 @@ test("timeline events are deterministically ordered by market, timestamp, and id
   }
 });
 
+test("timeline events can be limited to an explicit market subset", async () => {
+  const db = await withDb();
+  try {
+    const rootId = db.ensureRoot("/tmp/source");
+    db.insertFiles([
+      {
+        rootId,
+        relativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
+        collector: Collector.PI,
+        exchange: "BYBIT",
+        symbol: "BTCUSDT",
+        startTs: 100,
+      },
+      {
+        rootId,
+        relativePath: "RAM/BITMEX/ETHUSD/2024-01-01.gz",
+        collector: Collector.RAM,
+        exchange: "BITMEX",
+        symbol: "ETHUSD",
+        startTs: 100,
+      },
+    ]);
+    db.insertEvents([
+      {
+        rootId,
+        relativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
+        collector: "PI",
+        exchange: "BYBIT",
+        symbol: "BTCUSDT",
+        type: EventType.Gap,
+        startLine: 1,
+        endLine: 1,
+        gapEndTs: 200,
+      },
+      {
+        rootId,
+        relativePath: "RAM/BITMEX/ETHUSD/2024-01-01.gz",
+        collector: "RAM",
+        exchange: "BITMEX",
+        symbol: "ETHUSD",
+        type: EventType.Gap,
+        startLine: 1,
+        endLine: 1,
+        gapEndTs: 220,
+      },
+    ]);
+
+    const events = listTimelineEvents(db, {
+      startTs: 0,
+      endTs: 1_000,
+      rows: [{ collector: "ram", exchange: "bitmex", symbol: "ETHUSD" }],
+    });
+    assert.deepStrictEqual(events.map((event) => `${event.collector}:${event.exchange}:${event.symbol}:${event.ts}`), [
+      "RAM:BITMEX:ETHUSD:220",
+    ]);
+  } finally {
+    db.close();
+  }
+});
+
 test("timeline events enforce valid range inputs", async () => {
   const db = await withDb();
   try {

@@ -31,6 +31,24 @@ export interface TimelineEventsQuery {
   endTs: number;
 }
 
+export interface TimelineEventRowFilter {
+  collector: string;
+  exchange: string;
+  symbol: string;
+}
+
+export interface TimelineEventsRowsQuery {
+  startTs: number;
+  endTs: number;
+  rows: TimelineEventRowFilter[];
+}
+
+export interface TimelineEventsRowsPayload {
+  startTs: number;
+  endTs: number;
+  rows: TimelineEventRowFilter[];
+}
+
 export interface TimelineRunActionQuery {
   action: TimelineMarketAction;
   collector: string;
@@ -83,6 +101,24 @@ export async function fetchTimelineEvents(query: TimelineEventsQuery, signal?: A
   return payload.events ?? [];
 }
 
+export async function fetchTimelineEventsByRows(
+  query: TimelineEventsRowsQuery,
+  signal?: AbortSignal,
+): Promise<TimelineEvent[]> {
+  const response = await fetch("/api/timeline/events/query", {
+    method: "POST",
+    cache: "no-store",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(buildTimelineEventsRowsPayload(query)),
+    signal,
+  });
+  const payload = (await parseJsonResponse(
+    response,
+    "Failed to load events",
+  )) as { events?: TimelineEvent[] };
+  return payload.events ?? [];
+}
+
 export function buildTimelineMarketsPath(query: TimelineMarketsQuery = {}): string {
   const url = new URL("/api/timeline/markets", TIMELINE_API_ORIGIN);
   if (query.timeframe) url.searchParams.set("timeframe", query.timeframe);
@@ -101,6 +137,24 @@ export function buildTimelineEventsPath(query: TimelineEventsQuery): string {
   url.searchParams.set("startTs", String(Math.floor(query.startTs)));
   url.searchParams.set("endTs", String(Math.floor(query.endTs)));
   return url.pathname + url.search;
+}
+
+export function buildTimelineEventsRowsPayload(
+  query: TimelineEventsRowsQuery,
+): TimelineEventsRowsPayload {
+  const rows: TimelineEventRowFilter[] = [];
+  for (const row of query.rows) {
+    const collector = row.collector.trim().toUpperCase();
+    const exchange = row.exchange.trim().toUpperCase();
+    const symbol = row.symbol.trim();
+    if (!collector || !exchange || !symbol) continue;
+    rows.push({ collector, exchange, symbol });
+  }
+  return {
+    startTs: Math.floor(query.startTs),
+    endTs: Math.floor(query.endTs),
+    rows,
+  };
 }
 
 export async function runTimelineMarketAction(

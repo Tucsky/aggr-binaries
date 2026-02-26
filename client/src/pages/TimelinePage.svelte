@@ -8,9 +8,8 @@
   import TimelineRow from "../lib/features/timeline/TimelineRow.svelte";
   import { navigate } from "../lib/framework/routing/routeStore.js";
   import { addToast } from "../lib/framework/toast/toastStore.js";
-  import { fetchTimelineEvents, fetchTimelineMarkets } from "../lib/features/timeline/timelineApi.js";
+  import { fetchTimelineEventsByRows, fetchTimelineMarkets } from "../lib/features/timeline/timelineApi.js";
   import {
-    buildEventsQueryKey,
     filterMarketsWithRange,
     normalizeMarketRows,
     normalizeMarketsResponse,
@@ -28,6 +27,16 @@
     type TimelineSharedControls,
   } from "../lib/features/timeline/timelineControlsPersistence.js";
   import { computeTimelineVirtualWindow } from "../lib/features/timeline/timelineVirtualRows.js";
+  import {
+    createTimelineViewportEventCacheState,
+    buildTimelineEventsScopeKey,
+    readTimelineViewportEventCache,
+    resolveTimelineViewportMissingRows,
+    resolveTimelineViewportEventRequest,
+    selectTimelineViewportEventRows,
+    writeTimelineViewportEventCache,
+    type TimelineViewportEventCacheState,
+  } from "../lib/features/timeline/timelineEventViewportLoader.js";
   import { buildInitialViewRange, formatTimelineTsLabel, panTimelineRange, resolveTimelineTimeframe, shiftViewRangeIntoRangeIfDisjoint, zoomTimelineRange } from "../lib/features/timeline/timelineViewport.js";
   import {
     captureTimelineScrollAnchor,
@@ -42,6 +51,12 @@
   // Intentionally kept in one page: timeline viewport math, row virtualization, and pointer interactions are tightly coupled.
   const PAN_OVERSCROLL_RATIO = 0.01;
   const SYMBOL_INPUT_DEBOUNCE_MS = 180;
+  const VIEWPORT_EVENT_RELOAD_DEBOUNCE_MS = 48;
+  const EVENT_ROW_FETCH_OVERSCAN = 2;
+  const EVENT_RANGE_OVERSCAN_RATIO = 0.5;
+  const MAX_EVENT_ROWS_PER_REQUEST = 24;
+  const EVENT_CACHE_ROW_LIMIT = 128;
+  const EVENT_CACHE_EVENTS_LIMIT = 60_000;
   let loadingMarkets = false;
   let loadingEvents = false;
   let marketsError = "";
@@ -79,8 +94,15 @@
   let topPadding = 0;
   let bottomPadding = 0;
   let eventAbort: AbortController | null = null;
-  let symbolInputTimer: ReturnType<typeof setTimeout> | null = null;
+  let eventsReloadTimer: ReturnType<typeof setTimeout> | null = null;
   let lastEventsQueryKey = "";
+  let eventsScopeKey = "";
+  let loadedEventsRange: TimelineRange | null = null;
+  let loadedEventRowKeys = new Set<string>();
+  let pendingEventsReload = false;
+  let pendingEventsForceReload = false;
+  let inFlightEventsQueryKey = "";
+  let eventsCache: TimelineViewportEventCacheState = createTimelineViewportEventCacheState();
   $: collectorOptions = unique(allMarkets.map((market) => market.collector));
   $: if (!shouldKeepFilterSelection(collectorFilter, collectorOptions)) collectorFilter = "";
   $: exchangeOptions = unique(allMarkets.filter((market) => !collectorFilter || market.collector === collectorFilter).map((market) => market.exchange));
@@ -123,6 +145,7 @@
       if (!scrollEl) return;
       viewportHeight = scrollEl.clientHeight;
       timelineViewportWidth = Math.max(320, scrollEl.clientWidth - LEFT_WIDTH);
+      scheduleEventsReload(0);
     });
     resizeObserver.observe(scrollEl);
   });
@@ -130,7 +153,7 @@
     persistTimelineState();
     resizeObserver?.disconnect();
     eventAbort?.abort();
-    clearSymbolInputTimer();
+    clearEventsReloadTimer();
   });
   async function initTimeline(): Promise<void> {
     await loadOverallRange();
@@ -179,20 +202,16 @@
       if (exchangeFilter && !nextExchangeOptions.includes(exchangeFilter)) exchangeFilter = "";
       const globalRange = overallRange ?? computeGlobalRange(allMarkets);
       if (globalRange) {
-        const nextEventsQueryKey = buildEventsQueryKey(globalRange, collectorFilter, exchangeFilter, symbolFilter);
         selectedRange = globalRange;
         if (!viewRange) {
-          // console.log("Restoring view range with global range", { globalStart: new Date(globalRange.startTs).toISOString(), globalEnd: new Date(globalRange.endTs).toISOString(), persistedStart: persistedViewStartTs ? new Date(persistedViewStartTs).toISOString() : null, persistedEnd: persistedViewEndTs ? new Date(persistedViewEndTs).toISOString() : null });
           viewRange =
             restorePersistedViewRange(globalRange, persistedViewStartTs, persistedViewEndTs, PAN_OVERSCROLL_RATIO) ??
             buildInitialViewRange(globalRange, YEAR_MS);
         }
-        if (forceLoadEvents || nextEventsQueryKey !== lastEventsQueryKey) await loadEvents();
       } else {
         selectedRange = null;
         viewRange = null;
-        allEvents = [];
-        lastEventsQueryKey = "";
+        resetLoadedEventsState(true, true);
       }
       crosshairTs = null;
       crosshairPx = null;
@@ -203,30 +222,169 @@
     } finally {
       loadingMarkets = false;
       await restoreScrollAnchor(scrollAnchor);
+      if (!marketsError && selectedRange && viewRange) {
+        scheduleEventsReload(0, forceLoadEvents);
+      }
     }
   }
-  async function loadEvents(): Promise<void> {
-    if (!selectedRange) {
-      allEvents = [];
-      lastEventsQueryKey = "";
+  async function loadEvents(forceReload = false): Promise<void> {
+    if (!selectedRange || !viewRange || !filteredMarkets.length) {
+      eventAbort?.abort();
+      eventAbort = null;
+      inFlightEventsQueryKey = "";
+      loadingEvents = false;
+      pendingEventsReload = false;
+      pendingEventsForceReload = false;
+      resetLoadedEventsState(!selectedRange, !selectedRange || !viewRange);
       return;
     }
-    const queryKey = buildEventsQueryKey(selectedRange, collectorFilter, exchangeFilter, symbolFilter);
+
+    // Scope key changes mean previously loaded viewport windows no longer match current filters/timeframe/range.
+    const scopeKey = buildTimelineEventsScopeKey(
+      timeframeFilter,
+      selectedRange,
+      collectorFilter,
+      exchangeFilter,
+      symbolFilter,
+    );
+    if (scopeKey !== eventsScopeKey) {
+      eventsScopeKey = scopeKey;
+      resetLoadedEventsState(true, false);
+    }
+
+    const selection = selectTimelineViewportEventRows(
+      filteredMarkets,
+      startIndex,
+      endIndex,
+      EVENT_ROW_FETCH_OVERSCAN,
+      MAX_EVENT_ROWS_PER_REQUEST,
+    );
+    if (!selection.rows.length) {
+      eventAbort?.abort();
+      eventAbort = null;
+      inFlightEventsQueryKey = "";
+      pendingEventsReload = false;
+      pendingEventsForceReload = false;
+      resetLoadedEventsState(false, false);
+      loadingEvents = false;
+      return;
+    }
+    // Fetch only when loaded rows/range do not fully cover the current viewport intent.
+    const request = resolveTimelineViewportEventRequest({
+      scopeKey,
+      selectedRange,
+      viewRange,
+      selection,
+      loadedRange: loadedEventsRange,
+      loadedRowKeys: loadedEventRowKeys,
+      rangeOverscanRatio: EVENT_RANGE_OVERSCAN_RATIO,
+      forceReload,
+    });
+    if (!request) return;
+    if (!forceReload && request.queryKey === lastEventsQueryKey) return;
+    if (loadingEvents) {
+      if (!forceReload && request.queryKey === inFlightEventsQueryKey) return;
+      queuePendingEventsReload(forceReload);
+      return;
+    }
+
+    const cached = readTimelineViewportEventCache(
+      eventsCache,
+      scopeKey,
+      request.requestRange,
+      selection,
+    );
+    if (!forceReload && cached.coveredRowKeys.size >= selection.rowKeys.length) {
+      allEvents = cached.events;
+      loadedEventsRange = request.requestRange;
+      loadedEventRowKeys = new Set(selection.rowKeys);
+      lastEventsQueryKey = request.queryKey;
+      eventsError = "";
+      loadingEvents = false;
+      return;
+    }
+
+    const rowsToFetch = forceReload
+      ? selection
+      : resolveTimelineViewportMissingRows(selection, cached.coveredRowKeys);
+    if (!rowsToFetch.rows.length) {
+      allEvents = cached.events;
+      loadedEventsRange = request.requestRange;
+      loadedEventRowKeys = new Set(selection.rowKeys);
+      lastEventsQueryKey = request.queryKey;
+      eventsError = "";
+      loadingEvents = false;
+      return;
+    }
+
+    if (cached.events.length) {
+      allEvents = cached.events;
+    }
     eventAbort?.abort();
     eventAbort = new AbortController();
     loadingEvents = true;
+    inFlightEventsQueryKey = request.queryKey;
     eventsError = "";
     try {
-      allEvents = await fetchTimelineEvents(
-        { collector: collectorFilter || undefined, exchange: exchangeFilter || undefined, symbol: symbolFilter || undefined, startTs: selectedRange.startTs, endTs: selectedRange.endTs },
+      const fetched = await fetchTimelineEventsByRows(
+        {
+          startTs: request.requestRange.startTs,
+          endTs: request.requestRange.endTs,
+          rows: rowsToFetch.rows,
+        },
         eventAbort.signal,
       );
-      lastEventsQueryKey = queryKey;
+      writeTimelineViewportEventCache(
+        eventsCache,
+        EVENT_CACHE_ROW_LIMIT,
+        EVENT_CACHE_EVENTS_LIMIT,
+        {
+          scopeKey,
+          requestRange: request.requestRange,
+          rowKeys: rowsToFetch.rowKeys,
+          events: fetched,
+        },
+      );
+      const refreshed = readTimelineViewportEventCache(
+        eventsCache,
+        scopeKey,
+        request.requestRange,
+        selection,
+      );
+      allEvents = refreshed.events;
+      loadedEventsRange = request.requestRange;
+      loadedEventRowKeys = new Set(selection.rowKeys);
+      lastEventsQueryKey = request.queryKey;
+      eventsError = "";
     } catch (err) {
-      if ((err as { name?: string }).name !== "AbortError") eventsError = err instanceof Error ? err.message : "Failed to load timeline events";
+      if ((err as { name?: string }).name !== "AbortError") {
+        eventsError = err instanceof Error ? err.message : "Failed to load timeline events";
+      }
     } finally {
       loadingEvents = false;
+      inFlightEventsQueryKey = "";
+      flushPendingEventsReload();
     }
+  }
+  function resetLoadedEventsState(clearCache: boolean, clearScope: boolean): void {
+    allEvents = [];
+    loadedEventsRange = null;
+    loadedEventRowKeys = new Set<string>();
+    lastEventsQueryKey = "";
+    if (clearScope) eventsScopeKey = "";
+    if (!clearCache) return;
+    eventsCache = createTimelineViewportEventCacheState();
+  }
+  function queuePendingEventsReload(forceReload: boolean): void {
+    pendingEventsReload = true;
+    pendingEventsForceReload = pendingEventsForceReload || forceReload;
+  }
+  function flushPendingEventsReload(): void {
+    if (!pendingEventsReload) return;
+    const forceReload = pendingEventsForceReload;
+    pendingEventsReload = false;
+    pendingEventsForceReload = false;
+    scheduleEventsReload(0, forceReload);
   }
   function zoomAround(centerTs: number, deltaY: number): void {
     if (!selectedRange || !viewRange) return;
@@ -235,13 +393,13 @@
   function panView(deltaMs: number): void {
     if (!selectedRange || !viewRange || deltaMs === 0) return;
     viewRange = panTimelineRange(selectedRange, viewRange, deltaMs, PAN_OVERSCROLL_RATIO);
-    // console.log(`Panned view by ${deltaMs}ms`, { viewStart: new Date(viewRange.startTs).toISOString(), viewEnd: new Date(viewRange.endTs).toISOString() });
   }
   function handleScroll(): void {
     if (!scrollEl) return;
     scrollTop = scrollEl.scrollTop;
     viewportHeight = scrollEl.clientHeight;
     actionsOpen = false;
+    scheduleEventsReload(VIEWPORT_EVENT_RELOAD_DEBOUNCE_MS);
   }
   function handleCollectorChange(event: CustomEvent<string>): void {
     collectorFilter = event.detail;
@@ -268,7 +426,7 @@
     timeframeFilter = event.detail;
     persistSharedControlPrefs();
     persistTimelineState();
-    clearSymbolInputTimer();
+    clearEventsReloadTimer();
     void loadMarkets();
   }
 
@@ -294,6 +452,7 @@
     zoomAround(event.detail.centerTs, event.detail.deltaY);
     syncCrosshairTsFromPx();
     persistTimelineState();
+    scheduleEventsReload(VIEWPORT_EVENT_RELOAD_DEBOUNCE_MS);
   }
 
   function handlePan(event: CustomEvent<{ deltaMs: number }>): void {
@@ -301,6 +460,7 @@
     panView(event.detail.deltaMs);
     syncCrosshairTsFromPx();
     persistTimelineState();
+    scheduleEventsReload(VIEWPORT_EVENT_RELOAD_DEBOUNCE_MS);
   }
   function handleRowActions(event: CustomEvent<{ market: TimelineMarket; anchorEl: HTMLButtonElement | null }>): void {
     const anchorEl = event.detail.anchorEl;
@@ -351,7 +511,6 @@
   }
 
   async function handleActionCompleted(event: CustomEvent<{ action: TimelineMarketAction; market: TimelineMarket }>): Promise<void> {
-    // console.log("Action completed", event.detail);
     await loadOverallRange();
     await loadMarkets(true);
     actionsMarket = event.detail.market;
@@ -401,17 +560,17 @@
     }
   }
 
-  function clearSymbolInputTimer(): void {
-    if (!symbolInputTimer) return;
-    clearTimeout(symbolInputTimer);
-    symbolInputTimer = null;
+  function clearEventsReloadTimer(): void {
+    if (!eventsReloadTimer) return;
+    clearTimeout(eventsReloadTimer);
+    eventsReloadTimer = null;
   }
-  function scheduleEventsReload(delayMs: number): void {
-    clearSymbolInputTimer();
+  function scheduleEventsReload(delayMs: number, forceReload = false): void {
+    clearEventsReloadTimer();
     const waitMs = delayMs <= 0 ? 0 : delayMs;
-    symbolInputTimer = setTimeout(() => {
-      symbolInputTimer = null;
-      void loadEvents();
+    eventsReloadTimer = setTimeout(() => {
+      eventsReloadTimer = null;
+      void loadEvents(forceReload);
     }, waitMs);
   }
 </script>

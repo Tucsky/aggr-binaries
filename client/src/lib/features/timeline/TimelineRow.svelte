@@ -199,8 +199,8 @@
     const barHeight = 16;
     const y = Math.floor((height - barHeight) / 2);
 
-    if (pixelWidth >= 3) {
-      const drawWidth = Math.max(3, pixelWidth);
+    if (pixelWidth >= 1) {
+      const drawWidth = pixelWidth;
       roundedRectPath(ctx, left, y, drawWidth, barHeight, {
         topLeft: 2,
         topRight: 2,
@@ -216,14 +216,18 @@
       return;
     }
 
-    const lineX = Math.min(width - 0.5, Math.max(0.5, Math.floor(right) + 0.5));
+    const thinWidth = Math.max(0.3, Math.min(1, pixelWidth));
+    const centerX = Math.min(
+      width - thinWidth / 2,
+      Math.max(thinWidth / 2, (left + right) / 2),
+    );
     ctx.strokeStyle = style.stroke;
-    ctx.lineWidth = 1;
+    ctx.lineWidth = thinWidth;
     ctx.beginPath();
-    ctx.moveTo(lineX, y);
-    ctx.lineTo(lineX, y + barHeight);
+    ctx.moveTo(centerX, y);
+    ctx.lineTo(centerX, y + barHeight);
     ctx.stroke();
-    markerHits.push({ x1: lineX - 2, x2: lineX + 2, y1: y, y2: y + barHeight, event });
+    markerHits.push({ x1: centerX - 2, x2: centerX + 2, y1: y, y2: y + barHeight, event });
   }
 
   function handleCanvasClick(event: MouseEvent): void {

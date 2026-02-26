@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { resolveTimelineHighlightWindow } from "../../client/src/lib/features/timeline/timelineRowCanvas.js";
+import { eventPaintStyle, resolveTimelineHighlightWindow } from "../../client/src/lib/features/timeline/timelineRowCanvas.js";
 import type { TimelineRange } from "../../client/src/lib/features/timeline/timelineUtils.js";
 
 test("resolveTimelineHighlightWindow maps clamped highlight range into view coordinates", () => {

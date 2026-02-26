@@ -105,3 +105,36 @@ export function buildEventsQueryKey(
 ): string {
   return `${collectorFilter}|${exchangeFilter}|${symbolFilter.toLowerCase()}|${range.startTs}|${range.endTs}`;
 }
+
+export function clampRangeToBounds(range: TimelineRange, bounds: TimelineRange): TimelineRange {
+  const startTs = range.startTs < bounds.startTs ? bounds.startTs : range.startTs;
+  const endTs = range.endTs > bounds.endTs ? bounds.endTs : range.endTs;
+  if (endTs >= startTs) return { startTs, endTs };
+  return { startTs, endTs: startTs };
+}
+
+export function expandRangeWithinBounds(
+  range: TimelineRange,
+  bounds: TimelineRange,
+  overscanRatio: number,
+): TimelineRange {
+  const safeRange = clampRangeToBounds(range, bounds);
+  const span = Math.max(1, safeRange.endTs - safeRange.startTs);
+  const pad = Math.max(0, Math.floor(span * Math.max(0, overscanRatio)));
+  const startTs = Math.max(bounds.startTs, safeRange.startTs - pad);
+  const endTs = Math.min(bounds.endTs, safeRange.endTs + pad);
+  return endTs >= startTs ? { startTs, endTs } : { startTs, endTs: startTs };
+}
+
+export function isRangeCoveredBy(loaded: TimelineRange | null, target: TimelineRange): boolean {
+  return Boolean(loaded && loaded.startTs <= target.startTs && loaded.endTs >= target.endTs);
+}
+
+export function buildViewportEventsQueryKey(
+  scopeKey: string,
+  range: TimelineRange,
+  rowKeys: string[],
+): string {
+  const rows = rowKeys.join(",");
+  return `${scopeKey}|${range.startTs}|${range.endTs}|${rows}`;
+}

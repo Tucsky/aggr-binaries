@@ -33,10 +33,16 @@
 - No per-line logs. Logs must be rate-limited and summarize counts.
 
 ## Documentation scope
-- README is project documentation, not an iteration changelog.
-- When asked to document "relevant changes", only update durable project-level docs when behavior/capabilities materially change for operators or developers.
-- Do not add per-iteration UI details; prefer small edits to existing sections over new deep-dive subsections.
-- If the user asks to document relevant changes in README, always end the final response with a detailed conventional commit message following the commit format rules below.
+- Keep the phrase "document relevant changes" as the decision trigger.
+- "Relevant changes" means docs that describe durable behavior/contracts, not an iteration changelog.
+- First priority is task docs (`docs/index.md`, `docs/process.md`, `docs/registry.md`, `docs/fixgaps.md`, `docs/merge.md`):
+  - Update them when code changes task behavior, inputs/outputs, invariants, recovery/failure semantics, or operator-facing usage.
+- README is structural overview:
+  - Update only for structural/project-level changes (major commands, task map, architecture shape, key routes/pages).
+  - Do not add iteration-level UI tuning details unless they change a durable user-facing capability/workflow.
+- Prefer editing existing docs over adding new docs files.
+- If no durable docs are impacted, explicitly state in the final response: `No documentation updates were required for this iteration.`
+- If the user asks to document relevant changes in README and README is updated, end the final response with a detailed conventional commit message following the commit format rules below.
 
 ## Commit message format
 - When asked for a detailed conventional commit message, use this structure:

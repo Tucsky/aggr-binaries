@@ -36,8 +36,15 @@ export interface TimelineEventFilter {
   exchange?: string;
   symbol?: string;
   symbolMode?: TimelineSymbolMatchMode;
+  rows?: TimelineEventRowFilter[];
   startTs: number;
   endTs: number;
+}
+
+export interface TimelineEventRowFilter {
+  collector: string;
+  exchange: string;
+  symbol: string;
 }
 
 export interface TimelineMarketsResult {
@@ -66,6 +73,9 @@ export enum TimelineSymbolMatchMode {
   Exact = "exact",
 }
 
+const MAX_TIMELINE_EVENT_ROWS = 200;
+const MAX_TIMELINE_EVENTS_QUERY_BYTES = 256 * 1024;
+
 interface TimelineIndexedMarketRow {
   collector: string;
   exchange: string;
@@ -81,6 +91,17 @@ interface TimelineRegistryMarketRow {
   timeframe: string;
   start_ts: number;
   end_ts: number;
+}
+
+interface TimelineEventRowsQueryPayload {
+  startTs: number;
+  endTs: number;
+  rows: TimelineEventRowFilter[];
+}
+
+interface TimelineEventRowsFilterSql {
+  withClause: string;
+  joinClause: string;
 }
 
 export type HttpApiHandler = (
@@ -120,6 +141,8 @@ export function listTimelineEvents(db: Db, filter: TimelineEventFilter): Timelin
     startTs: Math.floor(filter.startTs),
     endTs: Math.floor(filter.endTs),
   };
+  const rowFilters = normalizeTimelineEventRows(filter.rows);
+  const rowFilterSql = buildTimelineEventRowsFilterSql(rowFilters, params);
 
   if (filter.collector) {
     where.push("e.collector = :collector");
@@ -143,10 +166,12 @@ export function listTimelineEvents(db: Db, filter: TimelineEventFilter): Timelin
   const rows =
     (db.db
       .prepare(
-        `SELECT e.id, e.collector, e.exchange, e.symbol, e.relative_path, e.event_type, e.gap_fix_status, e.gap_fix_recovered,
+        `${rowFilterSql.withClause}
+         SELECT e.id, e.collector, e.exchange, e.symbol, e.relative_path, e.event_type, e.gap_fix_status, e.gap_fix_recovered,
                 COALESCE(e.gap_end_ts, f.start_ts) AS ts,
                 e.start_line, e.end_line, e.gap_ms, e.gap_miss
          FROM events e
+         ${rowFilterSql.joinClause}
          LEFT JOIN files f ON f.root_id = e.root_id AND f.relative_path = e.relative_path
          WHERE ${where.join(" AND ")}
          ORDER BY e.collector, e.exchange, e.symbol, ts, e.id;`,
@@ -192,6 +217,22 @@ export function createTimelineApiHandler(db: Db, actionOptions: TimelineActionsA
     }
     if (url.pathname === "/api/timeline/actions") {
       return timelineActionsHandler(req, res, url);
+    }
+    if (url.pathname === "/api/timeline/events/query") {
+      if (req.method !== "POST") {
+        writeJson(res, 405, { error: "Method not allowed" });
+        return true;
+      }
+      try {
+        const payload = parseTimelineEventsRowsQueryPayload(
+          await readJsonBody(req, MAX_TIMELINE_EVENTS_QUERY_BYTES),
+        );
+        const events = listTimelineEvents(db, payload);
+        writeJson(res, 200, { events });
+      } catch (err) {
+        writeJson(res, 400, { error: err instanceof Error ? err.message : "Invalid timeline query" });
+      }
+      return true;
     }
     if (req.method !== "GET") {
       writeJson(res, 405, { error: "Method not allowed" });
@@ -284,6 +325,107 @@ function parseTimelineSymbolMatchMode(raw: string | null): TimelineSymbolMatchMo
   if (normalized === TimelineSymbolMatchMode.Contains) return TimelineSymbolMatchMode.Contains;
   if (normalized === TimelineSymbolMatchMode.Exact) return TimelineSymbolMatchMode.Exact;
   return null;
+}
+
+async function readJsonBody(req: http.IncomingMessage, maxBytes: number): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of req) {
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buf.length;
+    if (total > maxBytes) {
+      throw new Error(`Payload too large (max ${maxBytes} bytes)`);
+    }
+    chunks.push(buf);
+  }
+  if (!chunks.length) throw new Error("Request body is required");
+  const raw = Buffer.concat(chunks).toString("utf8").trim();
+  if (!raw) throw new Error("Request body is required");
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error("Request body must be valid JSON");
+  }
+}
+
+function parseTimelineEventsRowsQueryPayload(raw: unknown): TimelineEventRowsQueryPayload {
+  if (!isRecord(raw)) throw new Error("Expected JSON object payload");
+  const startTs = parseRequiredNumber(raw["startTs"], "startTs");
+  const endTs = parseRequiredNumber(raw["endTs"], "endTs");
+  if (endTs < startTs) throw new Error("endTs must be >= startTs");
+  const rows = parseTimelineEventRows(raw["rows"]);
+  return { startTs, endTs, rows };
+}
+
+function parseTimelineEventRows(raw: unknown): TimelineEventRowFilter[] {
+  if (!Array.isArray(raw)) throw new Error("rows must be an array");
+  const normalized = normalizeTimelineEventRows(raw);
+  if (!normalized.length) throw new Error("rows must include at least one collector/exchange/symbol tuple");
+  return normalized;
+}
+
+function normalizeTimelineEventRows(rawRows: unknown): TimelineEventRowFilter[] {
+  if (!Array.isArray(rawRows) || !rawRows.length) return [];
+  const normalized: TimelineEventRowFilter[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < rawRows.length; i += 1) {
+    const row = rawRows[i];
+    if (!isRecord(row)) continue;
+    const collector = normalizeRequiredString(row["collector"]);
+    const exchange = normalizeRequiredString(row["exchange"]);
+    const symbol = normalizeRequiredString(row["symbol"], false);
+    if (!collector || !exchange || !symbol) continue;
+    const key = `${collector}:${exchange}:${symbol}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push({ collector, exchange, symbol });
+    if (normalized.length > MAX_TIMELINE_EVENT_ROWS) {
+      throw new Error(`rows count must be <= ${MAX_TIMELINE_EVENT_ROWS}`);
+    }
+  }
+  return normalized;
+}
+
+function buildTimelineEventRowsFilterSql(
+  rows: TimelineEventRowFilter[],
+  params: Record<string, string | number>,
+): TimelineEventRowsFilterSql {
+  if (!rows.length) return { withClause: "", joinClause: "" };
+  // Use a parameterized tuple CTE so row filtering scales better than a long OR chain.
+  const values: string[] = [];
+  for (let i = 0; i < rows.length; i += 1) {
+    const row = rows[i];
+    const suffix = i + 1;
+    const collectorKey = `rowCollector${suffix}`;
+    const exchangeKey = `rowExchange${suffix}`;
+    const symbolKey = `rowSymbol${suffix}`;
+    params[collectorKey] = row.collector;
+    params[exchangeKey] = row.exchange;
+    params[symbolKey] = row.symbol;
+    values.push(`(:${collectorKey}, :${exchangeKey}, :${symbolKey})`);
+  }
+  return {
+    withClause: `WITH row_filter(collector, exchange, symbol) AS (VALUES ${values.join(", ")})`,
+    joinClause: "JOIN row_filter rf ON rf.collector = e.collector AND rf.exchange = e.exchange AND rf.symbol = e.symbol",
+  };
+}
+
+function parseRequiredNumber(raw: unknown, name: string): number {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    throw new Error(`${name} must be a finite number`);
+  }
+  return Math.floor(raw);
+}
+
+function normalizeRequiredString(raw: unknown, uppercase = true): string {
+  if (typeof raw !== "string") return "";
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  return uppercase ? trimmed.toUpperCase() : trimmed;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function normalizeTimelineMarketIdentityFilter(
