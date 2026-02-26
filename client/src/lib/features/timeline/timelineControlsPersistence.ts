@@ -12,6 +12,7 @@ export interface TimelineLocalState {
   symbolFilter: string;
   viewStartTs: number | null;
   viewEndTs: number | null;
+  titleWidth: number | null;
 }
 
 export interface RestoredTimelineState extends TimelineLocalState {
@@ -44,10 +45,11 @@ export function restoreTimelineLocalState(storage: Storage): RestoredTimelineSta
   let symbolFilter = "";
   let viewStartTs: number | null = null;
   let viewEndTs: number | null = null;
+  let titleWidth: number | null = null;
   let legacySharedControls: Partial<TimelineSharedControls> | null = null;
   try {
     const raw = storage.getItem(TIMELINE_STATE_STORAGE_KEY);
-    if (!raw) return { symbolFilter, viewStartTs, viewEndTs, legacySharedControls };
+    if (!raw) return { symbolFilter, viewStartTs, viewEndTs, titleWidth, legacySharedControls };
     const parsed = JSON.parse(raw) as Partial<{
       collectorFilter: string;
       exchangeFilter: string;
@@ -55,6 +57,7 @@ export function restoreTimelineLocalState(storage: Storage): RestoredTimelineSta
       symbolFilter: string;
       viewStartTs: number | null;
       viewEndTs: number | null;
+      titleWidth: number | null;
     }>;
     if (typeof parsed.collectorFilter === "string") {
       legacySharedControls = legacySharedControls ?? {};
@@ -71,10 +74,11 @@ export function restoreTimelineLocalState(storage: Storage): RestoredTimelineSta
     symbolFilter = typeof parsed.symbolFilter === "string" ? parsed.symbolFilter : "";
     viewStartTs = Number.isFinite(parsed.viewStartTs) ? Number(parsed.viewStartTs) : null;
     viewEndTs = Number.isFinite(parsed.viewEndTs) ? Number(parsed.viewEndTs) : null;
+    titleWidth = Number.isFinite(parsed.titleWidth) ? Number(parsed.titleWidth) : null;
   } catch {
     // ignore malformed state
   }
-  return { symbolFilter, viewStartTs, viewEndTs, legacySharedControls };
+  return { symbolFilter, viewStartTs, viewEndTs, titleWidth, legacySharedControls };
 }
 
 export function persistTimelineLocalState(storage: Storage, state: TimelineLocalState): void {

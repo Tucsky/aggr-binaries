@@ -74,12 +74,14 @@ test("restoreTimelineLocalState restores timeline-local values and legacy shared
       symbolFilter: "btc",
       viewStartTs: 100,
       viewEndTs: 200,
+      titleWidth: 244,
     }),
   });
   const restored = restoreTimelineLocalState(storage);
   assert.strictEqual(restored.symbolFilter, "btc");
   assert.strictEqual(restored.viewStartTs, 100);
   assert.strictEqual(restored.viewEndTs, 200);
+  assert.strictEqual(restored.titleWidth, 244);
   assert.deepStrictEqual(restored.legacySharedControls, {
     collectorFilter: "PI",
     exchangeFilter: "BITFINEX",
@@ -93,6 +95,7 @@ test("persistTimelineLocalState only writes timeline-local payload", () => {
     symbolFilter: "eth",
     viewStartTs: 123,
     viewEndTs: 456,
+    titleWidth: 301,
   });
   assert.strictEqual(
     storage.getItem("aggr.timeline.state.v1"),
@@ -100,6 +103,19 @@ test("persistTimelineLocalState only writes timeline-local payload", () => {
       symbolFilter: "eth",
       viewStartTs: 123,
       viewEndTs: 456,
+      titleWidth: 301,
     }),
   );
+});
+
+test("restoreTimelineLocalState leaves titleWidth null when absent", () => {
+  const storage = createMemoryStorage({
+    "aggr.timeline.state.v1": JSON.stringify({
+      symbolFilter: "sol",
+      viewStartTs: 10,
+      viewEndTs: 20,
+    }),
+  });
+  const restored = restoreTimelineLocalState(storage);
+  assert.strictEqual(restored.titleWidth, null);
 });

@@ -7,6 +7,10 @@
     fetchTimelineMarkets,
     TIMELINE_SYMBOL_MODE,
   } from "./timelineApi.js";
+  import {
+    MIN_TIMELINE_VIEWPORT_WIDTH,
+    TIMELINE_ROW_HEIGHT,
+  } from "./timelineLayout.js";
   import { panTimelineRange, zoomTimelineRange } from "./timelineViewport.js";
   import type {
     TimelineEvent,
@@ -20,8 +24,6 @@
     ts: number;
   }
 
-  const MIN_TIMELINE_WIDTH = 320;
-  const ROW_HEIGHT = 33;
   const PAN_OVERSCROLL_RATIO = 0.01;
 
   export let collector = "";
@@ -36,7 +38,7 @@
 
   let hostEl: HTMLDivElement | null = null;
   let resizeObserver: ResizeObserver | null = null;
-  let timelineWidth = MIN_TIMELINE_WIDTH;
+  let timelineWidth = MIN_TIMELINE_VIEWPORT_WIDTH;
 
   let loading = false;
   let error = "";
@@ -216,7 +218,7 @@
   function updateTimelineWidth(): void {
     if (!hostEl) return;
     timelineWidth = Math.max(
-      MIN_TIMELINE_WIDTH,
+      MIN_TIMELINE_VIEWPORT_WIDTH,
       Math.floor(hostEl.clientWidth),
     );
   }
@@ -236,7 +238,7 @@
           range={{ startTs: market.startTs, endTs: market.endTs }}
           {viewRange}
           {timelineWidth}
-          rowHeight={ROW_HEIGHT}
+          rowHeight={TIMELINE_ROW_HEIGHT}
           showLabel={false}
           showActions={false}
           highlightRange={chartVisibleRange}

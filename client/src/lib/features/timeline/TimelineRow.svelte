@@ -10,6 +10,11 @@
     type TimelineRange,
   } from "./timelineUtils.js";
   import {
+    DEFAULT_TIMELINE_TITLE_WIDTH,
+    MIN_TIMELINE_VIEWPORT_WIDTH,
+    TIMELINE_ROW_HEIGHT,
+  } from "./timelineLayout.js";
+  import {
     drawTimelineVisibleRangeHighlight,
     eventPaintStyle,
     roundedRectPath,
@@ -61,9 +66,9 @@
   export let events: TimelineEvent[] = [];
   export let range: TimelineRange;
   export let viewRange: TimelineRange;
-  export let timelineWidth = 1200;
-  export let rowHeight = 33;
-  export let titleWidth = 310;
+  export let timelineWidth = MIN_TIMELINE_VIEWPORT_WIDTH;
+  export let rowHeight = TIMELINE_ROW_HEIGHT;
+  export let titleWidth = DEFAULT_TIMELINE_TITLE_WIDTH;
   export let showLabel = true;
   export let showActions = true;
   export let highlightRange: TimelineRange | null = null;
@@ -85,15 +90,17 @@
   let lastPointerX = 0;
   let dragDistance = 0;
 
-  $: timelineWidth = Math.max(1, Math.floor(timelineWidth));
+  $: normalizedTimelineWidth = Math.max(1, Math.floor(timelineWidth));
+  $: normalizedRowHeight = Math.max(1, Math.floor(rowHeight));
+  $: normalizedTitleWidth = Math.max(1, Math.floor(titleWidth));
   $: if (canvasEl) {
     // Keep canvas in lockstep with view/market/event updates.
     market;
     events;
     range;
     viewRange;
-    rowHeight;
-    timelineWidth;
+    normalizedRowHeight;
+    normalizedTimelineWidth;
     highlightRange;
 
     drawCanvas();
@@ -104,8 +111,8 @@
     const ctx = canvasEl.getContext("2d");
     if (!ctx) return;
     const dpr = Math.max(1, window.devicePixelRatio || 1);
-    const cssWidth = timelineWidth;
-    const cssHeight = rowHeight;
+    const cssWidth = normalizedTimelineWidth;
+    const cssHeight = normalizedRowHeight;
     const actualWidth = Math.max(1, Math.floor(cssWidth * dpr));
     const actualHeight = Math.max(1, Math.floor(cssHeight * dpr));
     if (canvasEl.width !== actualWidth) canvasEl.width = actualWidth;
@@ -236,10 +243,10 @@
       return;
     }
     const rect = canvasEl.getBoundingClientRect();
-    const x = clampTs(event.clientX - rect.left, 0, timelineWidth);
-    const y = clampTs(event.clientY - rect.top, 0, rowHeight);
+    const x = clampTs(event.clientX - rect.left, 0, normalizedTimelineWidth);
+    const y = clampTs(event.clientY - rect.top, 0, normalizedRowHeight);
     const marker = findMarkerAtPoint(x, y);
-    const clickedTs = toTimelineTs(x, viewRange, timelineWidth);
+    const clickedTs = toTimelineTs(x, viewRange, normalizedTimelineWidth);
     const targetTs = resolveOpenTsFromClick(
       clickedTs,
       { startTs: market.startTs, endTs: market.endTs },
@@ -251,11 +258,11 @@
   function handleWheel(event: WheelEvent): void {
     if (!canvasEl) return;
     const rect = canvasEl.getBoundingClientRect();
-    const x = clampTs(event.clientX - rect.left, 0, timelineWidth);
+    const x = clampTs(event.clientX - rect.left, 0, normalizedTimelineWidth);
 
     if (event.ctrlKey || event.metaKey) {
       event.preventDefault();
-      const centerTs = toTimelineTs(x, viewRange, timelineWidth);
+      const centerTs = toTimelineTs(x, viewRange, normalizedTimelineWidth);
       dispatch("zoom", { centerTs, deltaY: event.deltaY });
       return;
     }
@@ -265,7 +272,7 @@
     if (horizontalDelta !== 0) {
       event.preventDefault();
       const span = Math.max(1, viewRange.endTs - viewRange.startTs);
-      const msPerPx = span / Math.max(1, timelineWidth);
+      const msPerPx = span / Math.max(1, normalizedTimelineWidth);
       dispatch("pan", { deltaMs: Math.round(-horizontalDelta * msPerPx) * -1 });
     }
   }
@@ -295,7 +302,7 @@
     if (!dragMoved || dx === 0) return;
 
     const span = Math.max(1, viewRange.endTs - viewRange.startTs);
-    const msPerPx = span / Math.max(1, timelineWidth);
+    const msPerPx = span / Math.max(1, normalizedTimelineWidth);
     dispatch("pan", { deltaMs: Math.round(dx * msPerPx) * -1 });
   }
 
@@ -321,9 +328,9 @@
   function emitHoverTs(clientX: number, clientY: number): void {
     if (!canvasEl) return;
     const rect = canvasEl.getBoundingClientRect();
-    const x = clampTs(clientX - rect.left, 0, timelineWidth);
-    const y = clampTs(clientY - rect.top, 0, rowHeight);
-    const ts = toTimelineTs(x, viewRange, timelineWidth);
+    const x = clampTs(clientX - rect.left, 0, normalizedTimelineWidth);
+    const y = clampTs(clientY - rect.top, 0, normalizedRowHeight);
+    const ts = toTimelineTs(x, viewRange, normalizedTimelineWidth);
     const marker = findMarkerAtPoint(x, y);
     const hoveredEvent: TimelineHoverEvent | null = marker
       ? {
@@ -356,21 +363,22 @@
 
 {#if showLabel}
   <div
-    class="grid min-w-max items-center hover:bg-slate-900/50"
-    style={`grid-template-columns: ${titleWidth}px ${timelineWidth}px; height: ${rowHeight}px;`}
+    class="grid min-w-max items-center hover:bg-slate-900"
+    style={`grid-template-columns: ${normalizedTitleWidth}px ${normalizedTimelineWidth}px; height: ${normalizedRowHeight}px;`}
   >
     <div
-      class="sticky left-0 z-20 h-full border-r border-slate-800 bg-slate-900/50 px-2 text-slate-200"
+      class="border-r border-slate-800 px-2 text-slate-200 h-full"
     >
       <div class="flex h-full items-center gap-2 text-[13px] tracking-[0.02em]">
-        <div class="flex flex-col text-xs font-mono leading-none">
-          <div class="opacity-50"><span>{market.collector}</span>:<span>{market.exchange}</span></div>
+        <div class="font-mono text-xs leading-none flex items-center flex-wrap">
+          <span class="opacity-50">{market.collector}:</span>
+          <span class="max-w-20 text-ellipsis overflow-hidden inline-block opacity-75">{market.exchange}:</span>
           <strong>{market.symbol}</strong>
         </div>
         {#if showActions}
           <button
             bind:this={actionsButton}
-            class="ml-auto flex h-6 w-6 items-center justify-center rounded-md border-none py-1 text-slate-300 hover:bg-slate-800/50 hover:text-slate-100"
+            class="shrink-0 ml-auto flex h-6 w-6 items-center justify-center rounded-md border-none py-1 text-slate-300 hover:bg-slate-800/50 hover:text-slate-100"
             type="button"
             aria-label="Row actions"
             on:click={handleActionsClick}
@@ -398,7 +406,7 @@
 {:else}
   <div
     class="min-w-max hover:bg-slate-900/50"
-    style={`height: ${rowHeight}px; width: ${timelineWidth}px;`}
+    style={`height: ${normalizedRowHeight}px; width: ${normalizedTimelineWidth}px;`}
   >
     <canvas
       bind:this={canvasEl}

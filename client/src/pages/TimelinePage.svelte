@@ -1,8 +1,8 @@
 <script lang="ts">
   import { get } from "svelte/store";
   import { onDestroy, onMount, tick } from "svelte";
-  import TimelineDebugPanel from "../lib/features/timeline/TimelineDebugPanel.svelte";
   import TimelineEventPopover from "../lib/features/timeline/TimelineEventPopover.svelte";
+  import TimelineFooterRow from "../lib/features/timeline/TimelineFooterRow.svelte";
   import TimelineControls from "../lib/features/timeline/TimelineControls.svelte";
   import TimelineRowActionsMenu from "../lib/features/timeline/TimelineRowActionsMenu.svelte";
   import TimelineRow from "../lib/features/timeline/TimelineRow.svelte";
@@ -43,11 +43,17 @@
     resolveTimelineRestoredScrollTop,
     type TimelineScrollAnchor,
   } from "../lib/features/timeline/timelineScrollAnchor.js";
+  import {
+    clampTimelineTitleWidth,
+    computeTimelineViewportWidth,
+    DEFAULT_TIMELINE_TITLE_WIDTH,
+    MIN_TIMELINE_VIEWPORT_WIDTH,
+    TIMELINE_ROW_HEIGHT,
+  } from "../lib/features/timeline/timelineLayout.js";
   import { computeGlobalRange, groupEventsByMarket, marketKey, toTimelineTs, toTimelineX, type TimelineRange } from "../lib/features/timeline/timelineUtils.js";
   const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
-  const ROW_HEIGHT = 33;
+  const ROW_HEIGHT = TIMELINE_ROW_HEIGHT;
   const OVERSCAN = 8;
-  const LEFT_WIDTH = 180;
   // Intentionally kept in one page: timeline viewport math, row virtualization, and pointer interactions are tightly coupled.
   const PAN_OVERSCROLL_RATIO = 0.01;
   const SYMBOL_INPUT_DEBOUNCE_MS = 180;
@@ -86,9 +92,11 @@
   let actionsMarket: TimelineMarket | null = null;
   let scrollEl: HTMLDivElement | null = null;
   let resizeObserver: ResizeObserver | null = null;
+  let stopTitleResize: (() => void) | null = null;
   let scrollTop = 0;
   let viewportHeight = 0;
-  let timelineViewportWidth = 900;
+  let titleWidth = DEFAULT_TIMELINE_TITLE_WIDTH;
+  let timelineViewportWidth = MIN_TIMELINE_VIEWPORT_WIDTH;
   let startIndex = 0;
   let endIndex = 0;
   let topPadding = 0;
@@ -118,8 +126,8 @@
     }
   }
   $: groupedEvents = groupEventsByMarket(allEvents);
-  $: timelineWidth = Math.max(320, Math.floor(timelineViewportWidth));
-  $: totalGridWidth = LEFT_WIDTH + timelineWidth;
+  $: timelineWidth = Math.max(MIN_TIMELINE_VIEWPORT_WIDTH, Math.floor(timelineViewportWidth));
+  $: totalGridWidth = titleWidth + timelineWidth;
   $: ({ startIndex, endIndex, topPadding, bottomPadding } = computeTimelineVirtualWindow(
     filteredMarkets.length,
     scrollTop,
@@ -129,9 +137,9 @@
   ));
   $: visibleMarkets = filteredMarkets.slice(startIndex, endIndex);
   $: crosshairX = crosshairPx !== null ? crosshairPx : crosshairTs !== null && viewRange ? toTimelineX(crosshairTs, viewRange, timelineWidth) : null;
-  $: crosshairLeft = crosshairX === null ? null : LEFT_WIDTH + crosshairX;
-  $: timelineStartPx = LEFT_WIDTH;
-  $: timelineEndPx = LEFT_WIDTH + timelineWidth;
+  $: crosshairLeft = crosshairX === null ? null : titleWidth + crosshairX;
+  $: timelineStartPx = titleWidth;
+  $: timelineEndPx = titleWidth + timelineWidth;
   $: hasMoreLeft = Boolean(selectedRange && viewRange && viewRange.startTs > selectedRange.startTs);
   $: hasMoreRight = Boolean(selectedRange && viewRange && viewRange.endTs < selectedRange.endTs);
   onMount(() => {
@@ -139,22 +147,79 @@
     restoreTimelineState();
     void initTimeline();
     if (!scrollEl) return;
-    viewportHeight = scrollEl.clientHeight;
-    timelineViewportWidth = Math.max(320, scrollEl.clientWidth - LEFT_WIDTH);
+    updateViewportMetrics();
     resizeObserver = new ResizeObserver(() => {
       if (!scrollEl) return;
-      viewportHeight = scrollEl.clientHeight;
-      timelineViewportWidth = Math.max(320, scrollEl.clientWidth - LEFT_WIDTH);
+      updateViewportMetrics();
       scheduleEventsReload(0);
     });
     resizeObserver.observe(scrollEl);
   });
   onDestroy(() => {
+    stopTitleResize?.();
     persistTimelineState();
     resizeObserver?.disconnect();
     eventAbort?.abort();
     clearEventsReloadTimer();
   });
+  function updateViewportMetrics(): void {
+    if (!scrollEl) return;
+    viewportHeight = scrollEl.clientHeight;
+    const hostWidth = scrollEl.clientWidth;
+    titleWidth = clampTimelineTitleWidth(titleWidth, hostWidth);
+    timelineViewportWidth = computeTimelineViewportWidth(hostWidth, titleWidth);
+    syncCrosshairTsFromPx();
+  }
+  function setTimelineTitleWidth(nextWidth: number, persist = false): void {
+    if (!scrollEl) return;
+    const hostWidth = scrollEl.clientWidth;
+    const clampedTitleWidth = clampTimelineTitleWidth(nextWidth, hostWidth);
+    const nextTimelineViewportWidth = computeTimelineViewportWidth(hostWidth, clampedTitleWidth);
+    if (clampedTitleWidth === titleWidth && nextTimelineViewportWidth === timelineViewportWidth) return;
+    titleWidth = clampedTitleWidth;
+    timelineViewportWidth = nextTimelineViewportWidth;
+    syncCrosshairTsFromPx();
+    if (persist) persistTimelineState();
+  }
+  function handleTitleResizePointerDown(event: PointerEvent): void {
+    if (event.button !== 0 || !scrollEl) return;
+    event.preventDefault();
+    stopTitleResize?.();
+    const hostRect = scrollEl.getBoundingClientRect();
+    const pointerId = event.pointerId;
+    const handleEl = event.currentTarget as HTMLButtonElement | null;
+    const handlePointerMove = (moveEvent: PointerEvent): void => {
+      setTimelineTitleWidth(moveEvent.clientX - hostRect.left);
+    };
+    const stopResize = (): void => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", stopResize);
+      window.removeEventListener("pointercancel", stopResize);
+      if (handleEl) {
+        try {
+          handleEl.releasePointerCapture(pointerId);
+        } catch {
+          // ignore pointer-capture release failures
+        }
+      }
+      stopTitleResize = null;
+      persistTimelineState();
+    };
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", stopResize);
+    window.addEventListener("pointercancel", stopResize);
+    if (handleEl) {
+      try {
+        handleEl.setPointerCapture(pointerId);
+      } catch {
+        // ignore pointer-capture acquisition failures
+      }
+    }
+    stopTitleResize = stopResize;
+  }
+  function handleTitleResizeDoubleClick(): void {
+    setTimelineTitleWidth(DEFAULT_TIMELINE_TITLE_WIDTH, true);
+  }
   async function initTimeline(): Promise<void> {
     await loadOverallRange();
     await loadMarkets();
@@ -537,6 +602,7 @@
       symbolFilter,
       viewStartTs: viewRange?.startTs ?? null,
       viewEndTs: viewRange?.endTs ?? null,
+      titleWidth,
     });
   }
 
@@ -546,6 +612,9 @@
     symbolFilter = restored.symbolFilter;
     persistedViewStartTs = restored.viewStartTs;
     persistedViewEndTs = restored.viewEndTs;
+    if (restored.titleWidth !== null) {
+      titleWidth = restored.titleWidth;
+    }
     if (restored.legacySharedControls) {
       if (typeof restored.legacySharedControls.collectorFilter === "string") {
         collectorFilter = restored.legacySharedControls.collectorFilter;
@@ -578,8 +647,16 @@
   <TimelineControls {collectorFilter} {exchangeFilter} {symbolFilter} {timeframeFilter} {collectorOptions} {exchangeOptions} {timeframeOptions} on:collectorChange={handleCollectorChange} on:exchangeChange={handleExchangeChange} on:symbolInput={handleSymbolInput} on:timeframeChange={handleTimeframeChange} />
 
   <div class="relative flex-1 min-h-0">
+    <div class="pointer-events-none absolute inset-y-0 left-0 z-0 border-r border-slate-800 bg-slate-900/50" style={`width:${titleWidth}px;`}></div>
+    <button
+      type="button"
+      class="absolute inset-y-0 z-20 w-2 -translate-x-1/2 cursor-col-resize touch-none border-none bg-transparent hover:bg-slate-700/25 focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-500"
+      style={`left:${titleWidth}px;`}
+      aria-label="Resize timeline title column"
+      on:pointerdown={handleTitleResizePointerDown}
+      on:dblclick={handleTitleResizeDoubleClick}
+    ></button>
     <div bind:this={scrollEl} class="relative h-full overflow-y-auto overflow-x-hidden" on:scroll={handleScroll}>
-      <div class="pointer-events-none absolute inset-y-0 left-0 z-0 border-r border-slate-800 bg-slate-900/50" style={`width:${LEFT_WIDTH}px;`}></div>
       {#if marketsError}
         <div class="relative z-10 p-3 text-sm text-red-300">{marketsError}</div>
       {:else if !selectedRange || !viewRange}
@@ -592,7 +669,7 @@
         <div class="relative z-10 min-w-max" style={`width: ${totalGridWidth}px;`}>
           <div style={`height: ${topPadding}px;`}></div>
           {#each visibleMarkets as market (rowIdentity(market))}
-            <TimelineRow {market} events={groupedEvents.get(marketKey(market)) ?? []} range={selectedRange} {viewRange} timelineWidth={timelineWidth} rowHeight={ROW_HEIGHT} titleWidth={LEFT_WIDTH} on:open={handleOpen} on:hover={handleHover} on:zoom={handleZoom} on:pan={handlePan} on:actions={handleRowActions} />
+            <TimelineRow {market} events={groupedEvents.get(marketKey(market)) ?? []} range={selectedRange} {viewRange} timelineWidth={timelineWidth} rowHeight={ROW_HEIGHT} {titleWidth} on:open={handleOpen} on:hover={handleHover} on:zoom={handleZoom} on:pan={handlePan} on:actions={handleRowActions} />
           {/each}
           <div style={`height: ${bottomPadding}px;`}></div>
         </div>
@@ -604,7 +681,7 @@
       </div>
     {/if}
     {#if crosshairLeft !== null && crosshairTs !== null && viewRange}
-      <div class="pointer-events-none absolute inset-0 overflow-hidden z-11">
+      <div class="pointer-events-none absolute inset-0 overflow-hidden z-20">
         <div class="absolute bottom-0 top-0 w-px bg-white/30" style={`left: ${crosshairLeft}px;`}></div>
         <div class="absolute bottom-2 -translate-x-1/2 rounded border border-slate-600 bg-slate-900/95 px-2 py-0.5 text-[10px] text-slate-100" style={`left: ${crosshairLeft}px;`}>{formatTimelineTsLabel(crosshairTs)}</div>
       </div>
@@ -615,7 +692,6 @@
     {#if hasMoreRight}
       <div class="z-10 pointer-events-none absolute bottom-0 top-0 w-5 bg-gradient-to-l from-slate-950/90 to-transparent" style={`left:${timelineEndPx - 20}px;`}></div>
     {/if}
-    <TimelineDebugPanel {selectedRange} {viewRange} {crosshairTs} crosshairPx={crosshairX} {timelineWidth} {lastZoomDelta} {lastPanDeltaMs} />
     <TimelineEventPopover hoveredEvent={hoveredEvent} />
     <TimelineRowActionsMenu
       open={actionsOpen}
@@ -627,9 +703,7 @@
       on:actionCompleted={handleActionCompleted}
     />
   </div>
-  {#if loadingEvents}
-    <div class="border-t border-slate-800 bg-slate-900 px-3 py-1 text-[11px] text-slate-300">Loading events...</div>
-  {:else if eventsError}
-    <div class="border-t border-slate-800 bg-slate-900 px-3 py-1 text-[11px] text-red-300">{eventsError}</div>
-  {/if}
+  <div class="overflow-x-hidden">
+    <TimelineFooterRow {titleWidth} {timelineWidth} rowHeight={ROW_HEIGHT} marketCount={filteredMarkets.length} {selectedRange} {viewRange} {loadingEvents} {eventsError} />
+  </div>
 </div>

@@ -5,9 +5,9 @@ import type { Market, Meta, Prefs, Status } from "./types.js";
 const PREF_KEY = "aggr-viewer-prefs";
 
 const defaultPrefs: Prefs = {
-  collector: "PI",
-  exchange: "BITFINEX",
-  symbol: "BTCUSD",
+  collector: "",
+  exchange: "",
+  symbol: "",
   timeframe: "1m",
   timeframes: [...COMMON_TIMEFRAMES],
   start: "",
