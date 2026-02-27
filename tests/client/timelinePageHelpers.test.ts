@@ -6,6 +6,7 @@ import {
   expandRangeWithinBounds,
   filterMarketsWithRange,
   isRangeCoveredBy,
+  restorePersistedViewRange,
   shouldKeepFilterSelection,
 } from "../../client/src/lib/features/timeline/timelinePageHelpers.js";
 import type { TimelineMarket } from "../../client/src/lib/features/timeline/timelineTypes.js";
@@ -51,5 +52,13 @@ test("buildViewportEventsQueryKey includes scope, range, and row ordering", () =
   assert.strictEqual(
     key,
     "1m|PI|BYBIT|btc|100|200|110|190|PI:BYBIT:BTCUSDT,RAM:BITMEX:ETHUSD",
+  );
+});
+
+test("restorePersistedViewRange canonicalizes full-span restores to full overscrolled view", () => {
+  const selected = { startTs: 1_000, endTs: 5_000 };
+  assert.deepStrictEqual(
+    restorePersistedViewRange(selected, 1_000, 5_000, 0.1),
+    { startTs: 500, endTs: 5_500 },
   );
 });

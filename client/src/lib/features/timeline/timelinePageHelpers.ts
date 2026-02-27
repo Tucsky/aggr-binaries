@@ -1,6 +1,6 @@
 import type { TimelineMarketsResponse } from "./timelineApi.js";
 import type { TimelineMarket } from "./timelineTypes.js";
-import { resolveTimelineTimeframe } from "./timelineViewport.js";
+import { buildTimelineFullViewRange, resolveTimelineTimeframe } from "./timelineViewport.js";
 import type { TimelineRange } from "./timelineUtils.js";
 
 export function unique(values: string[]): string[] {
@@ -77,7 +77,9 @@ export function restorePersistedViewRange(
   }
   const candidateSpan = persistedViewEndTs - persistedViewStartTs;
   const fullSpan = selected.endTs - selected.startTs;
-  if (candidateSpan >= fullSpan) return { ...selected };
+  if (candidateSpan >= fullSpan) {
+    return buildTimelineFullViewRange(selected, panOverscrollRatio);
+  }
   const overscrollMs = Math.round(candidateSpan * panOverscrollRatio);
   const minStartTs = selected.startTs - overscrollMs;
   const maxEndTs = selected.endTs + overscrollMs;
