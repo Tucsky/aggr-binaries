@@ -17,18 +17,8 @@ Key flags:
 - `--exchange <EXCHANGE>` optional scope
 - `--symbol <SYMBOL>` optional scope
 
-## Clear workflow
-`clear` uses the same market include-path resolution logic as `index`, then runs scoped reindex.
-
-Command:
-```bash
-npm start -- clear --collector <RAM|PI> --exchange <EXCHANGE> --symbol <SYMBOL>
-```
-
-Behavior:
-- delete `{outDir}/{collector}/{exchange}/{symbol}` if present
-- delete matching market rows from `events`, `files`, and `registry`
-- reindex only the resolved market subtree paths under `root`
+Related task:
+- Scoped market reset and reindex is documented in [clear.md](clear.md).
 
 ## Input contract
 Path layout:
@@ -58,6 +48,36 @@ Path layout:
 - Insert rows with append-only `INSERT OR IGNORE` semantics.
 - Update `indexed_market_ranges` incrementally during inserted-file batches.
 - No processed flags are written.
+
+### Mermaid flow (`index`)
+```mermaid
+flowchart TD
+  A["CLI index<br/>fn: runIndex"] --> B["Open DB and validate schema<br/>fn: openDatabase / migrate / assertSchema"]
+  B --> C["ensureRoot configured root<br/>fn: db.ensureRoot"]
+  C --> D["walkFiles over root and include paths<br/>fn: walkFiles"]
+  D --> E[For each file entry]
+  E --> F["classifyPath to collector exchange symbol start_ts<br/>fn: classifyPath"]
+  F -->|invalid path or filename| G[stats.skipped++ and log first 50]
+  F -->|valid indexed row| H[Append row to batch]
+  H --> I{batch size reached?}
+  I -->|no| J[Continue walk]
+  I -->|yes| K["db.insertFiles batch<br/>fn: insertMany"]
+  K --> L[INSERT OR IGNORE into files]
+  L --> M["Aggregate touched market min max start_ts<br/>fn: accumulateIndexedMarketRange"]
+  M --> N[Upsert indexed_market_ranges per touched market]
+  N --> O[Update inserted and existing counts and clear batch]
+  G --> P{"seen mod 10000 == 0?<br/>fn: logProgress"}
+  J --> P
+  O --> P
+  P -->|yes| Q[Emit progress line]
+  P -->|no| E
+  Q --> E
+  E --> R{walk complete?}
+  R -->|no| E
+  R -->|yes and batch not empty| S[Flush final batch via db.insertFiles]
+  R -->|yes and batch empty| T["Clear progress and return stats<br/>fn: runIndex return"]
+  S --> T
+```
 
 ## Determinism and schema policy
 - Same input tree + config => same indexed set.

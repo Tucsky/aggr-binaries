@@ -86,6 +86,56 @@ Gap detection is adaptive per market:
 - No per-trade DB writes.
 - Periodic checkpoint flushes keep runs resumable.
 
+## Mermaid flow
+```mermaid
+flowchart TD
+  A["CLI process<br/>fn: runProcess"] --> B["Resolve collectors from flags or files table<br/>fn: resolveCollectors"]
+  B --> C["Count candidate files and markets for scope<br/>fn: countCandidateFiles / countMarkets"]
+  C --> D{Any candidate files?}
+  D -->|no| E[Log no files and exit]
+  D -->|yes| F["Iterate markets collector exchange symbol sorted<br/>fn: iterateMarkets"]
+
+  F --> G["Initialize market accumulator<br/>fn: startAccumulatorForMarket"]
+  G --> H["Read companion unless force and init gap tracker<br/>fn: readCompanion / createGapTracker"]
+  H --> I{Companion present but binary missing?}
+  I -->|yes| J[Disable resume and rebuild full market]
+  I -->|no| K[Compute minStartTs and resume slot]
+  J --> K
+  K --> L["Iterate market files ordered by start_ts and relative_path<br/>fn: iterateFilesForMarket"]
+
+  L --> M["Open file stream plain or gzip<br/>fn: streamFile / makeStream"]
+  M --> N{Stream open failed ENOENT?}
+  N -->|yes| O[Fail fast stale-index error for market file]
+  N -->|no| P["Read lines and parse trade rows<br/>fn: parseTradeLine"]
+  P --> Q{Trade parsed?}
+  Q -->|no| R[Record grouped parse reject event range]
+  Q -->|yes| S["Run adaptive gap detection on non-liquidation rows<br/>fn: recordGap"]
+  S --> T{Trade before resume slot?}
+  T -->|yes| P
+  T -->|no| U["Accumulate candle bucket<br/>fn: accumulate"]
+  U --> P
+  R --> P
+  P --> V["Finish grouped file event ranges<br/>fn: EventAccumulator.finish"]
+  V --> W["Replace file events in DB delete then insert<br/>fn: db.deleteEventsForFile / db.insertEvents"]
+  W --> X[Update in-memory stats]
+  X --> Y{Flush interval elapsed?}
+  Y -->|no| L
+  Y -->|yes| Z["flushMarketOutput checkpoint<br/>fn: flushMarketOutput"]
+
+  Z --> AA{Closed range available to flush?}
+  AA -->|no| L
+  AA -->|yes| AB["Write or rewrite binary range in chunks<br/>fn: writeBinaryRange"]
+  AB --> AC["Write companion json and upsert registry row<br/>fn: writeCompanion / db.upsertRegistry"]
+  AC --> AD["Prune old buckets and advance flush state<br/>fn: pruneBucketsBefore"]
+  AD --> L
+
+  L --> AE[Final flush for market]
+  AE --> AF[Next market]
+  AF --> AG{More markets?}
+  AG -->|yes| F
+  AG -->|no| AH["Log final totals and clear progress<br/>fn: runProcess return"]
+```
+
 ## Failure handling
 - SQLite write contention (`SQLITE_BUSY`/`SQLITE_LOCKED`) retries with bounded backoff.
 - If an indexed `files` row points to a missing input path on disk, process fails fast with an explicit stale-index error for that market/file.

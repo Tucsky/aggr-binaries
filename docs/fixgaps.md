@@ -44,37 +44,37 @@ For each grouped `(root_id, relative_path)`:
 ### Mermaid flow
 ```mermaid
 flowchart TD
-  A[CLI fixgaps] --> B[Build queue from events gap rows]
-  B --> C[Group rows by root_id + relative_path]
-  C --> D[processFileGapBatch for each file group]
+  A["CLI fixgaps<br/>fn: runFixGaps"] --> B["Build queue from events gap rows<br/>fn: iterateGapFixEvents"]
+  B --> C["Group rows by root_id + relative_path<br/>fn: runFixGaps grouping loop"]
+  C --> D["processFileGapBatch for each file group<br/>fn: processFileGapBatch"]
 
-  D --> E[Resolve adapter for exchange]
+  D --> E["Resolve adapter for exchange<br/>fn: adapterRegistry.getAdapter"]
   E -->|missing| E1[Mark rows missing_adapter]
-  E -->|found| F[Extract windows from event payload gap_end_ts-gap_ms -> gap_end_ts]
-  F --> G[Mark unresolved windows adapter_error]
+  E -->|found| F["Extract windows from event payload gap_end_ts-gap_ms -> gap_end_ts<br/>fn: extractResolvableWindows"]
+  F --> G["Mark unresolved windows adapter_error<br/>fn: markUnresolvedWindowEvents"]
   G --> H{Any resolvable windows?}
   H -->|no| HX[Return]
-  H -->|yes| I[Call adapter.recover with onRecoveredBatch callback]
+  H -->|yes| I["Call adapter.recover with onRecoveredBatch callback<br/>fn: recoverTradesForWindows / adapter.recover"]
 
-  I --> J[Accumulator ingests callback batches]
+  I --> J["Accumulator ingests callback batches<br/>fn: ingestStreamingRecoveredBatch"]
   J --> K[Adapter returns recovered tail array]
-  K --> L[Accumulator ingests returned tail]
+  K --> L["Accumulator ingests returned tail<br/>fn: finalizeStreamingRecoveredBatches"]
   L --> M{dry-run?}
   M -->|yes| N[Keep counters only]
-  M -->|no| O[Flush chunks <= 1,000,000]
-  O --> P[Resolve target file by last-trade timestamp]
-  P --> Q[Ensure file exists + index file row]
-  Q --> R[Merge recovered trades into raw file]
-  R --> S[Patch base timeframe binary]
-  S --> T[Merge dirty market ts range]
+  M -->|no| O["Flush chunks <= 1,000,000<br/>fn: mergeAndPatchRecoveredTradesFlushBatch"]
+  O --> P["Resolve target file by last-trade timestamp<br/>fn: resolveFlushTargetFile"]
+  P --> Q["Ensure file exists + index file row<br/>fn: ensureFlushTargetFile"]
+  Q --> R["Merge recovered trades into raw file<br/>fn: mergeRecoveredTradesIntoFile"]
+  R --> S["Patch base timeframe binary<br/>fn: patchBinariesForRecoveredTrades"]
+  S --> T["Merge dirty market ts range<br/>fn: mergeDirtyRange / mergeDirtyMarketRange"]
 
-  N --> Z[Mark resolvable rows fixed with recovered counts]
+  N --> Z["Mark resolvable rows fixed with recovered counts<br/>fn: markResolvedWindowEvents"]
   T --> Z
   Z --> AA[Return dirty range for market]
 
   D --> AB[Next file group]
   AB --> AC{Any dirty ranges?}
-  AC -->|yes| AD[Roll up higher timeframes once per market]
+  AC -->|yes| AD["Roll up higher timeframes once per market<br/>fn: rollupHigherTimeframesFromBase"]
   AC -->|no| AE[Skip rollup]
   AD --> AF[Print final stats]
   AE --> AF
