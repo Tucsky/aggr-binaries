@@ -7,6 +7,7 @@ Core commands:
 - `process`: generate gap-aware binaries + companions
 - `registry`: rebuild derived registry rows from companions
 - `fixgaps`: recover missing trades from gap events and patch outputs
+- `clear`: delete one market's outputs/state and reindex only that market
 
 Core design constraints:
 - determinism (`same input => same output`)
@@ -16,6 +17,7 @@ Core design constraints:
 ## Documentation map
 Task docs hold detailed behavior and contracts:
 - [Index task](docs/index.md)
+- [Clear workflow](docs/index.md#clear-workflow)
 - [Process task](docs/process.md)
 - [Registry task](docs/registry.md)
 - [Fixgaps task](docs/fixgaps.md)
@@ -60,6 +62,7 @@ npm start -- process --collector RAM --exchange BITMEX --symbol SOLUSD --timefra
 - `process`: [docs/process.md](docs/process.md)
 - `registry`: [docs/registry.md](docs/registry.md)
 - `fixgaps`: [docs/fixgaps.md](docs/fixgaps.md)
+- `clear`: [docs/index.md](docs/index.md) (`Clear workflow`)
 
 Shared flags:
 - `-r, --root <path>`

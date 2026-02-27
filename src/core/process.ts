@@ -303,7 +303,6 @@ async function processByMarket(opts: {
       /*console.log(
         `[${acc.collector}/${acc.exchange}/${acc.symbol}/${timeframe}] stream file=${file.relative_path} start_ts=${file.start_ts} skipBefore=${resumeSlot}`,
       );*/
-      db.deleteEventsForFile(file.root_id, file.relative_path);
       const { linesRead, tradesKept, newBuckets, events } = await streamFile({
         file,
         acc,
@@ -311,6 +310,7 @@ async function processByMarket(opts: {
         timeframeMs,
         skipBeforeTs: resumeSlot,
       });
+      db.deleteEventsForFile(file.root_id, file.relative_path);
       if (events.length) {
         db.insertEvents(events);
       }
@@ -364,7 +364,19 @@ async function streamFile(opts: {
   const fullPath = path.join(root, file.relative_path);
   const fileStartTs = file.start_ts;
 
-  const stream = await makeStream(fullPath);
+  let stream: NodeJS.ReadableStream;
+  try {
+    stream = await makeStream(fullPath);
+  } catch (err) {
+    throw mapInputStreamError(err, {
+      collector: acc.collector,
+      exchange: acc.exchange,
+      symbol: acc.symbol,
+      root,
+      relativePath: file.relative_path,
+      fullPath,
+    });
+  }
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
   const eventAccumulator = new EventAccumulator({
     rootId: file.root_id,
@@ -461,6 +473,27 @@ async function streamFile(opts: {
   const events = eventAccumulator.finish();
 
   return { linesRead, tradesKept, newBuckets, events };
+}
+
+function mapInputStreamError(
+  err: unknown,
+  ctx: {
+    collector: string;
+    exchange: string;
+    symbol: string;
+    root: string;
+    relativePath: string;
+    fullPath: string;
+  },
+): Error {
+  const code = (err as { code?: string } | null)?.code;
+  if (code === "ENOENT") {
+    const market = `${ctx.collector}/${ctx.exchange}/${ctx.symbol}`;
+    return new Error(
+      `[process] indexed input file missing on disk market=${market} relative_path=${ctx.relativePath} full_path=${ctx.fullPath} root=${ctx.root}; index is stale versus input files (re-run index for this market or restore the missing file).`,
+    );
+  }
+  return err instanceof Error ? err : new Error(String(err));
 }
 
 async function makeStream(filePath: string) {

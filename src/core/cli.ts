@@ -1,3 +1,4 @@
+import { runClear } from "./clear.js";
 import { loadConfig, printHelp } from "./config.js";
 import { openDatabase } from "./db.js";
 import { runFixGaps } from "./gaps/index.js";
@@ -6,7 +7,7 @@ import { runProcess } from "./process.js";
 import { runRegistry } from "./registry.js";
 
 interface ParsedArgs {
-  command: "index" | "process" | "registry" | "fixgaps";
+  command: "index" | "process" | "registry" | "fixgaps" | "clear";
   overrides: {
     root?: string;
     dbPath?: string;
@@ -42,7 +43,13 @@ function parseArgs(argv: string[]): ParsedArgs {
   // command is first non-flag argument
   const args = argv.slice(2);
   if (args[0] && !args[0].startsWith("-")) {
-    if (args[0] === "index" || args[0] === "process" || args[0] === "registry" || args[0] === "fixgaps") {
+    if (
+      args[0] === "index" ||
+      args[0] === "process" ||
+      args[0] === "registry" ||
+      args[0] === "fixgaps" ||
+      args[0] === "clear"
+    ) {
       parsed.command = args[0];
       args.shift();
     } else {
@@ -200,6 +207,16 @@ async function main() {
         dryRun: parsed.fixgaps.dryRun,
         id: parsed.fixgaps.id,
       });
+    }
+    if (parsed.command === "clear") {
+      console.log(
+        `Clearing market state collector=${config.collector ?? "?"} exchange=${config.exchange ?? "?"} symbol=${config.symbol ?? "?"}`,
+      );
+      const stats = await runClear(config, db);
+      const duration = ((Date.now() - start) / 1000).toFixed(1);
+      console.log(
+        `Clear completed in ${duration}s. outputsDeleted=${stats.outputsDeleted} eventsDeleted=${stats.eventsDeleted} filesDeleted=${stats.filesDeleted} registryDeleted=${stats.registryDeleted} seen=${stats.seen} inserted=${stats.inserted} existing=${stats.existing} conflicts=${stats.conflicts} skipped=${stats.skipped}`,
+      );
     }
   } catch (err) {
     console.error("Operation failed:", err);

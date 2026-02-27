@@ -87,15 +87,16 @@ Commands:
   process    Build/update binaries from indexed files (resume supported)
   registry   Rebuild registry table from existing companions
   fixgaps    Recover missing trades from gap events and patch outputs
+  clear      Delete one market's outputs + DB rows, then reindex that market
 
 Options (override config file):
   -r, --root <path>         Root input directory (default: ${DEFAULTS.root})
   -d, --db <path>           SQLite index path (default: ${DEFAULTS.dbPath})
   -b, --batch <n>           Inserts per transaction (default: ${DEFAULTS.batchSize})
   --include <path>          Relative path (under root) to scan; repeatable (default: whole root)
-  --collector <RAM|PI>      Processing: target collector
-  --exchange <name>         Processing: target exchange (normalized, e.g., BITFINEX)
-  --symbol <name>           Processing: target symbol (normalized, e.g., BTCUSD)
+  --collector <RAM|PI>      Process/Clear: target collector (required for clear)
+  --exchange <name>         Process/Clear: target exchange (required for clear)
+  --symbol <name>           Process/Clear: target symbol (required for clear)
   --outdir <path>           Processing: output directory (default: ${DEFAULTS.outDir})
   --force                   Processing: ignore processed-files cache
   --timeframe <tf>          Processing: timeframe string (e.g., 1m, 5m, 1h) (default: ${DEFAULTS.timeframe})

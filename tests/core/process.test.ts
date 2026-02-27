@@ -6,6 +6,7 @@ import { gzipSync } from "node:zlib";
 import { test } from "node:test";
 import type { Config } from "../../src/core/config.js";
 import type { Db } from "../../src/core/db.js";
+import { EventType } from "../../src/core/events.js";
 import type { CompanionMetadata } from "../../src/core/model.js";
 import { openDatabase } from "../../src/core/db.js";
 import { classifyPath } from "../../src/core/normalize.js";
@@ -345,6 +346,49 @@ test("process gap detection ignores liquidation rows", async () => {
       gap_ms: 50_000,
       gap_end_ts: LIQ_GAP_BASE_TS + 50_310,
     });
+  } finally {
+    db.close();
+  }
+});
+
+test("process fails fast on indexed input missing on disk without mutating file events", async () => {
+  const fixture = await createFixture();
+  const dbPath = path.join(fixture.baseDir, "missing-input.sqlite");
+  const db = openDatabase(dbPath);
+  const config = buildConfig(fixture.root, fixture.outDir, dbPath);
+
+  try {
+    insertFixtureFiles(db, fixture.root, fixture.fileRelatives);
+    const rootId = db.ensureRoot(fixture.root);
+    const missingRelative = fixture.fileRelatives[0];
+    db.insertEvents([
+      {
+        rootId,
+        relativePath: missingRelative,
+        collector: MARKET.collector,
+        exchange: MARKET.exchange,
+        symbol: MARKET.symbol,
+        type: EventType.Gap,
+        startLine: 1,
+        endLine: 1,
+        gapMs: 60_000,
+        gapMiss: 1,
+        gapEndTs: 1_704_067_200_000,
+      },
+    ]);
+    await fs.unlink(path.join(fixture.root, missingRelative));
+
+    await assert.rejects(runProcess(config, db), (err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      return message.includes("indexed input file missing on disk") && message.includes(missingRelative);
+    });
+    const eventRow = db.db
+      .prepare("SELECT COUNT(*) AS cnt FROM events WHERE root_id = :rootId AND relative_path = :relativePath;")
+      .get({ rootId, relativePath: missingRelative }) as { cnt: number };
+    assert.strictEqual(eventRow.cnt, 1);
+
+    const outputBin = path.join(fixture.outDir, MARKET.collector, MARKET.exchange, MARKET.symbol, `${TIMEFRAME}.bin`);
+    await assert.rejects(fs.stat(outputBin), (err: unknown) => (err as { code?: string } | null)?.code === "ENOENT");
   } finally {
     db.close();
   }

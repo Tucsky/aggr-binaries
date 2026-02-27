@@ -17,6 +17,19 @@ Key flags:
 - `--exchange <EXCHANGE>` optional scope
 - `--symbol <SYMBOL>` optional scope
 
+## Clear workflow
+`clear` uses the same market include-path resolution logic as `index`, then runs scoped reindex.
+
+Command:
+```bash
+npm start -- clear --collector <RAM|PI> --exchange <EXCHANGE> --symbol <SYMBOL>
+```
+
+Behavior:
+- delete `{outDir}/{collector}/{exchange}/{symbol}` if present
+- delete matching market rows from `events`, `files`, and `registry`
+- reindex only the resolved market subtree paths under `root`
+
 ## Input contract
 Path layout:
 ```text

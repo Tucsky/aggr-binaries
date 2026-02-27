@@ -1,13 +1,11 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import type http from "node:http";
 import { loadConfig, type CliOverrides, type Config } from "../core/config.js";
+import { resolveIndexIncludePaths, runClear } from "../core/clear.js";
 import type { Db } from "../core/db.js";
 import { runFixGaps } from "../core/gaps/index.js";
 import { runIndex } from "../core/indexer.js";
 import { runProcess } from "../core/process.js";
 import { runRegistry } from "../core/registry.js";
-import { clearTimelineMarket } from "./timelineMarketClear.js";
 
 const MAX_REQUEST_BYTES = 16_384;
 
@@ -184,19 +182,7 @@ export async function executeTimelineAction(
   }
 
   if (payload.action === TimelineMarketAction.Clear) {
-    const clearStats = await clearTimelineMarket(db, config.outDir, {
-      collector: payload.collector,
-      exchange: payload.exchange,
-      symbol: payload.symbol,
-    });
-    const includePaths = await resolveIndexIncludePaths(config.root, payload.collector, payload.exchange, payload.symbol);
-    const indexStats = await deps.runIndex(
-      {
-        ...config,
-        includePaths,
-      },
-      db,
-    );
+    const clearStats = await runClear(config, db, { runIndex: deps.runIndex });
     return {
       action: payload.action,
       market: buildResultMarket(payload),
@@ -206,11 +192,11 @@ export async function executeTimelineAction(
         eventsDeleted: clearStats.eventsDeleted,
         filesDeleted: clearStats.filesDeleted,
         registryDeleted: clearStats.registryDeleted,
-        seen: indexStats.seen,
-        inserted: indexStats.inserted,
-        existing: indexStats.existing,
-        conflicts: indexStats.conflicts,
-        skipped: indexStats.skipped,
+        seen: clearStats.seen,
+        inserted: clearStats.inserted,
+        existing: clearStats.existing,
+        conflicts: clearStats.conflicts,
+        skipped: clearStats.skipped,
       },
     };
   }
@@ -318,57 +304,6 @@ function buildResultMarket(payload: TimelineActionsRequestPayload): TimelineActi
     symbol: payload.symbol,
     timeframe: payload.timeframe,
   };
-}
-
-async function resolveIndexIncludePaths(
-  root: string,
-  collector: string,
-  exchange: string,
-  symbol: string,
-): Promise<string[]> {
-  const out = new Set<string>();
-
-  const collectorRoot = path.join(root, collector);
-  const baseRoot = (await isDirectory(collectorRoot)) ? collectorRoot : root;
-  const directPath = path.join(baseRoot, exchange, symbol);
-  if (await isDirectory(directPath)) {
-    out.add(path.relative(root, directPath));
-  }
-
-  const bucketDirs = await readSubdirs(baseRoot);
-  for (const bucket of bucketDirs) {
-    const candidate = path.join(baseRoot, bucket, exchange, symbol);
-    if (await isDirectory(candidate)) {
-      out.add(path.relative(root, candidate));
-    }
-  }
-
-  if (!out.size) {
-    if (baseRoot === collectorRoot) {
-      out.add(path.join(collector, exchange, symbol));
-    }
-    out.add(path.join(exchange, symbol));
-  }
-
-  return [...out].sort();
-}
-
-async function readSubdirs(root: string): Promise<string[]> {
-  try {
-    const entries = await fs.readdir(root, { withFileTypes: true });
-    return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
-  } catch {
-    return [];
-  }
-}
-
-async function isDirectory(absPath: string): Promise<boolean> {
-  try {
-    const stat = await fs.stat(absPath);
-    return stat.isDirectory();
-  } catch {
-    return false;
-  }
 }
 
 function writeJson(res: http.ServerResponse, status: number, payload: unknown): void {

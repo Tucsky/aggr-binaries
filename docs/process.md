@@ -88,4 +88,6 @@ Gap detection is adaptive per market:
 
 ## Failure handling
 - SQLite write contention (`SQLITE_BUSY`/`SQLITE_LOCKED`) retries with bounded backoff.
+- If an indexed `files` row points to a missing input path on disk, process fails fast with an explicit stale-index error for that market/file.
+- On that missing-input failure, no further files are processed and existing events for the failing file are left unchanged.
 - If binary/companion persisted but registry missed update (interruption), run `registry` for affected scope.
