@@ -3,6 +3,7 @@ import type { TimelineRange } from "./timelineUtils.js";
 export const DEFAULT_MIN_VIEW_SPAN_MS = 60_000;
 export const DEFAULT_ZOOM_SENSITIVITY = 0.008;
 export const DEFAULT_PAN_OVERSCROLL_RATIO = 0;
+const MAX_TIMELINE_OVERSCROLL_RATIO = 0.49;
 
 export function resolveTimelineTimeframe(current: string, options: string[]): string {
   if (current && options.includes(current)) return current;
@@ -28,48 +29,27 @@ export function zoomTimelineRange(
   deltaY: number,
   minViewSpanMs = DEFAULT_MIN_VIEW_SPAN_MS,
   zoomSensitivity = DEFAULT_ZOOM_SENSITIVITY,
+  overscrollRatio = DEFAULT_PAN_OVERSCROLL_RATIO,
 ): TimelineRange {
+  const clampedOverscrollRatio = clampOverscrollRatio(overscrollRatio);
   const currentSpan = Math.max(1, viewRange.endTs - viewRange.startTs);
   const fullSpan = Math.max(1, selectedRange.endTs - selectedRange.startTs);
+  const maxSpan = resolveMaxViewSpan(fullSpan, clampedOverscrollRatio);
   const factor = Math.exp(deltaY * zoomSensitivity);
   let nextSpan = Math.round(currentSpan * factor);
   if (nextSpan < minViewSpanMs) nextSpan = minViewSpanMs;
-  if (nextSpan > fullSpan) nextSpan = fullSpan;
+  if (nextSpan > maxSpan) nextSpan = maxSpan;
+  if (nextSpan >= fullSpan) {
+    return alignViewSpanAroundSelectedRange(selectedRange, nextSpan, maxSpan);
+  }
 
   const ratioRaw = (centerTs - viewRange.startTs) / currentSpan;
   const ratio = Math.min(1, Math.max(0, ratioRaw));
   let nextStart = Math.floor(centerTs - ratio * nextSpan);
   let nextEnd = nextStart + nextSpan;
-  if (nextStart < selectedRange.startTs) {
-    const delta = selectedRange.startTs - nextStart;
-    nextStart += delta;
-    nextEnd += delta;
-  }
-  if (nextEnd > selectedRange.endTs) {
-    const delta = nextEnd - selectedRange.endTs;
-    nextStart -= delta;
-    nextEnd -= delta;
-  }
-  return {
-    startTs: Math.max(selectedRange.startTs, nextStart),
-    endTs: Math.min(selectedRange.endTs, nextEnd),
-  };
-}
-
-export function panTimelineRange(
-  selectedRange: TimelineRange,
-  viewRange: TimelineRange,
-  deltaMs: number,
-  overscrollRatio = DEFAULT_PAN_OVERSCROLL_RATIO,
-): TimelineRange {
-  if (deltaMs === 0) return viewRange;
-  const span = Math.max(1, viewRange.endTs - viewRange.startTs);
-  const clampedOverscrollRatio = Math.max(0, overscrollRatio);
-  const overscrollMs = Math.round(span * clampedOverscrollRatio);
+  const overscrollMs = Math.round(nextSpan * clampedOverscrollRatio);
   const minStartTs = selectedRange.startTs - overscrollMs;
   const maxEndTs = selectedRange.endTs + overscrollMs;
-  let nextStart = viewRange.startTs + deltaMs;
-  let nextEnd = viewRange.endTs + deltaMs;
   if (nextStart < minStartTs) {
     const delta = minStartTs - nextStart;
     nextStart += delta;
@@ -83,6 +63,81 @@ export function panTimelineRange(
   return {
     startTs: nextStart,
     endTs: nextEnd,
+  };
+}
+
+export function panTimelineRange(
+  selectedRange: TimelineRange,
+  viewRange: TimelineRange,
+  deltaMs: number,
+  overscrollRatio = DEFAULT_PAN_OVERSCROLL_RATIO,
+): TimelineRange {
+  const clampedOverscrollRatio = clampOverscrollRatio(overscrollRatio);
+  const selectedSpan = Math.max(1, selectedRange.endTs - selectedRange.startTs);
+  const span = Math.max(1, viewRange.endTs - viewRange.startTs);
+  const maxSpan = resolveMaxViewSpan(selectedSpan, clampedOverscrollRatio);
+  const clampedSpan = span > maxSpan ? maxSpan : span;
+  if (clampedSpan >= selectedSpan) {
+    // Once the viewport reaches the data span, keep it centered and deterministic.
+    return alignViewSpanAroundSelectedRange(selectedRange, clampedSpan, maxSpan);
+  }
+  if (deltaMs === 0) return viewRange;
+  const overscrollMs = Math.round(clampedSpan * clampedOverscrollRatio);
+  const minStartTs = selectedRange.startTs - overscrollMs;
+  const maxEndTs = selectedRange.endTs + overscrollMs;
+  let nextStart = viewRange.startTs + deltaMs;
+  let nextEnd = nextStart + clampedSpan;
+  if (nextStart < minStartTs) {
+    const delta = minStartTs - nextStart;
+    nextStart += delta;
+    nextEnd += delta;
+  }
+  if (nextEnd > maxEndTs) {
+    const delta = nextEnd - maxEndTs;
+    nextStart -= delta;
+    nextEnd -= delta;
+  }
+  return {
+    startTs: nextStart,
+    endTs: nextEnd,
+  };
+}
+
+export function buildTimelineFullViewRange(
+  selectedRange: TimelineRange,
+  overscrollRatio = DEFAULT_PAN_OVERSCROLL_RATIO,
+): TimelineRange {
+  const selectedSpan = Math.max(1, selectedRange.endTs - selectedRange.startTs);
+  const clampedOverscrollRatio = clampOverscrollRatio(overscrollRatio);
+  const maxSpan = resolveMaxViewSpan(selectedSpan, clampedOverscrollRatio);
+  return alignViewSpanAroundSelectedRange(selectedRange, maxSpan, maxSpan);
+}
+
+function clampOverscrollRatio(overscrollRatio: number): number {
+  if (!Number.isFinite(overscrollRatio) || overscrollRatio <= 0) return 0;
+  if (overscrollRatio >= MAX_TIMELINE_OVERSCROLL_RATIO) return MAX_TIMELINE_OVERSCROLL_RATIO;
+  return overscrollRatio;
+}
+
+function resolveMaxViewSpan(selectedSpan: number, overscrollRatio: number): number {
+  if (overscrollRatio <= 0) return selectedSpan;
+  const rawMaxSpan = Math.round(selectedSpan / (1 - overscrollRatio * 2));
+  return rawMaxSpan >= selectedSpan ? rawMaxSpan : selectedSpan;
+}
+
+function alignViewSpanAroundSelectedRange(
+  selectedRange: TimelineRange,
+  requestedSpan: number,
+  maxSpan: number,
+): TimelineRange {
+  const selectedSpan = Math.max(1, selectedRange.endTs - selectedRange.startTs);
+  const targetSpan = Math.max(selectedSpan, Math.min(maxSpan, Math.round(requestedSpan)));
+  const extraSpan = targetSpan - selectedSpan;
+  const leftPad = Math.floor(extraSpan / 2);
+  const rightPad = extraSpan - leftPad;
+  return {
+    startTs: selectedRange.startTs - leftPad,
+    endTs: selectedRange.endTs + rightPad,
   };
 }
 

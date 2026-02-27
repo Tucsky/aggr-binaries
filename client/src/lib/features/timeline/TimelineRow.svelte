@@ -25,6 +25,10 @@
     PROCESSED_SOURCE_STYLE,
     resolveTimelineSourceRange,
   } from "./timelineRowSource.js";
+  import {
+    computeTimelinePanDeltaMsFromPointer,
+    computeTimelinePanDeltaMsFromWheel,
+  } from "./timelineSurfaceInteraction.js";
   import { resolveOpenTsFromClick } from "./timelineRowClick.js";
   import type { TimelineEvent, TimelineHoverEvent, TimelineMarket } from "./timelineTypes.js";
 
@@ -271,9 +275,13 @@
       Math.abs(event.deltaX) >= Math.abs(event.deltaY) ? event.deltaX : 0;
     if (horizontalDelta !== 0) {
       event.preventDefault();
-      const span = Math.max(1, viewRange.endTs - viewRange.startTs);
-      const msPerPx = span / Math.max(1, normalizedTimelineWidth);
-      dispatch("pan", { deltaMs: Math.round(-horizontalDelta * msPerPx) * -1 });
+      dispatch("pan", {
+        deltaMs: computeTimelinePanDeltaMsFromWheel(
+          horizontalDelta,
+          viewRange,
+          normalizedTimelineWidth,
+        ),
+      });
     }
   }
 
@@ -300,10 +308,9 @@
       dragMoved = true;
     }
     if (!dragMoved || dx === 0) return;
-
-    const span = Math.max(1, viewRange.endTs - viewRange.startTs);
-    const msPerPx = span / Math.max(1, normalizedTimelineWidth);
-    dispatch("pan", { deltaMs: Math.round(dx * msPerPx) * -1 });
+    dispatch("pan", {
+      deltaMs: computeTimelinePanDeltaMsFromPointer(dx, viewRange, normalizedTimelineWidth),
+    });
   }
 
   function handlePointerUp(event: PointerEvent): void {

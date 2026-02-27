@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   clampTs,
+  computeGlobalRange,
   eventKind,
   findTimelineEventWindow,
   groupEventsByMarket,
@@ -10,6 +11,7 @@ import {
   type TimelineRange,
 } from "../../client/src/lib/features/timeline/timelineUtils.js";
 import type { TimelineEvent } from "../../client/src/lib/features/timeline/timelineTypes.js";
+import type { TimelineMarket } from "../../client/src/lib/features/timeline/timelineTypes.js";
 
 test("toTimelineX and toTimelineTs map deterministically and clamp to bounds", () => {
   const range: TimelineRange = { startTs: 1_000, endTs: 11_000 };
@@ -38,6 +40,31 @@ test("clampTs enforces min/max range", () => {
   assert.strictEqual(clampTs(5, 10, 20), 10);
   assert.strictEqual(clampTs(25, 10, 20), 20);
   assert.strictEqual(clampTs(15, 10, 20), 15);
+});
+
+test("computeGlobalRange returns raw bounds across all markets", () => {
+  const markets: TimelineMarket[] = [
+    {
+      collector: "PI",
+      exchange: "BYBIT",
+      symbol: "BTCUSDT",
+      timeframe: "1m",
+      startTs: 10,
+      endTs: 70,
+    },
+    {
+      collector: "PI",
+      exchange: "BINANCE",
+      symbol: "ETHUSDT",
+      timeframe: "1m",
+      startTs: 100,
+      endTs: 200,
+    },
+  ];
+  assert.deepStrictEqual(computeGlobalRange(markets), {
+    startTs: 10,
+    endTs: 200,
+  });
 });
 
 test("groupEventsByMarket groups rows and preserves deterministic order by ts/id", () => {

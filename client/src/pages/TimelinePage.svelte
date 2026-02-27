@@ -51,6 +51,11 @@
     TIMELINE_ROW_HEIGHT,
   } from "../lib/features/timeline/timelineLayout.js";
   import { computeGlobalRange, groupEventsByMarket, marketKey, toTimelineTs, toTimelineX, type TimelineRange } from "../lib/features/timeline/timelineUtils.js";
+  import {
+    computeTimelinePanDeltaMsFromPointer,
+    computeTimelinePanDeltaMsFromWheel,
+    resolveTimelineSurfaceCoordinates,
+  } from "../lib/features/timeline/timelineSurfaceInteraction.js";
   const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
   const ROW_HEIGHT = TIMELINE_ROW_HEIGHT;
   const OVERSCAN = 8;
@@ -85,6 +90,10 @@
   let crosshairTs: number | null = null;
   let crosshairPx: number | null = null;
   let hoveredEvent: TimelineHoverEvent | null = null;
+  let surfacePointerActive = false;
+  let surfacePointerLastX = 0;
+  let surfacePointerDragDistance = 0;
+  let surfacePointerMoved = false;
   let lastZoomDelta = 0;
   let lastPanDeltaMs = 0;
   let actionsOpen = false;
@@ -453,7 +462,15 @@
   }
   function zoomAround(centerTs: number, deltaY: number): void {
     if (!selectedRange || !viewRange) return;
-    viewRange = zoomTimelineRange(selectedRange, viewRange, centerTs, deltaY);
+    viewRange = zoomTimelineRange(
+      selectedRange,
+      viewRange,
+      centerTs,
+      deltaY,
+      undefined,
+      undefined,
+      PAN_OVERSCROLL_RATIO,
+    );
   }
   function panView(deltaMs: number): void {
     if (!selectedRange || !viewRange || deltaMs === 0) return;
@@ -465,6 +482,111 @@
     viewportHeight = scrollEl.clientHeight;
     actionsOpen = false;
     scheduleEventsReload(VIEWPORT_EVENT_RELOAD_DEBOUNCE_MS);
+  }
+  function isRowCanvasTarget(target: EventTarget | null): target is HTMLCanvasElement {
+    return target instanceof HTMLCanvasElement;
+  }
+  function clearCrosshairAndHover(): void {
+    crosshairTs = null;
+    crosshairPx = null;
+    hoveredEvent = null;
+  }
+  function updateCrosshairFromSurfaceClientX(clientX: number): boolean {
+    if (!scrollEl || !viewRange) return false;
+    const surface = resolveTimelineSurfaceCoordinates(
+      clientX,
+      scrollEl.getBoundingClientRect().left,
+      titleWidth,
+      timelineWidth,
+      viewRange,
+    );
+    if (!surface) return false;
+    crosshairPx = surface.x;
+    crosshairTs = surface.ts;
+    return true;
+  }
+  function applyZoom(centerTs: number, deltaY: number): void {
+    lastZoomDelta = deltaY;
+    zoomAround(centerTs, deltaY);
+    syncCrosshairTsFromPx();
+    persistTimelineState();
+    scheduleEventsReload(VIEWPORT_EVENT_RELOAD_DEBOUNCE_MS);
+  }
+  function applyPan(deltaMs: number): void {
+    if (deltaMs === 0) return;
+    lastPanDeltaMs = deltaMs;
+    panView(deltaMs);
+    syncCrosshairTsFromPx();
+    persistTimelineState();
+    scheduleEventsReload(VIEWPORT_EVENT_RELOAD_DEBOUNCE_MS);
+  }
+  function handleSurfaceWheel(event: WheelEvent): void {
+    if (!viewRange || !selectedRange) return;
+    if (isRowCanvasTarget(event.target)) return;
+    if (!updateCrosshairFromSurfaceClientX(event.clientX)) return;
+    hoveredEvent = null;
+    if (event.ctrlKey || event.metaKey) {
+      event.preventDefault();
+      if (crosshairTs === null) return;
+      applyZoom(crosshairTs, event.deltaY);
+      return;
+    }
+    const horizontalDelta =
+      Math.abs(event.deltaX) >= Math.abs(event.deltaY) ? event.deltaX : 0;
+    if (horizontalDelta === 0) return;
+    event.preventDefault();
+    applyPan(computeTimelinePanDeltaMsFromWheel(horizontalDelta, viewRange, timelineWidth));
+  }
+  function handleSurfacePointerDown(event: PointerEvent): void {
+    if (event.button !== 0 || event.pointerType === "touch" || !scrollEl) return;
+    if (isRowCanvasTarget(event.target)) return;
+    if (!updateCrosshairFromSurfaceClientX(event.clientX)) return;
+    hoveredEvent = null;
+    surfacePointerActive = true;
+    surfacePointerLastX = event.clientX;
+    surfacePointerDragDistance = 0;
+    surfacePointerMoved = false;
+    try {
+      scrollEl.setPointerCapture(event.pointerId);
+    } catch {
+      // Ignore pointer-capture acquisition failures.
+    }
+  }
+  function handleSurfacePointerMove(event: PointerEvent): void {
+    if (event.pointerType === "touch") return;
+    if (!surfacePointerActive && isRowCanvasTarget(event.target)) return;
+    if (!updateCrosshairFromSurfaceClientX(event.clientX)) {
+      if (!surfacePointerActive) clearCrosshairAndHover();
+      return;
+    }
+    hoveredEvent = null;
+    if (!surfacePointerActive || !viewRange) return;
+    const dx = event.clientX - surfacePointerLastX;
+    surfacePointerLastX = event.clientX;
+    surfacePointerDragDistance += Math.abs(dx);
+    if (surfacePointerDragDistance > 2) {
+      surfacePointerMoved = true;
+    }
+    if (!surfacePointerMoved || dx === 0) return;
+    applyPan(computeTimelinePanDeltaMsFromPointer(dx, viewRange, timelineWidth));
+  }
+  function handleSurfacePointerUp(event: PointerEvent): void {
+    if (!scrollEl || event.pointerType === "touch") return;
+    if (surfacePointerActive) {
+      try {
+        scrollEl.releasePointerCapture(event.pointerId);
+      } catch {
+        // Ignore pointer-capture release failures.
+      }
+    }
+    surfacePointerActive = false;
+    surfacePointerMoved = false;
+    surfacePointerDragDistance = 0;
+  }
+  function handleSurfacePointerLeave(event: PointerEvent): void {
+    if (surfacePointerActive) return;
+    if (isRowCanvasTarget(event.target)) return;
+    clearCrosshairAndHover();
   }
   function handleCollectorChange(event: CustomEvent<string>): void {
     collectorFilter = event.detail;
@@ -513,19 +635,11 @@
     hoveredEvent = event.detail.hoveredEvent;
   }
   function handleZoom(event: CustomEvent<{ centerTs: number; deltaY: number }>): void {
-    lastZoomDelta = event.detail.deltaY;
-    zoomAround(event.detail.centerTs, event.detail.deltaY);
-    syncCrosshairTsFromPx();
-    persistTimelineState();
-    scheduleEventsReload(VIEWPORT_EVENT_RELOAD_DEBOUNCE_MS);
+    applyZoom(event.detail.centerTs, event.detail.deltaY);
   }
 
   function handlePan(event: CustomEvent<{ deltaMs: number }>): void {
-    lastPanDeltaMs = event.detail.deltaMs;
-    panView(event.detail.deltaMs);
-    syncCrosshairTsFromPx();
-    persistTimelineState();
-    scheduleEventsReload(VIEWPORT_EVENT_RELOAD_DEBOUNCE_MS);
+    applyPan(event.detail.deltaMs);
   }
   function handleRowActions(event: CustomEvent<{ market: TimelineMarket; anchorEl: HTMLButtonElement | null }>): void {
     const anchorEl = event.detail.anchorEl;
@@ -656,7 +770,17 @@
       on:pointerdown={handleTitleResizePointerDown}
       on:dblclick={handleTitleResizeDoubleClick}
     ></button>
-    <div bind:this={scrollEl} class="relative h-full overflow-y-auto overflow-x-hidden" on:scroll={handleScroll}>
+    <div
+      bind:this={scrollEl}
+      class="relative h-full overflow-y-auto overflow-x-hidden"
+      on:scroll={handleScroll}
+      on:wheel={handleSurfaceWheel}
+      on:pointerdown={handleSurfacePointerDown}
+      on:pointermove={handleSurfacePointerMove}
+      on:pointerup={handleSurfacePointerUp}
+      on:pointercancel={handleSurfacePointerUp}
+      on:pointerleave={handleSurfacePointerLeave}
+    >
       {#if marketsError}
         <div class="relative z-10 p-3 text-sm text-red-300">{marketsError}</div>
       {:else if !selectedRange || !viewRange}

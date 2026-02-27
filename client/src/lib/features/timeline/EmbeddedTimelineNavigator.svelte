@@ -11,7 +11,11 @@
     MIN_TIMELINE_VIEWPORT_WIDTH,
     TIMELINE_ROW_HEIGHT,
   } from "./timelineLayout.js";
-  import { panTimelineRange, zoomTimelineRange } from "./timelineViewport.js";
+  import {
+    buildTimelineFullViewRange,
+    panTimelineRange,
+    zoomTimelineRange,
+  } from "./timelineViewport.js";
   import type {
     TimelineEvent,
     TimelineHoverEvent,
@@ -114,7 +118,10 @@
       }
 
       market = nextMarket;
-      viewRange = { startTs: nextMarket.startTs, endTs: nextMarket.endTs };
+      viewRange = buildTimelineFullViewRange(
+        { startTs: nextMarket.startTs, endTs: nextMarket.endTs },
+        PAN_OVERSCROLL_RATIO,
+      );
       events = await fetchTimelineEvents(
         {
           collector: nextMarket.collector,
@@ -201,6 +208,9 @@
       viewRange,
       event.detail.centerTs,
       event.detail.deltaY,
+      undefined,
+      undefined,
+      PAN_OVERSCROLL_RATIO,
     );
   }
 
