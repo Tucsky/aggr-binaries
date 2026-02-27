@@ -16,11 +16,15 @@ import type { DirtyMarketRange } from "./rollup.js";
 import type { FixGapsStats } from "./index.js";
 
 const DEBUG_FIXGAPS = process.env.AGGR_FIXGAPS_DEBUG === "1";
+const DAY_MS = 86_400_000;
+export const MAX_RECOVER_GAP_DAYS = 60;
+export const MAX_RECOVER_GAP_MS = MAX_RECOVER_GAP_DAYS * DAY_MS;
 export const FLUSH_TRADE_LIMIT = 1_000_000;
 export const STREAMING_ABORT_ERROR = "fixgaps_streaming_abort";
 
 interface GapWindowResolutionResult {
   windows: GapWindow[];
+  skippedLargeGapEventIds: number[];
   unresolvedEventIds: number[];
 }
 
@@ -57,9 +61,14 @@ export function extractResolvableWindows(
 ): GapWindowResolutionResult {
   setFixgapsProgress(`[fixgaps] resolving windows ${fileLabel} ...`);
   const windows: GapWindow[] = [];
+  const skippedLargeGapEventIds: number[] = [];
   const unresolvedEventIds: number[] = [];
 
   for (const row of rows) {
+    if (isGapTooLargeForRecovery(row.gap_ms)) {
+      skippedLargeGapEventIds.push(row.id);
+      continue;
+    }
     const window = buildWindowFromEvent(row);
     if (window) {
       windows.push(window);
@@ -69,7 +78,7 @@ export function extractResolvableWindows(
   }
 
   windows.sort((a, b) => (a.fromTs - b.fromTs) || (a.toTs - b.toTs) || (a.eventId - b.eventId));
-  return { windows, unresolvedEventIds };
+  return { windows, skippedLargeGapEventIds, unresolvedEventIds };
 }
 
 /**
@@ -99,6 +108,35 @@ export function markUnresolvedWindowEvents(
     if (row) logGapError(row, reason);
   }
   stats.adapterError += extraction.unresolvedEventIds.length;
+}
+
+/**
+ * Mark rows skipped by long-gap guard with a dedicated skip status.
+ */
+export function markSkippedLargeGapWindowEvents(
+  extraction: GapWindowResolutionResult,
+  rowsById: Map<number, GapFixEventRow>,
+  db: Db,
+  stats: FixGapsStats,
+  dryRun: boolean,
+): void {
+  const skippedIds = extraction.skippedLargeGapEventIds;
+  if (!skippedIds.length) return;
+
+  for (const id of skippedIds) {
+    const row = rowsById.get(id);
+    if (row) logGapRecovered(row, 0);
+  }
+  if (dryRun) return;
+
+  db.updateGapFixStatus(
+    skippedIds.map((id) => ({
+      id,
+      status: GapFixStatus.SkippedLargeGap,
+      error: null,
+      recovered: 0,
+    })),
+  );
 }
 
 /**
@@ -325,4 +363,8 @@ function buildWindowFromEvent(row: GapFixEventRow): GapWindow | undefined {
   const toTs = row.gap_end_ts;
   if (!Number.isFinite(fromTs) || toTs <= fromTs) return undefined;
   return { eventId: row.id, fromTs, toTs };
+}
+
+function isGapTooLargeForRecovery(gapMs: number | null): boolean {
+  return gapMs !== null && Number.isFinite(gapMs) && gapMs > MAX_RECOVER_GAP_MS;
 }

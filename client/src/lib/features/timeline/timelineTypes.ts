@@ -49,6 +49,7 @@ export enum TimelineMarketAction {
 export type TimelineEventKind =
   | "gap"
   | "gap_fixed"
+  | "skipped_large_gap"
   | "parse_error"
   | "adapter_error"
   | "missing_adapter"

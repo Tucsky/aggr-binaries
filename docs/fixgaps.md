@@ -22,7 +22,7 @@ Queue source:
 - `--id` takes precedence over retry-status queue selection
 
 ## Recovery batching
-- Fixgaps does not skip events by gap duration.
+- Fixgaps skips recovery for events where `gap_ms > 60d`; those events are marked `skipped_large_gap` with `recovered=0` and no adapter call.
 - Recovered trades are merged in deterministic flush batches of `1,000,000` trades.
 - Each flush batch is written into a raw file path derived from the batch's last trade timestamp using the same file naming pattern as the source event file.
 - If a target file path does not exist, fixgaps creates it and indexes it before merge/patch.
@@ -30,7 +30,7 @@ Queue source:
 
 ## Pipeline
 For each grouped `(root_id, relative_path)`:
-1. Resolve one recovery window per event from persisted event payload timestamps (`gap_end_ts - gap_ms` to `gap_end_ts`).
+1. Resolve one recovery window per event from persisted event payload timestamps (`gap_end_ts - gap_ms` to `gap_end_ts`), and skip windows with `gap_ms > 60d`.
 2. Call the exchange adapter with `onRecoveredBatch` callback support.
 3. Ingest callback batches and returned adapter tail through the same accumulator.
 4. Flush deterministic chunks (`1,000,000` max per chunk), resolve target file from the chunk last trade timestamp, then deterministically rewrite by timestamp sort-normalization:
@@ -82,6 +82,7 @@ flowchart TD
 
 ## Event status lifecycle
 - `fixed`: adapter/rewrite/patch pipeline succeeded (including 0 recovered)
+- `skipped_large_gap`: event was intentionally skipped by the `>60d` long-gap guard
 - `missing_adapter`: adapter unavailable
 - `adapter_error`: adapter or patch pipeline failure
 

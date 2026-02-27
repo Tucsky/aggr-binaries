@@ -127,7 +127,7 @@ function createCountingAdapter(apiOnly = false): { adapter: TradeRecoveryAdapter
   };
 }
 
-test("fixgaps processes gaps over 60 days instead of skipping them", async () => {
+test("fixgaps skips recovery for gaps over 60 days", async () => {
   const fixture = await createFixture();
   const db = openDatabase(fixture.dbPath);
   try {
@@ -146,12 +146,12 @@ test("fixgaps processes gaps over 60 days instead of skipping them", async () =>
       }),
     });
 
-    assert.ok(counting.getCalls() > 0);
+    assert.strictEqual(counting.getCalls(), 0);
     assert.strictEqual(stats.selectedEvents, 1);
-    assert.strictEqual(stats.fixedEvents, 1);
+    assert.strictEqual(stats.fixedEvents, 0);
     assert.strictEqual(stats.adapterError, 0);
     const event = readSingleEvent(db);
-    assert.strictEqual(event.status, GapFixStatus.Fixed);
+    assert.strictEqual(event.status, GapFixStatus.SkippedLargeGap);
     assert.strictEqual(event.error, null);
     assert.strictEqual(event.recovered, 0);
   } finally {

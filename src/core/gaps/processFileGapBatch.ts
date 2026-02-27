@@ -10,6 +10,7 @@ import {
   extractResolvableWindows,
   markMissingAdapter,
   markResolvedWindowEvents,
+  markSkippedLargeGapWindowEvents,
   markUnresolvedWindowEvents,
   recoverTradesForWindows,
 } from "./processFileGapBatchSteps.js";
@@ -56,11 +57,12 @@ export async function processFileGapBatch(
     const extraction = extractResolvableWindows(fileLabel, fileGapEvents);
     if (DEBUG_FIXGAPS) {
       logFixgapsLine(
-        `[fixgaps/debug] windows path=${fileRow.relative_path} resolvable=${extraction.windows.length} unresolved=${extraction.unresolvedEventIds.length}`,
+        `[fixgaps/debug] windows path=${fileRow.relative_path} resolvable=${extraction.windows.length} skipped_large=${extraction.skippedLargeGapEventIds.length} unresolved=${extraction.unresolvedEventIds.length}`,
       );
     }
 
     markUnresolvedWindowEvents(extraction, rowsById, db, stats, dryRun);
+    markSkippedLargeGapWindowEvents(extraction, rowsById, db, stats, dryRun);
     const selectedWindows = extraction.windows;
     const resolvableEventIds = new Set<number>(selectedWindows.map((window) => window.eventId));
     if (!resolvableEventIds.size) return undefined;

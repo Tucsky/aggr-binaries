@@ -12,6 +12,7 @@ export enum GapFixStatus {
   MissingAdapter = "missing_adapter",
   AdapterError = "adapter_error",
   Fixed = "fixed",
+  SkippedLargeGap = "skipped_large_gap",
 }
 
 export type ParseRejectReason =

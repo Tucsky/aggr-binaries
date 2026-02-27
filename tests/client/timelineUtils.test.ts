@@ -138,6 +138,25 @@ test("eventKind marks fixed gap rows distinctly", () => {
   assert.strictEqual(eventKind(event), "gap_fixed");
 });
 
+test("eventKind marks skipped_large_gap rows distinctly", () => {
+  const event: TimelineEvent = {
+    id: 2,
+    collector: "RAM",
+    exchange: "BINANCE",
+    symbol: "BTCUSDT",
+    relativePath: "RAM/BINANCE/BTCUSDT/2024-01-01.gz",
+    eventType: "gap",
+    gapFixStatus: "skipped_large_gap",
+    gapFixRecovered: 0,
+    ts: 100,
+    startLine: 1,
+    endLine: 1,
+    gapMs: 1,
+    gapMiss: 1,
+  };
+  assert.strictEqual(eventKind(event), "skipped_large_gap");
+});
+
 test("findTimelineEventWindow returns visible inclusive ts window via binary search", () => {
   const events: TimelineEvent[] = [
     {
