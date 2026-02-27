@@ -23,6 +23,7 @@ export interface AdapterRequest {
 
 export interface TradeRecoveryAdapter {
   readonly name: string;
+  readonly apiOnly?: boolean;
   recover(req: AdapterRequest): Promise<RecoveredTrade[]>;
 }
 

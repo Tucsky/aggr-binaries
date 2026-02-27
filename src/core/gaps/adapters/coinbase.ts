@@ -15,6 +15,7 @@ interface CoinbaseTickerTrade {
 export function createCoinbaseAdapter(fetchImpl: FetchLike): TradeRecoveryAdapter {
   return {
     name: "coinbase-trades-api",
+    apiOnly: true,
     async recover(req: AdapterRequest): Promise<RecoveredTrade[]> {
       const windows = mergeWindows(req.windows);
       const bounds = summarizeBounds(windows);

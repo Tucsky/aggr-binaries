@@ -470,10 +470,10 @@ test("fixgaps progress line mode prefixes active gap context", async () => {
       else process.env.AGGR_FIXGAPS_PROGRESS = previousProgressMode;
     }
 
-    const progressLine = logs.find((line) => line.includes(": scanning 2024-01-01-00"));
+    const progressLine = logs.find((line) => line.includes(": resolving windows 2024-01-01-00"));
     assert.match(
       progressLine ?? "",
-      /^\[fixgaps\] \[BITFINEX\/BTCUSD\/2024-01-01\] 2m gap @ 00:00 : scanning 2024-01-01-00 \.\.\.$/,
+      /^\[fixgaps\] \[BITFINEX\/BTCUSD\/2024-01-01\] 2m gap @ 00:00 : resolving windows 2024-01-01-00 \.\.\.$/,
     );
   } finally {
     db.close();
@@ -573,7 +573,7 @@ test("fixgaps id filter targets a single event and bypasses retry-status gating"
   }
 });
 
-test("fixgaps supports retry-status filtering and fallback windows for shifted lines", async () => {
+test("fixgaps supports retry-status filtering and builds windows from event payload timestamps", async () => {
   const fixture = await createFixture();
   const db = openDatabase(fixture.dbPath);
 
@@ -633,7 +633,7 @@ test("fixgaps supports retry-status filtering and fallback windows for shifted l
   }
 });
 
-test("fixgaps uses fallback window on first run when line mapping cannot be resolved", async () => {
+test("fixgaps uses event payload window on first run regardless of line numbers", async () => {
   const fixture = await createFixture();
   const db = openDatabase(fixture.dbPath);
 

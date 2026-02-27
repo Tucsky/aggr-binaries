@@ -1,0 +1,98 @@
+import type { Config } from "../config.js";
+import type { Db } from "../db.js";
+import type { AdapterRegistry } from "./adapters/index.js";
+import { formatFileProgressLabel, formatGapContext } from "./groupHelpers.js";
+import { logFixgapsLine, setFixgapsProgressContext } from "./progress.js";
+import type { GapFixEventRow } from "./queue.js";
+import type { DirtyMarketRange } from "./rollup.js";
+import type { FixGapsStats } from "./index.js";
+import {
+  extractResolvableWindows,
+  markMissingAdapter,
+  markResolvedWindowEvents,
+  mergeAndPatchRecoveredTradesInFlushBatches,
+  markUnresolvedWindowEvents,
+  recoverTradesForWindows,
+} from "./processFileGapBatchSteps.js";
+
+const DEBUG_FIXGAPS = process.env.AGGR_FIXGAPS_DEBUG === "1";
+
+/**
+ * Process all gap events that belong to a single raw input file.
+ * "Batch" here means grouped by (root_id, relative_path).
+ */
+export async function processFileGapBatch(
+  fileGapEvents: GapFixEventRow[],
+  config: Config,
+  db: Db,
+  adapterRegistry: AdapterRegistry,
+  stats: FixGapsStats,
+  dryRun: boolean,
+): Promise<DirtyMarketRange | undefined> {
+  if (!fileGapEvents.length) return undefined;
+  stats.processedFiles += 1;
+  const rowsById = new Map<number, GapFixEventRow>(fileGapEvents.map((row) => [row.id, row]));
+  const fileRow = fileGapEvents[0];
+  const fileLabel = formatFileProgressLabel(fileRow);
+
+  setFixgapsProgressContext(formatGapContext(fileRow));
+  try {
+    if (DEBUG_FIXGAPS) {
+      logFixgapsLine(
+        `[fixgaps/debug] file_start exchange=${fileRow.exchange} symbol=${fileRow.symbol} path=${fileRow.relative_path} events=${fileGapEvents.length}`,
+      );
+    }
+
+    const adapter = adapterRegistry.getAdapter(fileRow.exchange);
+    if (!adapter) {
+      markMissingAdapter(fileGapEvents, fileRow.exchange, db, stats, dryRun);
+      return undefined;
+    }
+
+    const extraction = extractResolvableWindows(fileLabel, fileGapEvents);
+    if (DEBUG_FIXGAPS) {
+      logFixgapsLine(
+        `[fixgaps/debug] windows path=${fileRow.relative_path} resolvable=${extraction.windows.length} unresolved=${extraction.unresolvedEventIds.length}`,
+      );
+    }
+
+    markUnresolvedWindowEvents(extraction, rowsById, db, stats, dryRun);
+    const selectedWindows = extraction.windows;
+    const resolvableEventIds = new Set<number>(selectedWindows.map((window) => window.eventId));
+    if (!resolvableEventIds.size) return undefined;
+
+    const recovered = await recoverTradesForWindows(
+      fileRow,
+      fileLabel,
+      selectedWindows,
+      resolvableEventIds,
+      rowsById,
+      adapter,
+      db,
+      stats,
+      dryRun,
+    );
+    if (!recovered) return undefined;
+    if (recovered.length && dryRun) stats.recoveredTrades += recovered.length;
+
+    const dirtyRange = await mergeAndPatchRecoveredTradesInFlushBatches(
+      recovered,
+      config,
+      db,
+      fileRow,
+      resolvableEventIds,
+      rowsById,
+      stats,
+      dryRun,
+    );
+    if (dirtyRange === null) return undefined;
+
+    markResolvedWindowEvents(selectedWindows, recovered, resolvableEventIds, rowsById, db, stats, dryRun);
+    if (DEBUG_FIXGAPS && !dryRun) {
+      logFixgapsLine(`[fixgaps/debug] file_done path=${fileRow.relative_path} fixed=${resolvableEventIds.size}`);
+    }
+    return dirtyRange;
+  } finally {
+    setFixgapsProgressContext();
+  }
+}

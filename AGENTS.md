@@ -13,6 +13,15 @@
 - Minimize loops: one pass whenever possible. If you add a loop, explain why it cannot be fused.
 - Keep files small: **no file > 400 LOC**. Split by responsibility.
   - Exception: if splitting would materially reduce readability/correctness for tightly-coupled logic, exceeding 400 LOC is allowed with a brief inline justification near the change.
+- Keep functions small:
+  - Target `<=120 LOC` per function.
+  - If a function exceeds `180 LOC`, split it before merge.
+  - Orchestration functions must stay thin and delegate to helper functions/modules with explicit contracts (inputs/outputs, no extra passes, no extra mutable state).
+- Commenting and naming clarity:
+  - Use explicit domain names (avoid ambiguous names like `group`, `dirty`, `data`, `item` in non-trivial flows unless scoped by a clear suffix/prefix).
+  - Add a short comment/JSDoc for non-obvious functions explaining: what it does, why it exists, and key return semantics.
+  - Prefer concise function comments; use tagged JSDoc (`@param`, `@returns`) only when it materially improves clarity.
+  - Skip comments only when behavior is obvious from the function name and types.
 - Strict TypeScript:
   - No `any`. No implicit `unknown` without narrowing.
   - Avoid ad-hoc string unions sprinkled everywhere: use enums/constants for stable domains.

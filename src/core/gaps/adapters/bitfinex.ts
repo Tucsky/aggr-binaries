@@ -8,6 +8,7 @@ const DEBUG_ADAPTERS = process.env.AGGR_FIXGAPS_DEBUG_ADAPTERS === "1" || proces
 export function createBitfinexAdapter(fetchImpl: FetchLike): TradeRecoveryAdapter {
   return {
     name: "bitfinex-hist-trades",
+    // apiOnly: true, // removing apiOnly flag because this exchange doesn't have a lot of volume and we still can cover a lot ground with the API.
     async recover(req: AdapterRequest): Promise<RecoveredTrade[]> {
       const windows = mergeWindows(req.windows);
       if (!windows.length) return [];
