@@ -1,8 +1,8 @@
 import type { Config } from "../config.js";
 import type { Db } from "../db.js";
 import { GapFixStatus } from "../events.js";
-import type { GapWindow, RecoveredTrade, TradeRecoveryAdapter } from "./adapters/index.js";
-import { ensureFlushTargetFile, mergeDirtyRange, resolveFlushTargetFile } from "./flushBatchTarget.js";
+import type { GapWindow, RecoveredBatchHandler, RecoveredTrade, TradeRecoveryAdapter } from "./adapters/index.js";
+import { ensureFlushTargetFile, resolveFlushTargetFile } from "./flushBatchTarget.js";
 import {
   countRecoveredByEvent,
   logGapError,
@@ -16,7 +16,8 @@ import type { DirtyMarketRange } from "./rollup.js";
 import type { FixGapsStats } from "./index.js";
 
 const DEBUG_FIXGAPS = process.env.AGGR_FIXGAPS_DEBUG === "1";
-const FLUSH_TRADE_LIMIT = 1_000_000;
+export const FLUSH_TRADE_LIMIT = 1_000_000;
+export const STREAMING_ABORT_ERROR = "fixgaps_streaming_abort";
 
 interface GapWindowResolutionResult {
   windows: GapWindow[];
@@ -113,6 +114,7 @@ export async function recoverTradesForWindows(
   db: Db,
   stats: FixGapsStats,
   dryRun: boolean,
+  onRecoveredBatch?: RecoveredBatchHandler,
 ): Promise<RecoveredTrade[] | undefined> {
   try {
     setFixgapsProgress(`[fixgaps] recovering ${fileLabel} via ${adapter.name} (${windows.length} windows) ...`);
@@ -120,12 +122,16 @@ export async function recoverTradesForWindows(
       exchange: row.exchange,
       symbol: row.symbol,
       windows,
+      onRecoveredBatch,
     });
     if (DEBUG_FIXGAPS) {
       logFixgapsLine(`[fixgaps/debug] adapter_done adapter=${adapter.name} path=${row.relative_path} recovered=${recovered.length}`);
     }
     return recovered;
   } catch (err) {
+    if (err instanceof Error && err.message === STREAMING_ABORT_ERROR) {
+      return undefined;
+    }
     const ids = [...resolvableEventIds];
     const reason = toErrorMessage(err, `Adapter ${adapter.name} failed`);
     if (!dryRun) {
@@ -147,11 +153,10 @@ export async function recoverTradesForWindows(
 }
 
 /**
- * Apply the same merge+patch flow in deterministic fixed-size recovery batches.
- * Batch target file is selected from the last trade timestamp in each batch.
+ * Merge one deterministic flush batch by routing target from this batch's last timestamp.
  */
-export async function mergeAndPatchRecoveredTradesInFlushBatches(
-  recovered: RecoveredTrade[],
+export async function mergeAndPatchRecoveredTradesFlushBatch(
+  batch: RecoveredTrade[],
   config: Config,
   db: Db,
   row: GapFixEventRow,
@@ -160,33 +165,24 @@ export async function mergeAndPatchRecoveredTradesInFlushBatches(
   stats: FixGapsStats,
   dryRun: boolean,
 ): Promise<DirtyMarketRange | undefined | null> {
-  if (!recovered.length || dryRun) return undefined;
-
-  let dirtyRange: DirtyMarketRange | undefined;
-  for (let start = 0; start < recovered.length; start += FLUSH_TRADE_LIMIT) {
-    const batch = recovered.slice(start, start + FLUSH_TRADE_LIMIT);
-    if (!batch.length) continue;
-    const lastTrade = batch[batch.length - 1];
-    const target = resolveFlushTargetFile(row, lastTrade.ts);
-    await ensureFlushTargetFile(row, db, target.relativePath, target.absolutePath);
-    const targetRow: GapFixEventRow =
-      target.relativePath === row.relative_path ? row : { ...row, relative_path: target.relativePath };
-    const merged = await mergeAndPatchRecoveredTrades(
-      batch,
-      config,
-      db,
-      targetRow,
-      target.absolutePath,
-      target.label,
-      resolvableEventIds,
-      rowsById,
-      stats,
-      dryRun,
-    );
-    if (merged === null) return null;
-    if (merged) dirtyRange = mergeDirtyRange(dirtyRange, merged);
-  }
-  return dirtyRange;
+  if (!batch.length || dryRun) return undefined;
+  const lastTrade = batch[batch.length - 1];
+  const target = resolveFlushTargetFile(row, lastTrade.ts);
+  await ensureFlushTargetFile(row, db, target.relativePath, target.absolutePath);
+  const targetRow: GapFixEventRow =
+    target.relativePath === row.relative_path ? row : { ...row, relative_path: target.relativePath };
+  return mergeAndPatchRecoveredTrades(
+    batch,
+    config,
+    db,
+    targetRow,
+    target.absolutePath,
+    target.label,
+    resolvableEventIds,
+    rowsById,
+    stats,
+    dryRun,
+  );
 }
 
 /**
@@ -275,7 +271,7 @@ export async function mergeAndPatchRecoveredTrades(
  */
 export function markResolvedWindowEvents(
   windows: Array<{ eventId: number; fromTs: number; toTs: number }>,
-  recovered: RecoveredTrade[],
+  recovered: RecoveredTrade[] | Map<number, number>,
   resolvableEventIds: Set<number>,
   rowsById: Map<number, GapFixEventRow>,
   db: Db,
@@ -283,7 +279,7 @@ export function markResolvedWindowEvents(
   dryRun: boolean,
 ): void {
   const resolvedIds = [...resolvableEventIds];
-  const recoveredByEvent = countRecoveredByEvent(windows, recovered);
+  const recoveredByEvent = recovered instanceof Map ? recovered : countRecoveredByEvent(windows, recovered);
   for (const id of resolvedIds) {
     const row = rowsById.get(id);
     if (row) logGapRecovered(row, recoveredByEvent.get(id) ?? 0);

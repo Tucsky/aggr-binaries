@@ -1,5 +1,6 @@
 import {
   buildRecoveredTrade,
+  createRecoveredTradeBatchCollector,
   extractFirstZipEntry,
   formatUtcDay,
   fetchBufferIfFound,
@@ -7,6 +8,7 @@ import {
   isTsWithinAnyWindow,
   mergeWindows,
   normalizeSymbolToken,
+  RecoveredBatchTransform,
   sortRecoveredTrades,
   summarizeBounds,
   toCoinbasePair,
@@ -39,9 +41,9 @@ export function createHuobiAdapter(fetchImpl: FetchLike): TradeRecoveryAdapter {
       const days = collectShiftedDays(bounds.minTs, bounds.maxTs, HTX_DAY_SHIFT_MS);
       const candidates = buildCandidates(req.symbol);
       for (const candidate of candidates) {
-        const recovered = await recoverCandidate(candidate, days, windows, fetchImpl);
+        const recovered = await recoverCandidate(req, candidate, days, windows, fetchImpl);
         if (recovered.hadFile) {
-          return sortRecoveredTrades(recovered.trades);
+          return recovered.trades;
         }
       }
 
@@ -67,12 +69,13 @@ function buildCandidates(symbol: string): HuobiDatasetCandidate[] {
 }
 
 async function recoverCandidate(
+  req: AdapterRequest,
   candidate: HuobiDatasetCandidate,
   days: string[],
   windows: GapWindow[],
   fetchImpl: FetchLike,
 ): Promise<HuobiRecoveryResult> {
-  const trades: RecoveredTrade[] = [];
+  const collector = createRecoveredTradeBatchCollector(req);
   let hadFile = false;
 
   for (const day of days) {
@@ -88,16 +91,17 @@ async function recoverCandidate(
       if (candidate.kind === "spot") {
         const parsed = parseSpotTrade(cols);
         if (!parsed || !isTsWithinAnyWindow(parsed.ts, windows)) return;
-        trades.push(parsed);
+        collector.push(parsed);
         return;
       }
       const parsed = parseLinearTrade(cols);
       if (!parsed || !isTsWithinAnyWindow(parsed.ts, windows)) return;
-      trades.push(parsed);
+      collector.push(parsed);
     });
+    await collector.flush(RecoveredBatchTransform.Sorted);
   }
 
-  return { hadFile, trades };
+  return { hadFile, trades: await collector.finish(RecoveredBatchTransform.Sorted) };
 }
 
 function buildDailyUrl(candidate: HuobiDatasetCandidate, day: string): string {

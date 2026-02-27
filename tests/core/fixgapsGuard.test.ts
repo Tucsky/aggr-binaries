@@ -251,3 +251,54 @@ test("fixgaps uses the batch last trade timestamp to resolve merge target file p
     db.close();
   }
 });
+
+test("fixgaps consumes adapter streamed batches without relying on a monolithic return array", async () => {
+  const fixture = await createFixture();
+  const db = openDatabase(fixture.dbPath);
+  const recoveredA = TS0 + 30_000;
+  const recoveredB = TS0 + 90_000;
+  try {
+    const { rootId } = insertIndexedFile(db, fixture.root, fixture.relativePath);
+    await runProcess(buildConfig(fixture.root, fixture.outDir, fixture.dbPath), db);
+    db.db.exec("DELETE FROM events;");
+    insertGapEvent(db, {
+      rootId,
+      relativePath: fixture.relativePath,
+      gapMs: TS1 - TS0,
+      gapEndTs: TS1,
+    });
+
+    const stats = await runFixGaps(buildConfig(fixture.root, fixture.outDir, fixture.dbPath), db, {
+      adapterRegistry: createAdapterRegistry({
+        BITFINEX: {
+          name: "streaming-batches",
+          async recover(req) {
+            if (req.onRecoveredBatch) {
+              await req.onRecoveredBatch([
+                { ts: recoveredA, price: 101, size: 0.3, side: "buy", priceText: "101", sizeText: "0.3" },
+              ]);
+              await req.onRecoveredBatch([
+                { ts: recoveredB, price: 101.5, size: 0.2, side: "sell", priceText: "101.5", sizeText: "0.2" },
+              ]);
+            }
+            return [];
+          },
+        },
+      }),
+    });
+
+    const raw = await fs.readFile(fixture.fullPath, "utf8");
+    assert.match(raw, new RegExp(`^${recoveredA} 101 0\\.3 1`, "m"));
+    assert.match(raw, new RegExp(`^${recoveredB} 101\\.5 0\\.2 0`, "m"));
+
+    assert.strictEqual(stats.selectedEvents, 1);
+    assert.strictEqual(stats.fixedEvents, 1);
+    assert.strictEqual(stats.recoveredTrades, 2);
+    assert.strictEqual(stats.adapterError, 0);
+    const event = readSingleEvent(db);
+    assert.strictEqual(event.status, GapFixStatus.Fixed);
+    assert.strictEqual(event.recovered, 2);
+  } finally {
+    db.close();
+  }
+});

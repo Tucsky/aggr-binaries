@@ -1,4 +1,10 @@
-import { buildRecoveredTrade, filterTradesByWindows, mergeWindows, toBitfinexPair } from "./common.js";
+import {
+  buildRecoveredTrade,
+  createRecoveredTradeBatchCollector,
+  mergeWindows,
+  RecoveredBatchTransform,
+  toBitfinexPair,
+} from "./common.js";
 import type { AdapterRequest, FetchLike, RecoveredTrade, TradeRecoveryAdapter, TradeSide } from "./types.js";
 
 const PAGE_LIMIT = 1000;
@@ -14,7 +20,7 @@ export function createBitfinexAdapter(fetchImpl: FetchLike): TradeRecoveryAdapte
       if (!windows.length) return [];
 
       const symbol = toBitfinexPair(req.symbol);
-      const trades: RecoveredTrade[] = [];
+      const collector = createRecoveredTradeBatchCollector(req);
 
       for (const window of windows) {
         let start = window.fromTs + 1;
@@ -51,7 +57,7 @@ export function createBitfinexAdapter(fetchImpl: FetchLike): TradeRecoveryAdapte
             const side = parseAmountSide(amountText);
             const trade = buildRecoveredTrade(ts, priceText, sizeText, side);
             if (!trade) continue;
-            trades.push(trade);
+            collector.push(trade);
             parsedTrades += 1;
             if (ts > lastTs) lastTs = ts;
           }
@@ -91,9 +97,10 @@ export function createBitfinexAdapter(fetchImpl: FetchLike): TradeRecoveryAdapte
         if (DEBUG_ADAPTERS) {
           console.log(`[fixgaps/bitfinex] window_done symbol=${symbol} pages=${windowPages} trades=${windowTrades}`);
         }
+        await collector.flush(RecoveredBatchTransform.WindowFiltered, [window]);
       }
 
-      return filterTradesByWindows(trades, windows);
+      return collector.finish(RecoveredBatchTransform.WindowFiltered, windows);
     },
   };
 }

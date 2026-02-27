@@ -1,13 +1,14 @@
 import {
   buildRecoveredTrade,
   collectUtcDays,
+  createRecoveredTradeBatchCollector,
   fetchBufferIfFound,
   forEachCsvLine,
   gunzipToString,
   isTsWithinAnyWindow,
   mergeWindows,
+  RecoveredBatchTransform,
   normalizeSymbolToken,
-  sortRecoveredTrades,
   summarizeBounds,
 } from "./common.js";
 import type { AdapterRequest, FetchLike, RecoveredTrade, TradeRecoveryAdapter, TradeSide } from "./types.js";
@@ -24,7 +25,7 @@ export function createBitmexAdapter(fetchImpl: FetchLike): TradeRecoveryAdapter 
 
       const symbol = normalizeSymbolToken(req.symbol);
       const days = collectUtcDays(bounds);
-      const trades: RecoveredTrade[] = [];
+      const collector = createRecoveredTradeBatchCollector(req);
 
       for (const day of days) {
         const compactDay = day.replaceAll("-", "");
@@ -44,13 +45,12 @@ export function createBitmexAdapter(fetchImpl: FetchLike): TradeRecoveryAdapter 
           const priceText = cols[4] ?? "";
           const sizeText = parseBitmexSize(cols);
           const trade = buildRecoveredTrade(ts, priceText, sizeText, side);
-          if (trade) {
-            trades.push(trade);
-          }
+          collector.push(trade);
         });
+        await collector.flush(RecoveredBatchTransform.Sorted);
       }
 
-      return sortRecoveredTrades(trades);
+      return collector.finish(RecoveredBatchTransform.Sorted);
     },
   };
 }

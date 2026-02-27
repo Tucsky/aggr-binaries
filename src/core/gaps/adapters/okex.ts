@@ -1,11 +1,13 @@
 import {
   buildRecoveredTrade,
   collectUtcDays,
+  createRecoveredTradeBatchCollector,
   extractFirstZipEntry,
   fetchBufferIfFound,
   forEachCsvLine,
   isTsWithinAnyWindow,
   mergeWindows,
+  RecoveredBatchTransform,
   sortRecoveredTrades,
   summarizeBounds,
   toCoinbasePair,
@@ -38,13 +40,13 @@ export function createOkexAdapter(fetchImpl: FetchLike): TradeRecoveryAdapter {
       const instrument = await resolveInstrument(req.symbol, fetchImpl);
       if (!instrument) return [];
 
-      const recovered = await recoverDirectTrades(instrument, windows, fetchImpl);
-      return sortRecoveredTrades(recovered);
+      return recoverDirectTrades(req, instrument, windows, fetchImpl);
     },
   };
 }
 
 async function recoverDirectTrades(
+  req: AdapterRequest,
   instrument: OkxInstrumentInfo,
   windows: GapWindow[],
   fetchImpl: FetchLike,
@@ -53,7 +55,8 @@ async function recoverDirectTrades(
   if (!bounds) return [];
 
   const days = collectUtcDays(bounds);
-  const trades: RecoveredTrade[] = [];
+  const collector = createRecoveredTradeBatchCollector(req);
+  let recoveredCount = 0;
   let preCutoffDays = 0;
   let directAttemptDays = 0;
   let directMissDays = 0;
@@ -86,22 +89,26 @@ async function recoverDirectTrades(
     } catch {
       continue;
     }
+    let dayRecovered = 0;
     forEachCsvLine(csv, (line) => {
       const cols = line.split(",");
       const trade = parseDirectTradeRow(cols, instrument);
       if (!trade) return;
       if (!isTsWithinAnyWindow(trade.ts, windows)) return;
-      trades.push(trade);
+      collector.push(trade);
+      dayRecovered += 1;
     });
+    recoveredCount += dayRecovered;
+    await collector.flush(RecoveredBatchTransform.Sorted);
   }
 
   if (DEBUG_ADAPTERS) {
     console.log(
-      `[fixgaps/okex] symbol=${instrument.instId} days=${days.length} pre_cutoff=${preCutoffDays} direct_attempts=${directAttemptDays} direct_miss=${directMissDays} direct_trades=${trades.length}`,
+      `[fixgaps/okex] symbol=${instrument.instId} days=${days.length} pre_cutoff=${preCutoffDays} direct_attempts=${directAttemptDays} direct_miss=${directMissDays} direct_trades=${recoveredCount}`,
     );
   }
 
-  return trades;
+  return collector.finish(RecoveredBatchTransform.Sorted);
 }
 
 function parseDirectTradeRow(cols: string[], instrument: OkxInstrumentInfo): RecoveredTrade | undefined {

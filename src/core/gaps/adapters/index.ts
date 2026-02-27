@@ -10,7 +10,14 @@ import { createKucoinAdapter } from "./kucoin.js";
 import { createOkexAdapter } from "./okex.js";
 import type { FetchLike, TradeRecoveryAdapter } from "./types.js";
 
-export type { AdapterRequest, GapWindow, RecoveredTrade, TradeRecoveryAdapter, TradeSide } from "./types.js";
+export type {
+  AdapterRequest,
+  GapWindow,
+  RecoveredBatchHandler,
+  RecoveredTrade,
+  TradeRecoveryAdapter,
+  TradeSide,
+} from "./types.js";
 
 export interface AdapterRegistry {
   getAdapter(exchange: string): TradeRecoveryAdapter | undefined;

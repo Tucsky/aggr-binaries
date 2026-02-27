@@ -10,10 +10,14 @@ import {
   extractResolvableWindows,
   markMissingAdapter,
   markResolvedWindowEvents,
-  mergeAndPatchRecoveredTradesInFlushBatches,
   markUnresolvedWindowEvents,
   recoverTradesForWindows,
 } from "./processFileGapBatchSteps.js";
+import {
+  createStreamingRecoveredBatchHandler,
+  createStreamingRecoveryAccumulator,
+  finalizeStreamingRecoveredBatches,
+} from "./streamingRecovery.js";
 
 const DEBUG_FIXGAPS = process.env.AGGR_FIXGAPS_DEBUG === "1";
 
@@ -61,6 +65,19 @@ export async function processFileGapBatch(
     const resolvableEventIds = new Set<number>(selectedWindows.map((window) => window.eventId));
     if (!resolvableEventIds.size) return undefined;
 
+    const streamingAccumulator = createStreamingRecoveryAccumulator();
+    const streamingContext = {
+      config,
+      db,
+      fileRow,
+      selectedWindows,
+      resolvableEventIds,
+      rowsById,
+      stats,
+      dryRun,
+    };
+    const onRecoveredBatch = createStreamingRecoveredBatchHandler(streamingAccumulator, streamingContext);
+
     const recovered = await recoverTradesForWindows(
       fileRow,
       fileLabel,
@@ -71,27 +88,25 @@ export async function processFileGapBatch(
       db,
       stats,
       dryRun,
+      onRecoveredBatch,
     );
     if (!recovered) return undefined;
-    if (recovered.length && dryRun) stats.recoveredTrades += recovered.length;
+    if (!await finalizeStreamingRecoveredBatches(streamingAccumulator, streamingContext, recovered)) return undefined;
+    if (dryRun && streamingAccumulator.recoveredTotal) stats.recoveredTrades += streamingAccumulator.recoveredTotal;
 
-    const dirtyRange = await mergeAndPatchRecoveredTradesInFlushBatches(
-      recovered,
-      config,
-      db,
-      fileRow,
+    markResolvedWindowEvents(
+      selectedWindows,
+      streamingAccumulator.recoveredByEvent,
       resolvableEventIds,
       rowsById,
+      db,
       stats,
       dryRun,
     );
-    if (dirtyRange === null) return undefined;
-
-    markResolvedWindowEvents(selectedWindows, recovered, resolvableEventIds, rowsById, db, stats, dryRun);
     if (DEBUG_FIXGAPS && !dryRun) {
       logFixgapsLine(`[fixgaps/debug] file_done path=${fileRow.relative_path} fixed=${resolvableEventIds.size}`);
     }
-    return dirtyRange;
+    return streamingAccumulator.dirtyRange;
   } finally {
     setFixgapsProgressContext();
   }

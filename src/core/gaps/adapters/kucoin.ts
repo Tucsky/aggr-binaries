@@ -1,12 +1,14 @@
 import {
   buildRecoveredTrade,
   collectUtcDays,
+  createRecoveredTradeBatchCollector,
   extractFirstZipEntry,
   fetchBufferIfFound,
   forEachCsvLine,
   isTsWithinAnyWindow,
   mergeWindows,
   normalizeSymbolToken,
+  RecoveredBatchTransform,
   sortRecoveredTrades,
   summarizeBounds,
 } from "./common.js";
@@ -24,7 +26,7 @@ export function createKucoinAdapter(fetchImpl: FetchLike): TradeRecoveryAdapter 
 
       const symbol = normalizeSymbolToken(req.symbol);
       const days = collectUtcDays(bounds);
-      const trades: RecoveredTrade[] = [];
+      const collector = createRecoveredTradeBatchCollector(req);
 
       for (const day of days) {
         const url = `${KUCOIN_SPOT_DAILY_BASE}/${symbol}/${symbol}-trades-${day}.zip`;
@@ -41,13 +43,12 @@ export function createKucoinAdapter(fetchImpl: FetchLike): TradeRecoveryAdapter 
           if (!isTsWithinAnyWindow(ts, windows)) return;
           const side = parseSide(cols[4]);
           const trade = buildRecoveredTrade(ts, cols[2] ?? "", cols[3] ?? "", side);
-          if (trade) {
-            trades.push(trade);
-          }
+          collector.push(trade);
         });
+        await collector.flush(RecoveredBatchTransform.Sorted);
       }
 
-      return sortRecoveredTrades(trades);
+      return collector.finish(RecoveredBatchTransform.Sorted);
     },
   };
 }

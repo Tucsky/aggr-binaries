@@ -1,10 +1,11 @@
 import {
   buildRecoveredTrade,
   collectUtcDays,
+  createRecoveredTradeBatchCollector,
   extractFirstZipEntry,
   fetchBuffer,
-  filterTradesByWindows,
   parseCsvLines,
+  RecoveredBatchTransform,
   summarizeBounds,
   normalizeSymbolToken,
 } from "./common.js";
@@ -42,7 +43,7 @@ function createBinanceAdapter(config: BinanceAdapterConfig, fetchImpl: FetchLike
 
       const symbol = normalizeSymbolToken(req.symbol);
       const days = collectUtcDays(bounds);
-      const collected: RecoveredTrade[] = [];
+      const collector = createRecoveredTradeBatchCollector(req);
 
       for (const day of days) {
         const url = `https://data.binance.vision/data/${config.datasetPath}/${symbol}/${symbol}-trades-${day}.zip`;
@@ -59,13 +60,12 @@ function createBinanceAdapter(config: BinanceAdapterConfig, fetchImpl: FetchLike
           const sizeText = cols[2];
           const side = parseBuyerMaker(cols[5]);
           const trade = buildRecoveredTrade(ts, priceText, sizeText, side);
-          if (trade) {
-            collected.push(trade);
-          }
+          collector.push(trade);
         }
+        await collector.flush(RecoveredBatchTransform.WindowFiltered, req.windows);
       }
 
-      return filterTradesByWindows(collected, req.windows);
+      return collector.finish(RecoveredBatchTransform.WindowFiltered, req.windows);
     },
   };
 }

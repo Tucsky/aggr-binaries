@@ -1,4 +1,11 @@
-import { buildRecoveredTrade, filterTradesByWindows, mergeWindows, summarizeBounds, toCoinbasePair } from "./common.js";
+import {
+  buildRecoveredTrade,
+  createRecoveredTradeBatchCollector,
+  mergeWindows,
+  RecoveredBatchTransform,
+  summarizeBounds,
+  toCoinbasePair,
+} from "./common.js";
 import type { AdapterRequest, FetchLike, RecoveredTrade, TradeRecoveryAdapter, TradeSide } from "./types.js";
 
 const PAGE_LIMIT = 1000;
@@ -21,6 +28,7 @@ export function createCoinbaseAdapter(fetchImpl: FetchLike): TradeRecoveryAdapte
       const bounds = summarizeBounds(windows);
       if (!bounds) return [];
 
+      const collector = createRecoveredTradeBatchCollector(req);
       const pair = toCoinbasePair(req.symbol);
       const startSec = Math.floor(bounds.minTs / 1000);
       const endSec = Math.ceil(bounds.maxTs / 1000);
@@ -31,20 +39,20 @@ export function createCoinbaseAdapter(fetchImpl: FetchLike): TradeRecoveryAdapte
       const tickerPayload = await fetchJson(tickerUrl, fetchImpl);
       const tickerTrades = parseTickerTrades(tickerPayload);
 
-      const collected: RecoveredTrade[] = [];
       let earliestTradeId: number | undefined;
       for (const trade of tickerTrades) {
         const parsed = parseCoinbaseTrade(trade.trade_id, trade.price, trade.size, trade.side, trade.time);
         if (!parsed) continue;
-        collected.push(parsed);
+        collector.push(parsed);
         const id = Number(trade.trade_id);
         if (Number.isFinite(id)) {
           earliestTradeId = earliestTradeId === undefined ? id : Math.min(earliestTradeId, id);
         }
       }
+      await collector.flush(RecoveredBatchTransform.WindowFiltered, windows);
 
       if (earliestTradeId === undefined) {
-        return filterTradesByWindows(collected, windows);
+        return collector.finish(RecoveredBatchTransform.WindowFiltered, windows);
       }
 
       let cursor = earliestTradeId;
@@ -62,10 +70,11 @@ export function createCoinbaseAdapter(fetchImpl: FetchLike): TradeRecoveryAdapte
         for (const row of payload) {
           const parsed = parseExchangeTrade(row);
           if (!parsed) continue;
-          collected.push(parsed.trade);
+          collector.push(parsed.trade);
           if (parsed.tradeId < minId) minId = parsed.tradeId;
           if (parsed.trade.ts < oldestTs) oldestTs = parsed.trade.ts;
         }
+        await collector.flush(RecoveredBatchTransform.WindowFiltered, windows);
 
         if (minId >= cursor) {
           break;
@@ -79,7 +88,7 @@ export function createCoinbaseAdapter(fetchImpl: FetchLike): TradeRecoveryAdapte
         }
       }
 
-      return filterTradesByWindows(collected, windows);
+      return collector.finish(RecoveredBatchTransform.WindowFiltered, windows);
     },
   };
 }

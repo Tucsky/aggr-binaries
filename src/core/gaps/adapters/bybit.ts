@@ -1,11 +1,12 @@
 import {
   buildRecoveredTrade,
   collectUtcDays,
+  createRecoveredTradeBatchCollector,
   fetchBuffer,
-  filterTradesByWindows,
   gunzipToString,
   normalizeSymbolToken,
   parseCsvLines,
+  RecoveredBatchTransform,
   summarizeBounds,
 } from "./common.js";
 import type { AdapterRequest, FetchLike, RecoveredTrade, TradeRecoveryAdapter, TradeSide } from "./types.js";
@@ -19,7 +20,7 @@ export function createBybitAdapter(fetchImpl: FetchLike): TradeRecoveryAdapter {
 
       const symbol = normalizeSymbolToken(req.symbol);
       const days = collectUtcDays(bounds);
-      const trades: RecoveredTrade[] = [];
+      const collector = createRecoveredTradeBatchCollector(req);
 
       for (const day of days) {
         const url = `https://public.bybit.com/trading/${symbol}/${symbol}${day}.csv.gz`;
@@ -35,13 +36,12 @@ export function createBybitAdapter(fetchImpl: FetchLike): TradeRecoveryAdapter {
           const sizeText = cols[3];
           const priceText = cols[4];
           const trade = buildRecoveredTrade(ts, priceText, sizeText, side);
-          if (trade) {
-            trades.push(trade);
-          }
+          collector.push(trade);
         }
+        await collector.flush(RecoveredBatchTransform.WindowFiltered, req.windows);
       }
 
-      return filterTradesByWindows(trades, req.windows);
+      return collector.finish(RecoveredBatchTransform.WindowFiltered, req.windows);
     },
   };
 }

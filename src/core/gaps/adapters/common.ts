@@ -1,5 +1,5 @@
 import zlib from "node:zlib";
-import type { FetchLike, GapWindow, RecoveredTrade, TradeSide } from "./types.js";
+import type { AdapterRequest, FetchLike, GapWindow, RecoveredTrade, TradeSide } from "./types.js";
 import { formatProgressUrl, setFixgapsProgress } from "../progress.js";
 
 interface LocalZipHeader {
@@ -11,6 +11,19 @@ interface LocalZipHeader {
 interface TimeBounds {
   minTs: number;
   maxTs: number;
+}
+
+export enum RecoveredBatchTransform {
+  None = "none",
+  Sorted = "sorted",
+  WindowFiltered = "window_filtered",
+}
+
+export interface RecoveredTradeBatchCollector {
+  readonly streaming: boolean;
+  push(trade: RecoveredTrade | undefined): void;
+  flush(transform: RecoveredBatchTransform, windows?: GapWindow[]): Promise<void>;
+  finish(transform: RecoveredBatchTransform, windows?: GapWindow[]): Promise<RecoveredTrade[]>;
 }
 
 const QUOTES = ["USDT", "USDC", "USD", "EUR", "BTC", "ETH"] as const;
@@ -166,6 +179,42 @@ export function sortRecoveredTrades(trades: RecoveredTrade[]): RecoveredTrade[] 
   return trades;
 }
 
+/**
+ * Adapter-side collector that centralizes streamed-vs-buffered trade handling.
+ * Adapters can push parsed trades per page/day and flush checkpoints without duplicating callback branches.
+ */
+export function createRecoveredTradeBatchCollector(req: AdapterRequest): RecoveredTradeBatchCollector {
+  const streaming = typeof req.onRecoveredBatch === "function";
+  const activeBatch: RecoveredTrade[] = [];
+  const retained: RecoveredTrade[] = [];
+
+  return {
+    streaming,
+    push(trade: RecoveredTrade | undefined): void {
+      if (!trade) return;
+      activeBatch.push(trade);
+    },
+    async flush(transform: RecoveredBatchTransform, windows?: GapWindow[]): Promise<void> {
+      if (!activeBatch.length) return;
+      const batch = activeBatch.splice(0, activeBatch.length);
+      if (streaming) {
+        const out = transformRecoveredBatch(batch, transform, windows);
+        if (out.length) await req.onRecoveredBatch?.(out);
+        return;
+      }
+      for (let i = 0; i < batch.length; i += 1) {
+        const trade = batch[i];
+        if (trade) retained.push(trade);
+      }
+    },
+    async finish(transform: RecoveredBatchTransform, windows?: GapWindow[]): Promise<RecoveredTrade[]> {
+      await this.flush(RecoveredBatchTransform.None);
+      if (streaming) return [];
+      return transformRecoveredBatch(retained, transform, windows);
+    },
+  };
+}
+
 export function buildRecoveredTrade(
   ts: number,
   priceText: string,
@@ -181,6 +230,19 @@ export function buildRecoveredTrade(
     return undefined;
   }
   return { ts, price, size, side, priceText, sizeText };
+}
+
+function transformRecoveredBatch(
+  batch: RecoveredTrade[],
+  transform: RecoveredBatchTransform,
+  windows?: GapWindow[],
+): RecoveredTrade[] {
+  if (!batch.length || transform === RecoveredBatchTransform.None) return batch;
+  if (transform === RecoveredBatchTransform.Sorted) {
+    return sortRecoveredTrades(batch);
+  }
+  if (!windows?.length) return [];
+  return filterTradesByWindows(batch, windows);
 }
 
 export async function fetchText(url: string, fetchImpl: FetchLike): Promise<string> {
