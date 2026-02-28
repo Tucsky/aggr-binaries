@@ -20,6 +20,8 @@ Key flags:
 Queue source:
 - `events` rows where `event_type='gap'`
 - `--id` takes precedence over retry-status queue selection
+- Default traversal is market-first: `collector/exchange/symbol`, then deterministic file order (`root_id/relative_path/start_line/id`).
+- Queue reads are keyset-paged (`1024` rows/page) so fixgaps can keep writing event statuses without holding a long-lived read cursor.
 
 ## Recovery batching
 - Fixgaps skips recovery for events where `gap_ms > 60d`; those events are marked `skipped_large_gap` with `recovered=0` and no adapter call.
@@ -44,7 +46,7 @@ For each grouped `(root_id, relative_path)`:
 ### Mermaid flow
 ```mermaid
 flowchart TD
-  A["CLI fixgaps<br/>fn: runFixGaps"] --> B["Build queue from events gap rows<br/>fn: iterateGapFixEvents"]
+  A["CLI fixgaps<br/>fn: runFixGaps"] --> B["Build keyset-paged queue from events gap rows (market-first order)<br/>fn: iterateGapFixEvents"]
   B --> C["Group rows by root_id + relative_path<br/>fn: runFixGaps grouping loop"]
   C --> D["processFileGapBatch for each file group<br/>fn: processFileGapBatch"]
 

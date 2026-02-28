@@ -579,14 +579,26 @@ function listIndexedMarketRanges(stmt: StatementSync): IndexedMarketRangeRow[] {
   return ranges;
 }
 
+const GAP_FIX_QUEUE_PAGE_SIZE = 1024;
+
+interface GapFixQueueCursor {
+  collector: string;
+  exchange: string;
+  symbol: string;
+  rootId: number;
+  relativePath: string;
+  startLine: number;
+  id: number;
+}
+
 function iterateGapEventsForFix(db: DatabaseSync, opts: GapFixQueueFilter): Iterable<GapFixQueueRow> {
   const where: string[] = ["e.event_type = 'gap'"];
-  const params: Record<string, string | number | null> = {};
+  const baseParams: Record<string, string | number | null> = {};
 
   const selectedId = Number.isFinite(opts.id) && (opts.id as number) > 0 ? Math.floor(opts.id as number) : undefined;
   if (selectedId !== undefined) {
     where.push("e.id = :id");
-    params.id = selectedId;
+    baseParams.id = selectedId;
   } else {
     const retryStatuses = (opts.retryStatuses ?? []).map((s) => s.trim()).filter(Boolean);
     if (retryStatuses.length) {
@@ -594,7 +606,7 @@ function iterateGapEventsForFix(db: DatabaseSync, opts: GapFixQueueFilter): Iter
       for (let i = 0; i < retryStatuses.length; i += 1) {
         const key = `retry${i}`;
         placeholders.push(`:${key}`);
-        params[key] = retryStatuses[i];
+        baseParams[key] = retryStatuses[i];
       }
       where.push(`(e.gap_fix_status IS NULL OR e.gap_fix_status IN (${placeholders.join(",")}))`);
     } else {
@@ -604,32 +616,109 @@ function iterateGapEventsForFix(db: DatabaseSync, opts: GapFixQueueFilter): Iter
 
   if (opts.collector) {
     where.push("e.collector = :collector");
-    params.collector = opts.collector.toUpperCase();
+    baseParams.collector = opts.collector.toUpperCase();
   }
   if (opts.exchange) {
     where.push("e.exchange = :exchange");
-    params.exchange = opts.exchange.toUpperCase();
+    baseParams.exchange = opts.exchange.toUpperCase();
   }
   if (opts.symbol) {
     where.push("e.symbol = :symbol");
-    params.symbol = opts.symbol;
+    baseParams.symbol = opts.symbol;
   }
 
   const limit = Number.isFinite(opts.limit) && (opts.limit as number) > 0 ? Math.floor(opts.limit as number) : undefined;
-  if (limit !== undefined) {
-    params.limit = limit;
-  }
-
-  const sql =
+  const baseSql =
     `SELECT e.id, e.root_id, r.path AS root_path, e.relative_path,
             e.collector, e.exchange, e.symbol,
             e.start_line, e.end_line, e.gap_ms, e.gap_miss, e.gap_end_ts, e.gap_fix_status
        FROM events e
-       JOIN roots r ON r.id = e.root_id
-      WHERE ${where.join(" AND ")}
-      ORDER BY e.root_id, e.relative_path, e.start_line, e.id` +
-    (limit !== undefined ? " LIMIT :limit" : "") +
-    ";";
-  const stmt = db.prepare(sql);
-  return stmt.iterate(params) as Iterable<GapFixQueueRow>;
+       JOIN roots r ON r.id = e.root_id`;
+  const whereSql = where.join(" AND ");
+  // Keep queue deterministic and market-local so one symbol can be drained before moving to the next.
+  const orderBySql = " ORDER BY e.collector, e.exchange, e.symbol, e.root_id, e.relative_path, e.start_line, e.id";
+
+  if (selectedId !== undefined) {
+    const params: Record<string, string | number | null> = limit !== undefined ? { ...baseParams, limit } : baseParams;
+    const sql = `${baseSql} WHERE ${whereSql}${orderBySql}${limit !== undefined ? " LIMIT :limit" : ""};`;
+    return db.prepare(sql).all(params) as unknown as GapFixQueueRow[];
+  }
+
+  const pageSize = limit !== undefined ? Math.min(limit, GAP_FIX_QUEUE_PAGE_SIZE) : GAP_FIX_QUEUE_PAGE_SIZE;
+  // Page by keyset so each select uses a fresh read snapshot and does not hold a long-lived cursor while writes run.
+  return {
+    *[Symbol.iterator](): Iterator<GapFixQueueRow> {
+      let remaining = limit ?? Number.POSITIVE_INFINITY;
+      let cursor: GapFixQueueCursor | undefined;
+
+      while (remaining > 0) {
+        const pageLimit = Number.isFinite(remaining) ? Math.min(pageSize, remaining) : pageSize;
+        const rows = selectGapFixQueuePage(db, baseSql, whereSql, orderBySql, baseParams, pageLimit, cursor);
+        if (!rows.length) return;
+
+        for (let i = 0; i < rows.length; i += 1) {
+          yield rows[i];
+        }
+
+        remaining -= rows.length;
+        const last = rows[rows.length - 1];
+        cursor = {
+          collector: last.collector,
+          exchange: last.exchange,
+          symbol: last.symbol,
+          rootId: last.root_id,
+          relativePath: last.relative_path,
+          startLine: last.start_line,
+          id: last.id,
+        };
+      }
+    },
+  };
+}
+
+function selectGapFixQueuePage(
+  db: DatabaseSync,
+  baseSql: string,
+  whereSql: string,
+  orderBySql: string,
+  baseParams: Record<string, string | number | null>,
+  pageLimit: number,
+  cursor?: GapFixQueueCursor,
+): GapFixQueueRow[] {
+  const whereParts: string[] = [whereSql];
+  const params: Record<string, string | number | null> = {
+    ...baseParams,
+    pageLimit,
+  };
+  if (cursor) {
+    whereParts.push(
+      `(e.collector > :cursorCollector
+         OR (e.collector = :cursorCollector AND (
+              e.exchange > :cursorExchange
+              OR (e.exchange = :cursorExchange AND (
+                   e.symbol > :cursorSymbol
+                   OR (e.symbol = :cursorSymbol AND (
+                        e.root_id > :cursorRootId
+                        OR (e.root_id = :cursorRootId AND (
+                             e.relative_path > :cursorRelativePath
+                             OR (e.relative_path = :cursorRelativePath AND (
+                                  e.start_line > :cursorStartLine
+                                  OR (e.start_line = :cursorStartLine AND e.id > :cursorId)
+                                ))
+                           ))
+                      ))
+                 ))
+            )))`,
+    );
+    params.cursorCollector = cursor.collector;
+    params.cursorExchange = cursor.exchange;
+    params.cursorSymbol = cursor.symbol;
+    params.cursorRootId = cursor.rootId;
+    params.cursorRelativePath = cursor.relativePath;
+    params.cursorStartLine = cursor.startLine;
+    params.cursorId = cursor.id;
+  }
+
+  const sql = `${baseSql} WHERE ${whereParts.join(" AND ")}${orderBySql} LIMIT :pageLimit;`;
+  return (db.prepare(sql).all(params) as unknown as GapFixQueueRow[]) ?? [];
 }
