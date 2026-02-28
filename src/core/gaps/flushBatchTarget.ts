@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import zlib from "node:zlib";
 import type { Db } from "../db.js";
-import type { Collector } from "../model.js";
 import { classifyPath } from "../normalize.js";
 import type { GapFixEventRow } from "./queue.js";
 import type { DirtyMarketRange } from "./rollup.js";
@@ -67,7 +66,10 @@ export async function ensureFlushTargetFile(
     }
   }
 
-  const indexed = classifyPath(row.root_id, relativePath, row.collector as Collector);
+  const indexedRelativePath = relativePath.startsWith(`${row.collector}/`)
+    ? relativePath
+    : `${row.collector}/${relativePath}`;
+  const indexed = classifyPath(row.root_id, indexedRelativePath);
   if (indexed) db.insertFiles([indexed]);
 }
 

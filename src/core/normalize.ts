@@ -47,34 +47,23 @@ function stripCompression(name: string): string {
 export function classifyPath(
   rootId: number,
   relativePath: string,
-  collectorHint?: Collector,
 ): IndexedFile | null {
   const normalizedPath = path.sep === "/" ? relativePath : relativePath.split(path.sep).join("/");
   const segments = normalizedPath.split("/");
-  if (segments.length < 1) return null;
-
-  let collector: Collector | null = null;
-  let offset = 0;
+  if (segments.length < 4) return null;
 
   const first = segments[0].toUpperCase();
-  if (first === Collector.RAM || first === Collector.PI) {
-    collector = first as Collector;
-    offset = 1; // bucket starts at index 1
-  } else if (collectorHint) {
-    collector = collectorHint;
-    offset = 0; // bucket starts at index 0 when root is inside collector
-  } else {
-    return null;
-  }
+  if (first !== Collector.RAM && first !== Collector.PI) return null;
+  const collector = first as Collector;
 
   const fileName = segments[segments.length - 1];
   const rawExt = path.extname(fileName);
   if (rawExt && rawExt.toLowerCase() !== ".gz") return null;
   const ext = rawExt || undefined;
 
-  // logical structure: {collector?}/{bucket}/{exchange}/{symbol}/{file}
-  const exchangeDir = segments[offset + 1];
-  const symbolDir = segments[offset + 2];
+  // logical structure: {collector}/{bucket}/{exchange}/{symbol}/{file}
+  const exchangeDir = segments[2];
+  const symbolDir = segments[3];
 
   if (!exchangeDir || !symbolDir) return null;
 

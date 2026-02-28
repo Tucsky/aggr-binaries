@@ -8,6 +8,7 @@ export interface Db {
   db: DatabaseSync;
   ensureRoot(path: string): number;
   insertFiles(rows: IndexedFile[]): { inserted: number; existing: number };
+  listIndexedMarketRanges(): IndexedMarketRangeRow[];
   upsertRegistry(entry: RegistryEntry): void;
   replaceRegistry(entries: RegistryEntry[], filter?: RegistryFilter): { upserted: number; deleted: number };
   getRegistryEntry(key: RegistryKey): RegistryEntry | null;
@@ -42,6 +43,15 @@ export interface GapFixQueueRow {
   gap_miss: number | null;
   gap_end_ts: number | null;
   gap_fix_status: string | null;
+}
+
+export interface IndexedMarketRangeRow {
+  collector: string;
+  exchange: string;
+  symbol: string;
+  startTs: number;
+  endTs: number;
+  updatedAt: number;
 }
 
 export function openDatabase(dbPath: string): Db {
@@ -112,6 +122,10 @@ export function openDatabase(dbPath: string): Db {
       WHERE id = :id;`,
   );
   const deleteEventByIdStmt = db.prepare("DELETE FROM events WHERE id = :id;");
+  const listIndexedMarketRangesStmt = db.prepare(
+    `SELECT collector, exchange, symbol, start_ts, end_ts, updated_at
+       FROM indexed_market_ranges;`,
+  );
 
   const api: Db = {
     db,
@@ -126,6 +140,7 @@ export function openDatabase(dbPath: string): Db {
       });
     },
     insertFiles: (rows: IndexedFile[]) => insertMany(db, insertStmt, upsertIndexedMarketRangeStmt, rows),
+    listIndexedMarketRanges: () => listIndexedMarketRanges(listIndexedMarketRangesStmt),
     upsertRegistry: (entry: RegistryEntry) => upsertRegistry(upsertRegistryStmt, entry),
     replaceRegistry: (entries: RegistryEntry[], filter?: RegistryFilter) =>
       replaceRegistry(db, upsertRegistryStmt, deleteRegistryStmt, entries, filter),
@@ -536,6 +551,32 @@ function getRegistry(stmt: StatementSync, key: RegistryKey): RegistryEntry | nul
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
+}
+
+function listIndexedMarketRanges(stmt: StatementSync): IndexedMarketRangeRow[] {
+  const rows = stmt.all() as Array<{
+    collector: string;
+    exchange: string;
+    symbol: string;
+    start_ts: number;
+    end_ts: number;
+    updated_at: number;
+  }>;
+  if (!rows.length) return [];
+
+  const ranges = new Array<IndexedMarketRangeRow>(rows.length);
+  for (let i = 0; i < rows.length; i += 1) {
+    const row = rows[i];
+    ranges[i] = {
+      collector: row.collector,
+      exchange: row.exchange,
+      symbol: row.symbol,
+      startTs: row.start_ts,
+      endTs: row.end_ts,
+      updatedAt: row.updated_at,
+    };
+  }
+  return ranges;
 }
 
 function iterateGapEventsForFix(db: DatabaseSync, opts: GapFixQueueFilter): Iterable<GapFixQueueRow> {

@@ -2,8 +2,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { FileSystemEntry } from "./model.js";
 
+export interface DirectoryEntry {
+  rootPath: string;
+  relativePath: string;
+  fullPath: string;
+}
+
 interface WalkOptions {
   includePaths?: string[];
+  shouldDescendDir?: (entry: DirectoryEntry) => boolean | Promise<boolean>;
 }
 
 export async function* walkFiles(
@@ -26,6 +33,14 @@ export async function* walkFiles(
       if (dirent.name === ".DS_Store") continue;
       const fullPath = path.join(dir, dirent.name);
       if (dirent.isDirectory()) {
+        if (options.shouldDescendDir) {
+          const shouldDescend = await options.shouldDescendDir({
+            rootPath,
+            relativePath: toPosix(path.relative(rootPath, fullPath)),
+            fullPath,
+          });
+          if (!shouldDescend) continue;
+        }
         dirStack.push(fullPath);
         continue;
       }

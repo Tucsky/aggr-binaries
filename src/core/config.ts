@@ -98,7 +98,7 @@ Options (override config file):
   --exchange <name>         Process/Clear: target exchange (required for clear)
   --symbol <name>           Process/Clear: target symbol (required for clear)
   --outdir <path>           Processing: output directory (default: ${DEFAULTS.outDir})
-  --force                   Processing: ignore processed-files cache
+  --force                   Index: full-scan all files (disable incremental watermark shortcut); Processing: rebuild from scratch
   --timeframe <tf>          Processing: timeframe string (e.g., 1m, 5m, 1h) (default: ${DEFAULTS.timeframe})
   --flush-interval <s>      Processing: flush interval in seconds (default: ${DEFAULTS.flushIntervalSeconds})
   --limit <n>               Fixgaps: maximum gap events to process
