@@ -55,6 +55,7 @@ export interface TimelineRunActionQuery {
   exchange: string;
   symbol: string;
   timeframe?: string;
+  gapEventId?: number;
   signal?: AbortSignal;
 }
 
@@ -160,6 +161,7 @@ export function buildTimelineEventsRowsPayload(
 export async function runTimelineMarketAction(
   query: TimelineRunActionQuery,
 ): Promise<TimelineRunActionResponse> {
+  const normalizedGapEventId = normalizePositiveInt(query.gapEventId);
   const url = new URL("/api/timeline/actions", window.location.origin);
   const response = await fetch(url.pathname + url.search, {
     method: "POST",
@@ -170,10 +172,18 @@ export async function runTimelineMarketAction(
       exchange: query.exchange,
       symbol: query.symbol,
       timeframe: query.timeframe,
+      gapEventId: normalizedGapEventId,
     }),
     signal: query.signal,
   });
   return (await parseJsonResponse(response, "Failed to run market action")) as TimelineRunActionResponse;
+}
+
+function normalizePositiveInt(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value)) return undefined;
+  const normalized = Math.floor(value);
+  if (normalized <= 0 || normalized !== value) return undefined;
+  return normalized;
 }
 
 async function parseJsonResponse(

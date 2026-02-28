@@ -1,7 +1,9 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy, onMount } from "svelte";
+  import { addToast } from "../../framework/toast/toastStore.js";
   import TimelineEventPopover from "./TimelineEventPopover.svelte";
   import TimelineRow from "./TimelineRow.svelte";
+  import TimelineRowActionsMenu from "./TimelineRowActionsMenu.svelte";
   import {
     fetchTimelineEvents,
     fetchTimelineMarkets,
@@ -50,6 +52,11 @@
   let events: TimelineEvent[] = [];
   let viewRange: TimelineRange | null = null;
   let hoveredEvent: TimelineHoverEvent | null = null;
+  let actionsOpen = false;
+  let actionsAnchorEl: HTMLElement | null = null;
+  let actionsContextAnchorEl: HTMLDivElement | null = null;
+  let actionsContextPoint: { x: number; y: number } | null = null;
+  let actionsGapEventId: number | null = null;
 
   let eventsAbort: AbortController | null = null;
   let activeRequestId = 0;
@@ -65,6 +72,9 @@
       : "";
   $: hasMoreLeft = Boolean(market && viewRange && viewRange.startTs > market.startTs);
   $: hasMoreRight = Boolean(market && viewRange && viewRange.endTs < market.endTs);
+  $: resolvedActionsAnchorEl = actionsContextPoint
+    ? actionsContextAnchorEl
+    : actionsAnchorEl;
 
   $: if (loadKey && loadKey !== lastLoadKey) {
     lastLoadKey = loadKey;
@@ -118,7 +128,7 @@
       }
 
       market = nextMarket;
-      viewRange = buildTimelineFullViewRange(
+      viewRange = viewRange || buildTimelineFullViewRange(
         { startTs: nextMarket.startTs, endTs: nextMarket.endTs },
         PAN_OVERSCROLL_RATIO,
       );
@@ -157,6 +167,7 @@
     events = [];
     viewRange = null;
     hoveredEvent = null;
+    closeActionsMenu();
   }
 
   function isCurrentRequest(requestId: number, expectedKey: string): boolean {
@@ -198,6 +209,57 @@
     }>,
   ): void {
     hoveredEvent = event.detail.hoveredEvent;
+  }
+
+  function handleRowContextActions(
+    event: CustomEvent<{
+      market: TimelineMarket;
+      gapEventId: number | null;
+      clientX: number;
+      clientY: number;
+      insideSource: boolean;
+    }>,
+  ): void {
+    if (!event.detail.insideSource) {
+      closeActionsMenu();
+      return;
+    }
+    actionsAnchorEl = null;
+    actionsContextPoint = { x: event.detail.clientX, y: event.detail.clientY };
+    actionsGapEventId = event.detail.gapEventId;
+    market = event.detail.market;
+    actionsOpen = true;
+  }
+
+  function closeActionsMenu(): void {
+    actionsOpen = false;
+    actionsAnchorEl = null;
+    actionsContextPoint = null;
+    actionsGapEventId = null;
+  }
+
+  function openMarketFromMenu(event: CustomEvent<TimelineMarket>): void {
+    closeActionsMenu();
+    dispatch("jump", { market: event.detail, ts: event.detail.endTs });
+  }
+
+  async function copyMarketFromMenu(event: CustomEvent<TimelineMarket>): Promise<void> {
+    closeActionsMenu();
+    const target = event.detail;
+    const key = target.timeframe
+      ? `${target.collector}:${target.exchange}:${target.symbol}:${target.timeframe}`
+      : `${target.collector}:${target.exchange}:${target.symbol}`;
+    try {
+      await navigator.clipboard.writeText(key);
+      addToast(`Copied ${key}`, "success", 1200);
+    } catch {
+      addToast("Clipboard unavailable", "error", 1800);
+    }
+  }
+
+  async function handleActionCompleted(): Promise<void> {
+    if (!lastLoadKey) return;
+    await loadNavigatorData(lastLoadKey);
   }
 
   function handleZoom(event: CustomEvent<{ centerTs: number; deltaY: number }>): void {
@@ -256,6 +318,7 @@
           on:hover={handleHover}
           on:zoom={handleZoom}
           on:pan={handlePan}
+          on:contextActions={handleRowContextActions}
         />
       {:else}
         <div class="px-2 py-1 text-xs text-slate-500">No market selected.</div>
@@ -269,4 +332,22 @@
     {/if}
   </div>
   <TimelineEventPopover hoveredEvent={hoveredEvent} />
+  {#if actionsContextPoint}
+    <div
+      bind:this={actionsContextAnchorEl}
+      class="pointer-events-none fixed h-px w-px"
+      style={`left:${actionsContextPoint.x}px;top:${actionsContextPoint.y}px;`}
+      aria-hidden="true"
+    ></div>
+  {/if}
+  <TimelineRowActionsMenu
+    open={actionsOpen}
+    anchorEl={resolvedActionsAnchorEl}
+    market={market}
+    gapEventId={actionsGapEventId}
+    on:close={closeActionsMenu}
+    on:openMarket={openMarketFromMenu}
+    on:copyMarket={copyMarketFromMenu}
+    on:actionCompleted={handleActionCompleted}
+  />
 </section>

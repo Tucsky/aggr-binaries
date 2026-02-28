@@ -98,7 +98,10 @@
   let lastPanDeltaMs = 0;
   let actionsOpen = false;
   let actionsAnchorEl: HTMLElement | null = null;
+  let actionsContextAnchorEl: HTMLDivElement | null = null;
+  let actionsContextPoint: { x: number; y: number } | null = null;
   let actionsMarket: TimelineMarket | null = null;
+  let actionsGapEventId: number | null = null;
   let scrollEl: HTMLDivElement | null = null;
   let resizeObserver: ResizeObserver | null = null;
   let stopTitleResize: (() => void) | null = null;
@@ -120,6 +123,7 @@
   let pendingEventsForceReload = false;
   let inFlightEventsQueryKey = "";
   let eventsCache: TimelineViewportEventCacheState = createTimelineViewportEventCacheState();
+  $: resolvedActionsAnchorEl = actionsContextPoint ? actionsContextAnchorEl : actionsAnchorEl;
   $: collectorOptions = unique(allMarkets.map((market) => market.collector));
   $: if (!shouldKeepFilterSelection(collectorFilter, collectorOptions)) collectorFilter = "";
   $: exchangeOptions = unique(allMarkets.filter((market) => !collectorFilter || market.collector === collectorFilter).map((market) => market.exchange));
@@ -480,7 +484,7 @@
     if (!scrollEl) return;
     scrollTop = scrollEl.scrollTop;
     viewportHeight = scrollEl.clientHeight;
-    actionsOpen = false;
+    closeActionsMenu();
     scheduleEventsReload(VIEWPORT_EVENT_RELOAD_DEBOUNCE_MS);
   }
   function isRowCanvasTarget(target: EventTarget | null): target is HTMLCanvasElement {
@@ -646,11 +650,35 @@
     if (!anchorEl) return;
     const sameAnchor = actionsOpen && actionsAnchorEl === anchorEl;
     actionsAnchorEl = anchorEl;
+    actionsContextPoint = null;
+    actionsGapEventId = null;
     actionsMarket = event.detail.market;
     actionsOpen = !sameAnchor;
   }
+  function handleRowContextActions(
+    event: CustomEvent<{
+      market: TimelineMarket;
+      gapEventId: number | null;
+      clientX: number;
+      clientY: number;
+      insideSource: boolean;
+    }>,
+  ): void {
+    if (!event.detail.insideSource) {
+      closeActionsMenu();
+      return;
+    }
+    actionsAnchorEl = null;
+    actionsContextPoint = { x: event.detail.clientX, y: event.detail.clientY };
+    actionsMarket = event.detail.market;
+    actionsGapEventId = event.detail.gapEventId;
+    actionsOpen = true;
+  }
   function closeActionsMenu(): void {
     actionsOpen = false;
+    actionsAnchorEl = null;
+    actionsContextPoint = null;
+    actionsGapEventId = null;
   }
   function openMarketFromMenu(event: CustomEvent<TimelineMarket>): void {
     closeActionsMenu();
@@ -793,7 +821,21 @@
         <div class="relative z-10 min-w-max" style={`width: ${totalGridWidth}px;`}>
           <div style={`height: ${topPadding}px;`}></div>
           {#each visibleMarkets as market (rowIdentity(market))}
-            <TimelineRow {market} events={groupedEvents.get(marketKey(market)) ?? []} range={selectedRange} {viewRange} timelineWidth={timelineWidth} rowHeight={ROW_HEIGHT} {titleWidth} on:open={handleOpen} on:hover={handleHover} on:zoom={handleZoom} on:pan={handlePan} on:actions={handleRowActions} />
+            <TimelineRow
+              {market}
+              events={groupedEvents.get(marketKey(market)) ?? []}
+              range={selectedRange}
+              {viewRange}
+              timelineWidth={timelineWidth}
+              rowHeight={ROW_HEIGHT}
+              {titleWidth}
+              on:open={handleOpen}
+              on:hover={handleHover}
+              on:zoom={handleZoom}
+              on:pan={handlePan}
+              on:actions={handleRowActions}
+              on:contextActions={handleRowContextActions}
+            />
           {/each}
           <div style={`height: ${bottomPadding}px;`}></div>
         </div>
@@ -817,10 +859,19 @@
       <div class="z-10 pointer-events-none absolute bottom-0 top-0 w-5 bg-gradient-to-l from-slate-950/90 to-transparent" style={`left:${timelineEndPx - 20}px;`}></div>
     {/if}
     <TimelineEventPopover hoveredEvent={hoveredEvent} />
+    {#if actionsContextPoint}
+      <div
+        bind:this={actionsContextAnchorEl}
+        class="pointer-events-none fixed h-px w-px"
+        style={`left:${actionsContextPoint.x}px;top:${actionsContextPoint.y}px;`}
+        aria-hidden="true"
+      ></div>
+    {/if}
     <TimelineRowActionsMenu
       open={actionsOpen}
-      anchorEl={actionsAnchorEl}
+      anchorEl={resolvedActionsAnchorEl}
       market={actionsMarket}
+      gapEventId={actionsGapEventId}
       on:close={closeActionsMenu}
       on:openMarket={openMarketFromMenu}
       on:copyMarket={copyMarketFromMenu}

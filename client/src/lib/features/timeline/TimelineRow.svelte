@@ -23,6 +23,7 @@
     drawTimelineSourceRect,
     INDEXED_SOURCE_STYLE,
     PROCESSED_SOURCE_STYLE,
+    type TimelineSourceRect,
     resolveTimelineSourceRange,
   } from "./timelineRowSource.js";
   import {
@@ -58,12 +59,27 @@
     anchorEl: HTMLButtonElement | null;
   }
 
+  interface ContextActionsDetail {
+    market: TimelineMarket;
+    gapEventId: number | null;
+    clientX: number;
+    clientY: number;
+    insideSource: boolean;
+  }
+
   interface MarkerHit {
     x1: number;
     x2: number;
     y1: number;
     y2: number;
     event: TimelineEvent;
+  }
+
+  interface SourceHit {
+    x1: number;
+    x2: number;
+    y1: number;
+    y2: number;
   }
 
   export let market: TimelineMarket;
@@ -83,10 +99,12 @@
     zoom: ZoomDetail;
     pan: PanDetail;
     actions: ActionsDetail;
+    contextActions: ContextActionsDetail;
   }>();
 
   let canvasEl: HTMLCanvasElement | null = null;
   let markerHits: MarkerHit[] = [];
+  let sourceHits: SourceHit[] = [];
   let actionsButton: HTMLButtonElement | null = null;
 
   let pointerActive = false;
@@ -127,6 +145,7 @@
     ctx.clearRect(0, 0, cssWidth, cssHeight);
 
     markerHits = [];
+    sourceHits = [];
 
     const indexedSource = resolveTimelineSourceRange(
       market.indexedStartTs,
@@ -140,7 +159,7 @@
     );
 
     if (indexedSource) {
-      drawTimelineSourceRect(
+      const indexedRect = drawTimelineSourceRect(
         ctx,
         indexedSource.startTs,
         indexedSource.endTs,
@@ -149,9 +168,10 @@
         cssHeight,
         INDEXED_SOURCE_STYLE,
       );
+      if (indexedRect) sourceHits.push(sourceHitFromRect(indexedRect));
     }
     if (processedSource) {
-      drawTimelineSourceRect(
+      const processedRect = drawTimelineSourceRect(
         ctx,
         processedSource.startTs,
         processedSource.endTs,
@@ -160,6 +180,7 @@
         cssHeight,
         PROCESSED_SOURCE_STYLE,
       );
+      if (processedRect) sourceHits.push(sourceHitFromRect(processedRect));
     }
 
     if (highlightRange) {
@@ -249,6 +270,7 @@
     const rect = canvasEl.getBoundingClientRect();
     const x = clampTs(event.clientX - rect.left, 0, normalizedTimelineWidth);
     const y = clampTs(event.clientY - rect.top, 0, normalizedRowHeight);
+    if (!hasSourceAtPoint(x, y)) return;
     const marker = findMarkerAtPoint(x, y);
     const clickedTs = toTimelineTs(x, viewRange, normalizedTimelineWidth);
     const targetTs = resolveOpenTsFromClick(
@@ -362,9 +384,56 @@
     return null;
   }
 
+  function hasSourceAtPoint(x: number, y: number): boolean {
+    for (let i = sourceHits.length - 1; i >= 0; i -= 1) {
+      const hit = sourceHits[i];
+      if (x >= hit.x1 && x <= hit.x2 && y >= hit.y1 && y <= hit.y2) return true;
+    }
+    return false;
+  }
+
   function handleActionsClick(): void {
     if (!showActions) return;
     dispatch("actions", { market, anchorEl: actionsButton });
+  }
+
+  function handleCanvasContextMenu(event: MouseEvent): void {
+    if (!canvasEl) return;
+    event.preventDefault();
+    const rect = canvasEl.getBoundingClientRect();
+    const x = clampTs(event.clientX - rect.left, 0, normalizedTimelineWidth);
+    const y = clampTs(event.clientY - rect.top, 0, normalizedRowHeight);
+    const insideSource = hasSourceAtPoint(x, y);
+    const marker = findMarkerAtPoint(x, y);
+    const gapEventId = resolveGapEventId(marker);
+    dispatch("contextActions", {
+      market,
+      gapEventId: insideSource ? gapEventId : null,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      insideSource,
+    });
+  }
+
+  function sourceHitFromRect(rect: TimelineSourceRect): SourceHit {
+    return {
+      x1: rect.x1,
+      x2: rect.x2,
+      y1: rect.y,
+      y2: rect.y + rect.height,
+    };
+  }
+
+  function resolveGapEventId(marker: MarkerHit | null): number | null {
+    if (!marker || eventKind(marker.event) !== "gap") return null;
+    return normalizePositiveInt(marker.event.id);
+  }
+
+  function normalizePositiveInt(value: number): number | null {
+    if (!Number.isFinite(value)) return null;
+    const normalized = Math.floor(value);
+    if (normalized <= 0 || normalized !== value) return null;
+    return normalized;
   }
 </script>
 
@@ -407,6 +476,7 @@
         on:pointerup={handlePointerUp}
         on:pointercancel={handlePointerUp}
         on:pointerleave={handlePointerLeave}
+        on:contextmenu={handleCanvasContextMenu}
       ></canvas>
     </div>
   </div>
@@ -425,6 +495,7 @@
       on:pointerup={handlePointerUp}
       on:pointercancel={handlePointerUp}
       on:pointerleave={handlePointerLeave}
+      on:contextmenu={handleCanvasContextMenu}
     ></canvas>
   </div>
 {/if}

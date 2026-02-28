@@ -90,6 +90,52 @@ test("timeline action process ignores ALL timeframe override and preserves marke
   assert.strictEqual(seenOverrides[0].timeframe, undefined);
 });
 
+test("timeline action fixgaps forwards optional gapEventId", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aggr-timeline-actions-fixgaps-id-"));
+  let seenId: number | undefined;
+
+  const deps = buildDeps(root, {
+    runFixGaps: async (_config, _db, options) => {
+      seenId = options?.id;
+      return {
+        selectedEvents: 1,
+        processedFiles: 1,
+        recoveredTrades: 4,
+        deletedEvents: 0,
+        fixedEvents: 1,
+        missingAdapter: 0,
+        adapterError: 0,
+        binariesPatched: 1,
+      };
+    },
+  });
+
+  const result = await executeTimelineAction(
+    {} as Db,
+    {
+      action: TimelineMarketAction.FixGaps,
+      collector: "PI",
+      exchange: "BYBIT",
+      symbol: "BTCUSDT",
+      gapEventId: 321,
+    },
+    { dbPath: path.join(root, "index.sqlite"), outDir: path.join(root, "out") },
+    deps,
+  );
+
+  assert.strictEqual(seenId, 321);
+  assert.deepStrictEqual(result.details, {
+    selectedEvents: 1,
+    processedFiles: 1,
+    recoveredTrades: 4,
+    fixedEvents: 1,
+    deletedEvents: 0,
+    missingAdapter: 0,
+    adapterError: 0,
+    binariesPatched: 1,
+  });
+});
+
 test("timeline action clear deletes row state and outputs before reindexing selected market", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aggr-timeline-actions-clear-"));
   const outDir = path.join(root, "out");

@@ -27,6 +27,7 @@ export interface TimelineActionsRequestPayload {
   exchange: string;
   symbol: string;
   timeframe?: string;
+  gapEventId?: number;
 }
 
 interface TimelineActionMarket {
@@ -149,7 +150,11 @@ export async function executeTimelineAction(
   }
 
   if (payload.action === TimelineMarketAction.FixGaps) {
-    const stats = await deps.runFixGaps(config, db);
+    const stats = await deps.runFixGaps(
+      config,
+      db,
+      payload.gapEventId ? { id: payload.gapEventId } : {},
+    );
     return {
       action: payload.action,
       market: buildResultMarket(payload),
@@ -238,8 +243,9 @@ function parseTimelineActionPayload(raw: unknown): TimelineActionsRequestPayload
   const exchange = parseRequiredField(value.exchange, "exchange").toUpperCase();
   const symbol = parseRequiredField(value.symbol, "symbol");
   const timeframe = parseOptionalField(value.timeframe);
+  const gapEventId = parseOptionalPositiveInt(value.gapEventId, "gapEventId");
 
-  return { action, collector, exchange, symbol, timeframe };
+  return { action, collector, exchange, symbol, timeframe, gapEventId };
 }
 
 function parseAction(raw: unknown): TimelineMarketAction {
@@ -267,6 +273,18 @@ function parseOptionalField(raw: unknown): string | undefined {
   if (typeof raw !== "string") return undefined;
   const trimmed = raw.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function parseOptionalPositiveInt(raw: unknown, name: string): number | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  const value = Math.floor(raw);
+  if (value <= 0 || value !== raw) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return value;
 }
 
 async function readJsonBody(req: http.IncomingMessage): Promise<unknown> {

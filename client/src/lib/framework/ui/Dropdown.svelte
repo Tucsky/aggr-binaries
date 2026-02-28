@@ -50,6 +50,9 @@
     teardownListeners();
 
     const handler = (ev: Event) => {
+      // Ignore non-primary mouse buttons so context-menu flows can update the same open dropdown.
+      if (ev instanceof MouseEvent && ev.button !== 0) return;
+
       const target = ev.target as HTMLElement | null;
       if (!el || !target) return;
       if (el.contains(target)) return;

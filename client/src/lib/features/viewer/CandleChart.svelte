@@ -474,20 +474,20 @@
 <div class="relative h-full w-full">
   <div bind:this={chartEl} class="h-full w-full"></div>
 
-  <div class="pointer-events-none absolute left-2 top-2 z-10 flex flex-col gap-1 text-xs leading-none">
+  <div class="pointer-events-none absolute left-2 top-2 z-10 flex flex-col gap-1 text-xs leading-none pr-1">
     <button class="pointer-events-auto flex items-center gap-1 border-0 text-slate-200" class:opacity-45={!showLiquidationSeries} on:click={toggleLiquidationSeries} type="button">
-      <span class="min-w-[75px] text-left py-1">Liquidations</span>
-      <span bind:this={liqValueEl} class="text-left bg-slate-950/80 hover:bg-slate-950/95 px-2 py-1 font-mono text-emerald-300">na</span>
+      <span class="text-left py-1">Liquidations</span>
+      <span bind:this={liqValueEl} class="absolute left-full text-nowrap pointer-events-none text-left bg-slate-950/80 hover:bg-slate-950/95 px-2 py-1 font-mono text-emerald-300">na</span>
     </button>
 
     <button class="pointer-events-auto flex items-center gap-1 border-0 text-slate-200" class:opacity-45={!showPriceSeries} on:click={togglePriceSeries} type="button">
-      <span class="min-w-[75px] text-left py-1">Price</span>
-      <span bind:this={priceValueEl} class="text-left bg-slate-950/80 hover:bg-slate-950/95 px-2 py-1 font-mono text-emerald-300">na</span>
+      <span class="text-left py-1">Price</span>
+      <span bind:this={priceValueEl} class="absolute left-full text-nowrap pointer-events-none text-left bg-slate-950/80 hover:bg-slate-950/95 px-2 py-1 font-mono text-emerald-300">na</span>
     </button>
 
     <button class="pointer-events-auto flex items-center gap-1 border-0 text-slate-200" class:opacity-45={!showVolumeSeries} on:click={toggleVolumeSeries} type="button">
-      <span class="min-w-[75px] text-left py-1">Volume</span>
-      <span bind:this={volumeValueEl} class="text-left bg-slate-950/80 hover:bg-slate-950/95 px-2 py-1 font-mono text-emerald-300">na</span>
+      <span class="text-left py-1">Volume</span>
+      <span bind:this={volumeValueEl} class="absolute left-full text-nowrap pointer-events-none text-left bg-slate-950/80 hover:bg-slate-950/95 px-2 py-1 font-mono text-emerald-300">na</span>
     </button>
   </div>
 </div>
