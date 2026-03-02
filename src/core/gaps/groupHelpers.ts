@@ -58,14 +58,12 @@ export function formatGapContext(row: GapFixEventRow): string {
  * Build compact progress label for a file path.
  */
 export function formatFileProgressLabel(row: GapFixEventRow): string {
-  return path.posix.basename(row.relative_path);
+  return path.posix.basename(row.end_relative_path);
 }
 
 function gapStartTs(row: GapFixEventRow): number | null {
-  if (row.gap_end_ts === null || !Number.isFinite(row.gap_end_ts)) return null;
-  if (row.gap_ms === null || !Number.isFinite(row.gap_ms)) return row.gap_end_ts;
-  const start = row.gap_end_ts - row.gap_ms;
-  return Number.isFinite(start) ? start : row.gap_end_ts;
+  if (!Number.isFinite(row.start_ts)) return null;
+  return row.start_ts;
 }
 
 function formatGapDayTimeUtc(ts: number | null): { date: string; time: string } | undefined {

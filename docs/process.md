@@ -71,7 +71,9 @@ With `--force`:
 
 ## Gap persistence and detection
 Process writes gap rows into `gaps` (one row per detected gap):
-- `gap_ms`, `gap_miss`, `gap_end_ts`, `gap_score`
+- `gap_ms`, `gap_miss`, `gap_score`
+- `start_ts`, `end_ts`
+- `start_relative_path`, `end_relative_path`
 - parse rejects are not persisted; they are summarized in logs (`[parse-skip] ...`)
 
 Gap detection is adaptive per market:
@@ -115,7 +117,7 @@ flowchart TD
   T -->|no| U["Accumulate candle bucket<br/>fn: accumulate"]
   U --> P
   R --> P
-  P --> V["Persist file gaps in DB (replace by file key)<br/>fn: db.deleteGapsForFile / db.insertGaps"]
+  P --> V["Persist file gaps in DB (replace by gap end file key)<br/>fn: db.deleteGapsForEndFile / db.insertGaps"]
   V --> W[Log parse-reject summary if non-zero]
   W --> X[Update in-memory stats]
   X --> Y{Flush interval elapsed?}

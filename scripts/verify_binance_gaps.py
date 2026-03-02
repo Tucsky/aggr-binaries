@@ -145,12 +145,11 @@ def iter_gap_rows(conn: sqlite3.Connection, args: argparse.Namespace) -> Iterabl
         order_by = "(e.gap_ms * e.gap_miss) DESC"
 
     sql = f"""
-      SELECT e.id, e.root_id, r.path AS root_path, e.relative_path,
+      SELECT e.id, e.root_id, r.path AS root_path, e.end_relative_path,
              e.collector, e.exchange, e.symbol,
-             e.gap_ms, e.gap_miss, e.gap_end_ts, f.start_ts AS file_start_ts
+             e.gap_ms, e.gap_miss, e.start_ts, e.end_ts
         FROM gaps e
         JOIN roots r ON r.id = e.root_id
-        LEFT JOIN files f ON f.root_id = e.root_id AND f.relative_path = e.relative_path
        WHERE {where_clause}
        ORDER BY {order_by}
        LIMIT :limit
@@ -159,12 +158,11 @@ def iter_gap_rows(conn: sqlite3.Connection, args: argparse.Namespace) -> Iterabl
 
     if args.order == "random":
         pool_sql = f"""
-          SELECT e.id, e.root_id, r.path AS root_path, e.relative_path,
+          SELECT e.id, e.root_id, r.path AS root_path, e.end_relative_path,
                  e.collector, e.exchange, e.symbol,
-                 e.gap_ms, e.gap_miss, e.gap_end_ts, f.start_ts AS file_start_ts
+                 e.gap_ms, e.gap_miss, e.start_ts, e.end_ts
             FROM gaps e
             JOIN roots r ON r.id = e.root_id
-            LEFT JOIN files f ON f.root_id = e.root_id AND f.relative_path = e.relative_path
            WHERE {where_clause}
            ORDER BY e.gap_miss DESC
            LIMIT :pool;
@@ -302,18 +300,10 @@ def main() -> int:
     total_binance_trades = 0
 
     for row in rows:
-        gap_end_ts = row["gap_end_ts"]
-        file_start_ts = row["file_start_ts"]
-        ts = gap_end_ts if gap_end_ts is not None else file_start_ts
-        if ts is None:
-            path_desc = resolve_file_path(row["root_path"], row["relative_path"])
-            print(f"[id={row['id']}] missing gap_end_ts and file start_ts in {path_desc}")
-            continue
-
         gap_ms = int(row["gap_ms"])
         gap_miss = int(row["gap_miss"])
-        start_ms = ts - gap_ms
-        end_ms = ts
+        start_ms = int(row["start_ts"])
+        end_ms = int(row["end_ts"])
         dates = list(iter_dates(start_ms, end_ms))
         if len(dates) > 3:
             print(format_gap_summary(row["id"], gap_miss, 0, "n/a"))
@@ -347,8 +337,6 @@ def main() -> int:
 
         ratio = fmt_ratio(total, gap_miss)
         print(format_gap_summary(row["id"], gap_miss, total, ratio))
-        if gap_end_ts is None and file_start_ts is not None:
-            print(f"  source=file start_ts={file_start_ts}")
         print(format_window_summary(start_ms, end_ms, gap_ms, first_hit, last_hit))
         inspected += 1
         total_est_miss += gap_miss

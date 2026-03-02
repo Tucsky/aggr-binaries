@@ -62,7 +62,6 @@ test("runClear removes selected market state then reindexes only that market", a
     db.insertGaps(
       {
         rootId,
-        relativePath: "PI/2025/BYBIT/BTCUSDT/2025-01-01-00.gz",
         collector: "PI",
         exchange: "BYBIT",
         symbol: "BTCUSDT",
@@ -70,13 +69,15 @@ test("runClear removes selected market state then reindexes only that market", a
       [{
         gapMs: 90_000,
         gapMiss: 1,
-        gapEndTs: 1_735_689_690_000,
+        startTs: 1_735_689_600_000,
+        endTs: 1_735_689_690_000,
+        startRelativePath: "PI/2025/BYBIT/BTCUSDT/2025-01-01-00.gz",
+        endRelativePath: "PI/2025/BYBIT/BTCUSDT/2025-01-01-00.gz",
       }],
     );
     db.insertGaps(
       {
         rootId,
-        relativePath: "PI/2025/BYBIT/ETHUSDT/2025-01-01-00.gz",
         collector: "PI",
         exchange: "BYBIT",
         symbol: "ETHUSDT",
@@ -84,7 +85,10 @@ test("runClear removes selected market state then reindexes only that market", a
       [{
         gapMs: 90_000,
         gapMiss: 1,
-        gapEndTs: 1_735_689_690_000,
+        startTs: 1_735_689_600_000,
+        endTs: 1_735_689_690_000,
+        startRelativePath: "PI/2025/BYBIT/ETHUSDT/2025-01-01-00.gz",
+        endRelativePath: "PI/2025/BYBIT/ETHUSDT/2025-01-01-00.gz",
       }],
     );
     db.upsertRegistry({

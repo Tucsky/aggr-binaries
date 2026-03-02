@@ -24,7 +24,7 @@ const DEBUG_FIXGAPS = process.env.AGGR_FIXGAPS_DEBUG === "1";
 
 /**
  * Process all gap events that belong to a single raw input file.
- * "Batch" here means grouped by (root_id, relative_path).
+ * "Batch" here means grouped by (root_id, end_relative_path).
  */
 export async function processFileGapBatch(
   fileGapEvents: GapFixEventRow[],
@@ -44,7 +44,7 @@ export async function processFileGapBatch(
   try {
     if (DEBUG_FIXGAPS) {
       logFixgapsLine(
-        `[fixgaps/debug] file_start exchange=${fileRow.exchange} symbol=${fileRow.symbol} path=${fileRow.relative_path} events=${fileGapEvents.length}`,
+        `[fixgaps/debug] file_start exchange=${fileRow.exchange} symbol=${fileRow.symbol} path=${fileRow.end_relative_path} events=${fileGapEvents.length}`,
       );
     }
 
@@ -57,7 +57,7 @@ export async function processFileGapBatch(
     const extraction = extractResolvableWindows(fileLabel, fileGapEvents);
     if (DEBUG_FIXGAPS) {
       logFixgapsLine(
-        `[fixgaps/debug] windows path=${fileRow.relative_path} resolvable=${extraction.windows.length} skipped_large=${extraction.skippedLargeGapEventIds.length} unresolved=${extraction.unresolvedEventIds.length}`,
+        `[fixgaps/debug] windows path=${fileRow.end_relative_path} resolvable=${extraction.windows.length} skipped_large=${extraction.skippedLargeGapEventIds.length} unresolved=${extraction.unresolvedEventIds.length}`,
       );
     }
 
@@ -106,7 +106,7 @@ export async function processFileGapBatch(
       dryRun,
     );
     if (DEBUG_FIXGAPS && !dryRun) {
-      logFixgapsLine(`[fixgaps/debug] file_done path=${fileRow.relative_path} fixed=${resolvableEventIds.size}`);
+      logFixgapsLine(`[fixgaps/debug] file_done path=${fileRow.end_relative_path} fixed=${resolvableEventIds.size}`);
     }
     return streamingAccumulator.dirtyRange;
   } finally {

@@ -173,7 +173,6 @@ test("timeline action clear deletes row state and outputs before reindexing sele
     db.insertGaps(
       {
         rootId,
-        relativePath: "PI/2025/BYBIT/BTCUSDT/1735689600000.csv.gz",
         collector: "PI",
         exchange: "BYBIT",
         symbol: "BTCUSDT",
@@ -181,13 +180,15 @@ test("timeline action clear deletes row state and outputs before reindexing sele
       [{
         gapMs: 90_000,
         gapMiss: 1,
-        gapEndTs: 1_735_689_690_000,
+        startTs: 1_735_689_600_000,
+        endTs: 1_735_689_690_000,
+        startRelativePath: "PI/2025/BYBIT/BTCUSDT/1735689600000.csv.gz",
+        endRelativePath: "PI/2025/BYBIT/BTCUSDT/1735689600000.csv.gz",
       }],
     );
     db.insertGaps(
       {
         rootId,
-        relativePath: "PI/2025/BYBIT/ETHUSDT/1735689600000.csv.gz",
         collector: "PI",
         exchange: "BYBIT",
         symbol: "ETHUSDT",
@@ -195,7 +196,10 @@ test("timeline action clear deletes row state and outputs before reindexing sele
       [{
         gapMs: 90_000,
         gapMiss: 1,
-        gapEndTs: 1_735_689_690_000,
+        startTs: 1_735_689_600_000,
+        endTs: 1_735_689_690_000,
+        startRelativePath: "PI/2025/BYBIT/ETHUSDT/1735689600000.csv.gz",
+        endRelativePath: "PI/2025/BYBIT/ETHUSDT/1735689600000.csv.gz",
       }],
     );
     db.upsertRegistry({

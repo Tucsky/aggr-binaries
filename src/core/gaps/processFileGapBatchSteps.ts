@@ -163,7 +163,9 @@ export async function recoverTradesForWindows(
       onRecoveredBatch,
     });
     if (DEBUG_FIXGAPS) {
-      logFixgapsLine(`[fixgaps/debug] adapter_done adapter=${adapter.name} path=${row.relative_path} recovered=${recovered.length}`);
+      logFixgapsLine(
+        `[fixgaps/debug] adapter_done adapter=${adapter.name} path=${row.end_relative_path} recovered=${recovered.length}`,
+      );
     }
     return recovered;
   } catch (err) {
@@ -191,29 +193,31 @@ export async function recoverTradesForWindows(
 }
 
 /**
- * Merge one deterministic flush batch by routing target from this batch's last timestamp.
+ * Merge one deterministic flush batch by routing target from chunk bounds and persisted gap boundaries.
  */
 export async function mergeAndPatchRecoveredTradesFlushBatch(
   batch: RecoveredTrade[],
   config: Config,
   db: Db,
   row: GapFixEventRow,
+  selectedWindows: Array<{ eventId: number; fromTs: number; toTs: number }>,
   resolvableEventIds: Set<number>,
   rowsById: Map<number, GapFixEventRow>,
   stats: FixGapsStats,
   dryRun: boolean,
 ): Promise<DirtyMarketRange | undefined | null> {
   if (!batch.length || dryRun) return undefined;
-  const lastTrade = batch[batch.length - 1];
-  const target = resolveFlushTargetFile(row, lastTrade.ts);
+  const chunkTsBounds = recoveredTsBounds(batch);
+  if (!chunkTsBounds) return undefined;
+  const routingRow = selectBatchRoutingRow(chunkTsBounds, selectedWindows, rowsById, row);
+  const target = resolveFlushTargetFile(routingRow, chunkTsBounds.minTs, chunkTsBounds.maxTs);
   await ensureFlushTargetFile(row, db, target.relativePath, target.absolutePath);
-  const targetRow: GapFixEventRow =
-    target.relativePath === row.relative_path ? row : { ...row, relative_path: target.relativePath };
   return mergeAndPatchRecoveredTrades(
     batch,
     config,
     db,
-    targetRow,
+    row,
+    target.relativePath,
     target.absolutePath,
     target.label,
     resolvableEventIds,
@@ -235,6 +239,7 @@ export async function mergeAndPatchRecoveredTrades(
   config: Config,
   db: Db,
   row: GapFixEventRow,
+  fileRelativePath: string,
   filePath: string,
   fileLabel: string,
   resolvableEventIds: Set<number>,
@@ -250,7 +255,7 @@ export async function mergeAndPatchRecoveredTrades(
     const mergeResult = await mergeRecoveredTradesIntoFile(filePath, recovered);
     if (DEBUG_FIXGAPS) {
       logFixgapsLine(
-        `[fixgaps/debug] merge_done path=${row.relative_path} input=${recovered.length} inserted=${mergeResult.inserted}`,
+        `[fixgaps/debug] merge_done path=${fileRelativePath} input=${recovered.length} inserted=${mergeResult.inserted}`,
       );
     }
 
@@ -272,7 +277,9 @@ export async function mergeAndPatchRecoveredTrades(
     stats.binariesPatched += patchResult.patchedTimeframes;
     stats.recoveredTrades += mergeResult.inserted;
     if (DEBUG_FIXGAPS) {
-      logFixgapsLine(`[fixgaps/debug] patch_done path=${row.relative_path} patched_timeframes=${patchResult.patchedTimeframes}`);
+      logFixgapsLine(
+        `[fixgaps/debug] patch_done path=${fileRelativePath} patched_timeframes=${patchResult.patchedTimeframes}`,
+      );
     }
 
     if (!tsBounds) return undefined;
@@ -350,6 +357,24 @@ function recoveredTsBounds(recovered: RecoveredTrade[]): { minTs: number; maxTs:
 }
 
 /**
+ * Pick the gap row whose window overlaps this chunk so routing uses the correct boundary files.
+ */
+function selectBatchRoutingRow(
+  chunk: { minTs: number; maxTs: number },
+  windows: Array<{ eventId: number; fromTs: number; toTs: number }>,
+  rowsById: Map<number, GapFixEventRow>,
+  fallback: GapFixEventRow,
+): GapFixEventRow {
+  for (const window of windows) {
+    if (chunk.maxTs < window.fromTs) break;
+    if (chunk.minTs > window.toTs) continue;
+    const row = rowsById.get(window.eventId);
+    if (row) return row;
+  }
+  return fallback;
+}
+
+/**
  * Normalize unknown errors into deterministic status messages.
  */
 function toErrorMessage(err: unknown, fallback: string): string {
@@ -357,10 +382,9 @@ function toErrorMessage(err: unknown, fallback: string): string {
 }
 
 function buildWindowFromEvent(row: GapFixEventRow): GapWindow | undefined {
-  if (row.gap_end_ts === null || row.gap_ms === null || row.gap_ms <= 0) return undefined;
-  if (!Number.isFinite(row.gap_end_ts) || !Number.isFinite(row.gap_ms)) return undefined;
-  const fromTs = row.gap_end_ts - row.gap_ms;
-  const toTs = row.gap_end_ts;
+  if (!Number.isFinite(row.start_ts) || !Number.isFinite(row.end_ts)) return undefined;
+  const fromTs = row.start_ts;
+  const toTs = row.end_ts;
   if (!Number.isFinite(fromTs) || toTs <= fromTs) return undefined;
   return { eventId: row.id, fromTs, toTs };
 }

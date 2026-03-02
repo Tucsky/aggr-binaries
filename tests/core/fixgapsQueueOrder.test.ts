@@ -21,7 +21,6 @@ function insertGapEvent(
   db.insertGaps(
     {
       rootId: payload.rootId,
-      relativePath: payload.relativePath,
       collector: payload.collector,
       exchange: payload.exchange,
       symbol: payload.symbol,
@@ -29,7 +28,10 @@ function insertGapEvent(
     [{
       gapMs: 60_000,
       gapMiss: 1,
-      gapEndTs: payload.gapEndTs,
+      startTs: payload.gapEndTs - 60_000,
+      endTs: payload.gapEndTs,
+      startRelativePath: payload.relativePath,
+      endRelativePath: payload.relativePath,
     }],
   );
 }
@@ -80,8 +82,8 @@ test("fixgaps queue stays symbol-local across page boundaries while statuses upd
       seen.push({
         id: row.id,
         symbol: row.symbol,
-        relativePath: row.relative_path,
-        gapEndTs: row.gap_end_ts,
+        relativePath: row.end_relative_path,
+        gapEndTs: row.end_ts,
       });
       db.updateGapFixStatus([{ id: row.id, status: GapFixStatus.Fixed, error: null, recovered: 0 }]);
     }

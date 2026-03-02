@@ -85,9 +85,9 @@ function insertGapEvent(
   db.db
     .prepare(
       `INSERT INTO gaps
-        (root_id, relative_path, collector, exchange, symbol, gap_ms, gap_miss, gap_end_ts, gap_fix_status, gap_score)
+        (root_id, start_relative_path, end_relative_path, collector, exchange, symbol, gap_ms, gap_miss, start_ts, end_ts, gap_fix_status, gap_score)
        VALUES
-        (:rootId, :relativePath, :collector, :exchange, :symbol, :gapMs, :gapMiss, :gapEndTs, NULL, NULL);`,
+        (:rootId, :relativePath, :relativePath, :collector, :exchange, :symbol, :gapMs, :gapMiss, :startTs, :endTs, NULL, NULL);`,
     )
     .run({
       rootId: payload.rootId,
@@ -97,7 +97,8 @@ function insertGapEvent(
       symbol: MARKET.symbol,
       gapMs: payload.gapMs,
       gapMiss: 1,
-      gapEndTs: payload.gapEndTs,
+      startTs: payload.gapEndTs - payload.gapMs,
+      endTs: payload.gapEndTs,
     });
 }
 

@@ -12,7 +12,6 @@ const FOUR_HOUR_MS = 3_600_000 * 4;
 interface FilePathTemplate {
   dir: string;
   ext: string;
-  slotMs: number;
   includeHour: boolean;
 }
 
@@ -23,25 +22,32 @@ export interface FlushTargetFile {
 }
 
 /**
- * Resolve the merge target file for a recovered flush batch from its last trade timestamp.
+ * Resolve the merge target file for a recovered flush batch from chunk timestamps + persisted gap boundaries.
+ * Rules:
+ * 1) default -> gap end file
+ * 2) close to gap start (<= 1 day) -> gap start file
+ * 3) far from both sides (>= 1 day from start and end) -> deterministic intermediate file inferred from boundary filenames
  */
-export function resolveFlushTargetFile(row: GapFixEventRow, lastTradeTs: number): FlushTargetFile {
-  const fallback = {
-    relativePath: row.relative_path,
-    absolutePath: path.join(row.root_path, row.relative_path),
-    label: path.posix.basename(row.relative_path),
-  };
-  const template = parseFilePathTemplate(row.relative_path);
-  if (!template || !Number.isFinite(lastTradeTs)) return fallback;
+export function resolveFlushTargetFile(
+  row: GapFixEventRow,
+  firstTradeTs: number,
+  lastTradeTs: number,
+): FlushTargetFile {
+  const endTarget = toFlushTarget(row.root_path, row.end_relative_path);
+  if (!Number.isFinite(firstTradeTs) || !Number.isFinite(lastTradeTs)) return endTarget;
 
-  const slotStart = Math.floor(lastTradeTs / template.slotMs) * template.slotMs;
-  const token = formatPathTokenUtc(slotStart, template.includeHour);
-  const relativePath = path.posix.join(template.dir, `${token}${template.ext}`);
-  return {
-    relativePath,
-    absolutePath: path.join(row.root_path, relativePath),
-    label: path.posix.basename(relativePath),
-  };
+  if (lastTradeTs <= row.start_ts + DAY_MS) {
+    return toFlushTarget(row.root_path, row.start_relative_path);
+  }
+
+  if (firstTradeTs >= row.start_ts + DAY_MS && lastTradeTs <= row.end_ts - DAY_MS) {
+    const intermediateRelativePath = resolveIntermediateRelativePath(row, firstTradeTs);
+    if (intermediateRelativePath) {
+      return toFlushTarget(row.root_path, intermediateRelativePath);
+    }
+  }
+
+  return endTarget;
 }
 
 /**
@@ -98,7 +104,6 @@ function parseFilePathTemplate(referenceRelativePath: string): FilePathTemplate 
     return {
       dir: path.posix.dirname(referenceRelativePath),
       ext,
-      slotMs: FOUR_HOUR_MS, // if hour is included, we assume 4h slots
       includeHour: true,
     };
   }
@@ -106,11 +111,34 @@ function parseFilePathTemplate(referenceRelativePath: string): FilePathTemplate 
     return {
       dir: path.posix.dirname(referenceRelativePath),
       ext,
-      slotMs: DAY_MS,
       includeHour: false,
     };
   }
   return undefined;
+}
+
+function resolveIntermediateRelativePath(row: GapFixEventRow, firstTradeTs: number): string | undefined {
+  const startTemplate = parseFilePathTemplate(row.start_relative_path);
+  const endTemplate = parseFilePathTemplate(row.end_relative_path);
+  if (!startTemplate && !endTemplate) return undefined;
+
+  const includeHour = Boolean(startTemplate?.includeHour || endTemplate?.includeHour);
+  const dir = endTemplate?.dir ?? startTemplate?.dir;
+  if (!dir) return undefined;
+
+  const ext = endTemplate?.ext ?? startTemplate?.ext ?? "";
+  const slotMs = includeHour ? FOUR_HOUR_MS : DAY_MS;
+  const slotStartTs = Math.floor(firstTradeTs / slotMs) * slotMs;
+  const token = formatPathTokenUtc(slotStartTs, includeHour);
+  return path.posix.join(dir, `${token}${ext}`);
+}
+
+function toFlushTarget(rootPath: string, relativePath: string): FlushTargetFile {
+  return {
+    relativePath,
+    absolutePath: path.join(rootPath, relativePath),
+    label: path.posix.basename(relativePath),
+  };
 }
 
 function formatPathTokenUtc(ts: number, includeHour: boolean): string {

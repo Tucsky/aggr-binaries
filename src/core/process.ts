@@ -5,9 +5,8 @@ import { finished } from "node:stream/promises";
 import zlib from "node:zlib";
 import type { Config } from "./config.js";
 import type { Db } from "./db.js";
-import type { CompanionMetadata, FileRow } from "./model.js";
+import type { CompanionMetadata, FileRow, PersistedGap } from "./model.js";
 import {
-  Gap,
   createGapTracker,
   recordGap,
   type GapTrackerState,
@@ -34,6 +33,8 @@ interface Accumulator {
   maxMinute: number;
   maxInputStartTs: number;
   gapTracker: GapTrackerState;
+  lastSeenTs?: number;
+  lastSeenRelativePath?: string;
   companion?: CompanionMetadata;
 }
 
@@ -50,7 +51,7 @@ interface StreamResult {
   linesRead: number;
   tradesKept: number;
   newBuckets: number;
-  gaps: Gap[];
+  gaps: PersistedGap[];
 }
 
 interface MarketRef {
@@ -223,6 +224,8 @@ async function startAccumulatorForMarket(
     maxMinute: Number.NEGATIVE_INFINITY,
     maxInputStartTs: companion?.lastInputStartTs ?? Number.NEGATIVE_INFINITY,
     gapTracker,
+    lastSeenTs: undefined,
+    lastSeenRelativePath: undefined,
     companion: companion ?? undefined,
   };
 }
@@ -310,11 +313,10 @@ async function processByMarket(opts: {
         timeframeMs,
         skipBeforeTs: resumeSlot,
       });
-      db.deleteGapsForFile(file.root_id, file.relative_path);
+      db.deleteGapsForEndFile(file.root_id, file.relative_path);
       if (gaps.length) {
         db.insertGaps({
           rootId: file.root_id,
-          relativePath: file.relative_path,
           collector: acc.collector,
           exchange: acc.exchange,
           symbol: acc.symbol,
@@ -382,7 +384,7 @@ async function streamFile(opts: {
     });
   }
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
-  const gaps: Gap[] = [];
+  const gaps: PersistedGap[] = [];
 
   const reject: { reason?: ParseRejectReason } = {};
   const rejectCounts: Record<ParseRejectReason, number> = {
@@ -427,9 +429,23 @@ async function streamFile(opts: {
     const includeInGapTracking = !trade.liquidation;
     if (includeInGapTracking) {
       const gap = recordGap(acc.gapTracker, trade.ts);
-      if (gap !== undefined) {
-        gaps.push(gap);
+      if (
+        gap !== undefined &&
+        acc.lastSeenTs !== undefined &&
+        acc.lastSeenRelativePath !== undefined
+      ) {
+        gaps.push({
+          gapMs: gap.gapMs,
+          gapMiss: gap.gapMiss,
+          gapScore: gap.gapScore,
+          startTs: acc.lastSeenTs,
+          endTs: trade.ts,
+          startRelativePath: acc.lastSeenRelativePath,
+          endRelativePath: file.relative_path,
+        });
       }
+      acc.lastSeenTs = trade.ts;
+      acc.lastSeenRelativePath = file.relative_path;
     }
 
     if (skipBeforeTs !== undefined && trade.ts < skipBeforeTs) continue;

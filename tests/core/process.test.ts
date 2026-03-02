@@ -264,17 +264,19 @@ test("process persists no parse-reject rows and keeps gap rows deterministic for
   const readGaps = () =>
     (db.db
       .prepare(
-        "SELECT gap_ms, gap_miss, gap_end_ts, gap_score FROM gaps ORDER BY id;",
+        "SELECT gap_ms, gap_miss, start_ts, end_ts, gap_score FROM gaps ORDER BY id;",
       )
       .all() as Array<{
       gap_ms: number | null;
       gap_miss: number | null;
-      gap_end_ts: number | null;
+      start_ts: number;
+      end_ts: number;
       gap_score: number | null;
     }>).map((row) => ({
       gap_ms: row.gap_ms,
       gap_miss: row.gap_miss,
-      gap_end_ts: row.gap_end_ts,
+      start_ts: row.start_ts,
+      end_ts: row.end_ts,
       gap_score: row.gap_score,
     }));
 
@@ -284,15 +286,17 @@ test("process persists no parse-reject rows and keeps gap rows deterministic for
     const strip = (
       rows: Array<{
         gap_ms: number | null;
-        gap_end_ts: number | null;
+        start_ts: number;
+        end_ts: number;
       }>,
     ) =>
       rows.map((row) => ({
         gap_ms: row.gap_ms,
-        gap_end_ts: row.gap_end_ts,
+        start_ts: row.start_ts,
+        end_ts: row.end_ts,
       }));
 
-    const expected: Array<{ gap_ms: number | null; gap_end_ts: number | null }> = [];
+    const expected: Array<{ gap_ms: number | null; start_ts: number; end_ts: number }> = [];
 
     await runProcess(config, db);
     const first = readGaps();
@@ -320,12 +324,13 @@ test("process gap detection keeps this liquidation-heavy fixture gap-free", asyn
 
     const gapRows = db.db
       .prepare(
-        "SELECT gap_ms, gap_miss, gap_end_ts FROM gaps ORDER BY id;",
+        "SELECT gap_ms, gap_miss, start_ts, end_ts FROM gaps ORDER BY id;",
       )
       .all() as Array<{
       gap_ms: number | null;
       gap_miss: number | null;
-      gap_end_ts: number | null;
+      start_ts: number;
+      end_ts: number;
     }>;
 
     assert.strictEqual(gapRows.length, 0);
@@ -347,7 +352,6 @@ test("process fails fast on indexed input missing on disk without mutating file 
     db.insertGaps(
       {
         rootId,
-        relativePath: missingRelative,
         collector: MARKET.collector,
         exchange: MARKET.exchange,
         symbol: MARKET.symbol,
@@ -355,7 +359,10 @@ test("process fails fast on indexed input missing on disk without mutating file 
       [{
         gapMs: 60_000,
         gapMiss: 1,
-        gapEndTs: 1_704_067_200_000,
+        startTs: 1_704_067_140_000,
+        endTs: 1_704_067_200_000,
+        startRelativePath: missingRelative,
+        endRelativePath: missingRelative,
       }],
     );
     await fs.unlink(path.join(fixture.root, missingRelative));
@@ -365,7 +372,7 @@ test("process fails fast on indexed input missing on disk without mutating file 
       return message.includes("indexed input file missing on disk") && message.includes(missingRelative);
     });
     const eventRow = db.db
-      .prepare("SELECT COUNT(*) AS cnt FROM gaps WHERE root_id = :rootId AND relative_path = :relativePath;")
+      .prepare("SELECT COUNT(*) AS cnt FROM gaps WHERE root_id = :rootId AND end_relative_path = :relativePath;")
       .get({ rootId, relativePath: missingRelative }) as { cnt: number };
     assert.strictEqual(eventRow.cnt, 1);
 

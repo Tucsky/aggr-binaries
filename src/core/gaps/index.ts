@@ -26,7 +26,7 @@ export interface FixGapsStats {
 }
 
 // Fixgaps processes one file at a time because a single file can contain many gap events.
-// Queue rows are grouped by (root_id, relative_path), then each file-group is handled once.
+// Queue rows are grouped by (root_id, end_relative_path), then each file-group is handled once.
 export async function runFixGaps(config: Config, db: Db, options: FixGapsOptions = {}): Promise<FixGapsStats> {
   const start = Date.now();
   const stats: FixGapsStats = {
@@ -70,7 +70,7 @@ export async function runFixGaps(config: Config, db: Db, options: FixGapsOptions
 
   for (const row of queue) {
     stats.selectedEvents += 1;
-    const fileKey = `${row.root_id}|${row.relative_path}`;
+    const fileKey = `${row.root_id}|${row.end_relative_path}`;
     if (!pendingFileEvents.length) {
       pendingFileEvents = [row];
       pendingFileKey = fileKey;

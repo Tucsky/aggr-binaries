@@ -20,7 +20,7 @@ export interface StreamingRecoveryContext {
 }
 
 /**
- * Mutable streaming accumulator for one (root_id, relative_path) file-group.
+ * Mutable streaming accumulator for one (root_id, end_relative_path) file-group.
  * Centralized here so processFileGapBatch stays a thin orchestrator.
  */
 export interface StreamingRecoveryAccumulator {
@@ -119,6 +119,7 @@ async function flushStreamingChunk(
     context.config,
     context.db,
     context.fileRow,
+    context.selectedWindows,
     context.resolvableEventIds,
     context.rowsById,
     context.stats,

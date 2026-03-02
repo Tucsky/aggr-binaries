@@ -131,9 +131,8 @@ export function listTimelineEvents(db: Db, filter: TimelineEventFilter): Timelin
   }
 
   const where: string[] = [
-    "COALESCE(e.gap_end_ts, f.start_ts) IS NOT NULL",
-    "COALESCE(e.gap_end_ts, f.start_ts) >= :startTs",
-    "COALESCE(e.gap_end_ts, f.start_ts) <= :endTs",
+    "e.end_ts >= :startTs",
+    "e.end_ts <= :endTs",
   ];
   const params: Record<string, string | number> = {
     startTs: Math.floor(filter.startTs),
@@ -165,12 +164,11 @@ export function listTimelineEvents(db: Db, filter: TimelineEventFilter): Timelin
     (db.db
       .prepare(
         `${rowFilterSql.withClause}
-         SELECT e.id, e.collector, e.exchange, e.symbol, e.relative_path, e.gap_fix_status, e.gap_fix_recovered,
-                COALESCE(e.gap_end_ts, f.start_ts) AS ts,
+         SELECT e.id, e.collector, e.exchange, e.symbol, e.end_relative_path AS relative_path, e.gap_fix_status, e.gap_fix_recovered,
+                e.end_ts AS ts,
                 e.gap_ms, e.gap_miss, e.gap_score
          FROM gaps e
          ${rowFilterSql.joinClause}
-         LEFT JOIN files f ON f.root_id = e.root_id AND f.relative_path = e.relative_path
          WHERE ${where.join(" AND ")}
          ORDER BY e.collector, e.exchange, e.symbol, ts, e.id;`,
       )

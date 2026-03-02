@@ -270,7 +270,7 @@ test("timeline markets reject legacy databases when indexed ranges are missing o
   );
 });
 
-test("timeline events use gap_end_ts first and fallback to file start_ts when gap_end_ts is null", async () => {
+test("timeline events use persisted end_ts and end_relative_path from gaps rows", async () => {
   const db = await withDb();
   try {
     const rootId = db.ensureRoot("/tmp/source");
@@ -287,9 +287,9 @@ test("timeline events use gap_end_ts first and fallback to file start_ts when ga
     db.db
       .prepare(
         `INSERT INTO gaps
-          (root_id, relative_path, collector, exchange, symbol, gap_ms, gap_miss, gap_end_ts, gap_score)
+          (root_id, start_relative_path, end_relative_path, collector, exchange, symbol, gap_ms, gap_miss, start_ts, end_ts, gap_score)
          VALUES
-          (:rootId, :relativePath, :collector, :exchange, :symbol, NULL, NULL, NULL, NULL);`,
+          (:rootId, :relativePath, :relativePath, :collector, :exchange, :symbol, 0, 0, 100, 200, NULL);`,
       )
       .run({
         rootId,
@@ -301,7 +301,6 @@ test("timeline events use gap_end_ts first and fallback to file start_ts when ga
     db.insertGaps(
       {
         rootId,
-        relativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
         collector: "PI",
         exchange: "BYBIT",
         symbol: "BTCUSDT",
@@ -309,12 +308,15 @@ test("timeline events use gap_end_ts first and fallback to file start_ts when ga
       [{
         gapMs: 10,
         gapMiss: 2,
-        gapEndTs: 600,
+        startTs: 590,
+        endTs: 600,
+        startRelativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
+        endRelativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
       }],
     );
     db.db
-      .prepare("UPDATE gaps SET gap_fix_status = :status, gap_fix_recovered = :recovered WHERE gap_end_ts = :gapEndTs")
-      .run({ status: "adapter_error", recovered: 7, gapEndTs: 600 });
+      .prepare("UPDATE gaps SET gap_fix_status = :status, gap_fix_recovered = :recovered WHERE end_ts = :endTs")
+      .run({ status: "adapter_error", recovered: 7, endTs: 600 });
 
     const events = listTimelineEvents(db, {
       collector: "PI",
@@ -437,7 +439,6 @@ test("timeline events symbol exact mode excludes partial symbol matches", async 
     db.insertGaps(
       {
         rootId,
-        relativePath: "PI/BYBIT/BTC/2024-01-01.gz",
         collector: "PI",
         exchange: "BYBIT",
         symbol: "BTC",
@@ -445,13 +446,15 @@ test("timeline events symbol exact mode excludes partial symbol matches", async 
       [{
         gapMs: 60_000,
         gapMiss: 1,
-        gapEndTs: 400,
+        startTs: 340,
+        endTs: 400,
+        startRelativePath: "PI/BYBIT/BTC/2024-01-01.gz",
+        endRelativePath: "PI/BYBIT/BTC/2024-01-01.gz",
       }],
     );
     db.insertGaps(
       {
         rootId,
-        relativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
         collector: "PI",
         exchange: "BYBIT",
         symbol: "BTCUSDT",
@@ -459,7 +462,10 @@ test("timeline events symbol exact mode excludes partial symbol matches", async 
       [{
         gapMs: 60_000,
         gapMiss: 1,
-        gapEndTs: 500,
+        startTs: 440,
+        endTs: 500,
+        startRelativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
+        endRelativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
       }],
     );
 
@@ -515,7 +521,6 @@ test("timeline events are deterministically ordered by market, timestamp, and id
     db.insertGaps(
       {
         rootId,
-        relativePath: "RAM/BINANCE/ETHUSDT/2024-01-01.gz",
         collector: "RAM",
         exchange: "BINANCE",
         symbol: "ETHUSDT",
@@ -523,13 +528,15 @@ test("timeline events are deterministically ordered by market, timestamp, and id
       [{
         gapMs: 60_000,
         gapMiss: 1,
-        gapEndTs: 300,
+        startTs: 240,
+        endTs: 300,
+        startRelativePath: "RAM/BINANCE/ETHUSDT/2024-01-01.gz",
+        endRelativePath: "RAM/BINANCE/ETHUSDT/2024-01-01.gz",
       }],
     );
     db.insertGaps(
       {
         rootId,
-        relativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
         collector: "PI",
         exchange: "BYBIT",
         symbol: "BTCUSDT",
@@ -537,13 +544,15 @@ test("timeline events are deterministically ordered by market, timestamp, and id
       [{
         gapMs: 60_000,
         gapMiss: 1,
-        gapEndTs: 500,
+        startTs: 440,
+        endTs: 500,
+        startRelativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
+        endRelativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
       }],
     );
     db.insertGaps(
       {
         rootId,
-        relativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
         collector: "PI",
         exchange: "BYBIT",
         symbol: "BTCUSDT",
@@ -551,7 +560,10 @@ test("timeline events are deterministically ordered by market, timestamp, and id
       [{
         gapMs: 60_000,
         gapMiss: 1,
-        gapEndTs: 500,
+        startTs: 440,
+        endTs: 500,
+        startRelativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
+        endRelativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
       }],
     );
 
@@ -595,7 +607,6 @@ test("timeline events can be limited to an explicit market subset", async () => 
     db.insertGaps(
       {
         rootId,
-        relativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
         collector: "PI",
         exchange: "BYBIT",
         symbol: "BTCUSDT",
@@ -603,13 +614,15 @@ test("timeline events can be limited to an explicit market subset", async () => 
       [{
         gapMs: 60_000,
         gapMiss: 1,
-        gapEndTs: 200,
+        startTs: 140,
+        endTs: 200,
+        startRelativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
+        endRelativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
       }],
     );
     db.insertGaps(
       {
         rootId,
-        relativePath: "RAM/BITMEX/ETHUSD/2024-01-01.gz",
         collector: "RAM",
         exchange: "BITMEX",
         symbol: "ETHUSD",
@@ -617,7 +630,10 @@ test("timeline events can be limited to an explicit market subset", async () => 
       [{
         gapMs: 60_000,
         gapMiss: 1,
-        gapEndTs: 220,
+        startTs: 160,
+        endTs: 220,
+        startRelativePath: "RAM/BITMEX/ETHUSD/2024-01-01.gz",
+        endRelativePath: "RAM/BITMEX/ETHUSD/2024-01-01.gz",
       }],
     );
 

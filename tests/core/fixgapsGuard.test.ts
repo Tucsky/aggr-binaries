@@ -86,12 +86,13 @@ function insertGapEvent(
     endLine?: number;
   },
 ): void {
+  const gapEndTs = payload.gapEndTs ?? TS1;
   db.db
     .prepare(
       `INSERT INTO gaps
-        (root_id, relative_path, collector, exchange, symbol, gap_ms, gap_miss, gap_end_ts, gap_fix_status, gap_score)
+        (root_id, start_relative_path, end_relative_path, collector, exchange, symbol, gap_ms, gap_miss, start_ts, end_ts, gap_fix_status, gap_score)
        VALUES
-        (:rootId, :relativePath, :collector, :exchange, :symbol, :gapMs, 1, :gapEndTs, NULL, NULL);`,
+        (:rootId, :relativePath, :relativePath, :collector, :exchange, :symbol, :gapMs, 1, :startTs, :endTs, NULL, NULL);`,
     )
     .run({
       rootId: payload.rootId,
@@ -100,7 +101,8 @@ function insertGapEvent(
       exchange: MARKET.exchange,
       symbol: MARKET.symbol,
       gapMs: payload.gapMs,
-      gapEndTs: payload.gapEndTs ?? TS1,
+      startTs: gapEndTs - payload.gapMs,
+      endTs: gapEndTs,
     });
 }
 
@@ -189,7 +191,7 @@ test("fixgaps processes api-only gaps over 7 days instead of skipping them", asy
   }
 });
 
-test("fixgaps uses the batch last trade timestamp to resolve merge target file path", async () => {
+test("fixgaps defaults recovered batch merges to gap end file path", async () => {
   const fixture = await createFixture();
   const db = openDatabase(fixture.dbPath);
   const tradeA = TS0 + DAY_MS - 30_000;
@@ -226,17 +228,12 @@ test("fixgaps uses the batch last trade timestamp to resolve merge target file p
       MARKET.bucket,
       MARKET.exchange,
       MARKET.symbol,
-      "2024-01-02-00",
+      "2024-01-01-00",
     );
     const targetFullPath = path.join(fixture.root, targetRelative);
     const targetRaw = await fs.readFile(targetFullPath, "utf8");
     assert.match(targetRaw, new RegExp(`^${tradeA} 98 0\\.25 1`, "m"));
     assert.match(targetRaw, new RegExp(`^${tradeB} 99 0\\.5 0`, "m"));
-
-    const indexed = db.db
-      .prepare("SELECT relative_path FROM files WHERE root_id = :rootId AND relative_path = :relativePath;")
-      .get({ rootId, relativePath: targetRelative }) as { relative_path: string } | undefined;
-    assert.strictEqual(indexed?.relative_path, targetRelative);
 
     assert.strictEqual(stats.selectedEvents, 1);
     assert.strictEqual(stats.fixedEvents, 1);

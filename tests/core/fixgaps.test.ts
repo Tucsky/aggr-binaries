@@ -94,12 +94,14 @@ function insertGapEvent(
     status?: string | null;
   },
 ): number {
+  const gapMs = payload.gapMs ?? TS2 - TS0;
+  const gapEndTs = payload.gapEndTs ?? TS2;
   const result = db.db
     .prepare(
       `INSERT INTO gaps
-        (root_id, relative_path, collector, exchange, symbol, gap_ms, gap_miss, gap_end_ts, gap_fix_status, gap_score)
+        (root_id, start_relative_path, end_relative_path, collector, exchange, symbol, gap_ms, gap_miss, start_ts, end_ts, gap_fix_status, gap_score)
        VALUES
-        (:rootId, :relativePath, :collector, :exchange, :symbol, :gapMs, :gapMiss, :gapEndTs, :status, NULL);`,
+        (:rootId, :relativePath, :relativePath, :collector, :exchange, :symbol, :gapMs, :gapMiss, :startTs, :endTs, :status, NULL);`,
     )
     .run({
       rootId: payload.rootId,
@@ -107,9 +109,10 @@ function insertGapEvent(
       collector: MARKET.collector,
       exchange: payload.exchange ?? MARKET.exchange,
       symbol: MARKET.symbol,
-      gapMs: payload.gapMs ?? TS2 - TS0,
+      gapMs,
       gapMiss: 1,
-      gapEndTs: payload.gapEndTs ?? TS2,
+      startTs: gapEndTs - gapMs,
+      endTs: gapEndTs,
       status: payload.status ?? null,
     });
   return Number(result.lastInsertRowid);

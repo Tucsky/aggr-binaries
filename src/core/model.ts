@@ -1,4 +1,4 @@
-import { Gap, GapTrackerState } from "./gapTracker.js";
+import { GapTrackerState } from "./gapTracker.js";
 
 export enum Collector {
   RAM = "RAM",
@@ -153,13 +153,22 @@ export enum GapFixStatus {
 
 export interface GapCtx {
   rootId: number;
-  relativePath: string;
   collector: string;
   exchange: string;
   symbol: string;
 }
 
-export interface GapRecord extends GapCtx, Gap {
+export interface PersistedGap {
+  gapMs: number;
+  gapMiss: number;
+  gapScore?: number;
+  startTs: number;
+  endTs: number;
+  startRelativePath: string;
+  endRelativePath: string;
+}
+
+export interface GapRecord extends GapCtx, PersistedGap {
   gapFixStatus?: GapFixStatus;
   gapFixError?: string;
   gapFixRecovered?: boolean;
