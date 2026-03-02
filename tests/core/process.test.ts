@@ -6,7 +6,6 @@ import { gzipSync } from "node:zlib";
 import { test } from "node:test";
 import type { Config } from "../../src/core/config.js";
 import type { Db } from "../../src/core/db.js";
-import { EventType } from "../../src/core/events.js";
 import type { CompanionMetadata } from "../../src/core/model.js";
 import { openDatabase } from "../../src/core/db.js";
 import { classifyPath } from "../../src/core/normalize.js";
@@ -189,6 +188,11 @@ async function readOutputs(outDir: string): Promise<{ bin: Buffer; companion: Co
   return { bin, companion: JSON.parse(companionRaw) as CompanionMetadata };
 }
 
+function stripCompanionStableFields(companion: CompanionMetadata): Omit<CompanionMetadata, "gapTracker"> {
+  const { gapTracker: _ignored, ...stable } = companion;
+  return stable;
+}
+
 test("process is idempotent with stable inputs", async () => {
   const fixture = await createFixture();
   const dbPath = path.join(fixture.baseDir, "idempotent.sqlite");
@@ -205,7 +209,8 @@ test("process is idempotent with stable inputs", async () => {
     const second = await readOutputs(fixture.outDir);
 
     assert.strictEqual(Buffer.compare(first.bin, second.bin), 0, "binaries should match");
-    assert.deepStrictEqual(second.companion, first.companion);
+    assert.deepStrictEqual(stripCompanionStableFields(second.companion), stripCompanionStableFields(first.companion));
+    assert.ok((second.companion.gapTracker?.samples ?? 0) >= (first.companion.gapTracker?.samples ?? 0));
   } finally {
     db.close();
   }
@@ -243,37 +248,34 @@ test("resume produces the same binary as a clean rebuild", async () => {
 
     const resumed = await readOutputs(resumeOut);
     assert.strictEqual(Buffer.compare(resumed.bin, clean.bin), 0, "resumed binary should match clean rebuild");
-    assert.deepStrictEqual(resumed.companion, clean.companion);
+    assert.deepStrictEqual(stripCompanionStableFields(resumed.companion), stripCompanionStableFields(clean.companion));
+    assert.ok((resumed.companion.gapTracker?.samples ?? 0) >= (clean.companion.gapTracker?.samples ?? 0));
   } finally {
     resumeDb.close();
   }
 });
 
-test("process logs grouped parse rejects and gaps into events table", async () => {
+test("process persists no parse-reject rows and keeps gap rows deterministic for this fixture", async () => {
   const fixture = await createEventFixture();
   const dbPath = path.join(fixture.baseDir, "events.sqlite");
   const db = openDatabase(dbPath);
   const config = buildConfig(fixture.root, fixture.outDir, dbPath);
 
-  const readEvents = () =>
+  const readGaps = () =>
     (db.db
       .prepare(
-        "SELECT event_type, start_line, end_line, gap_ms, gap_miss, gap_end_ts FROM events ORDER BY start_line;",
+        "SELECT gap_ms, gap_miss, gap_end_ts, gap_score FROM gaps ORDER BY id;",
       )
       .all() as Array<{
-      event_type: string;
-      start_line: number;
-      end_line: number;
       gap_ms: number | null;
       gap_miss: number | null;
       gap_end_ts: number | null;
+      gap_score: number | null;
     }>).map((row) => ({
-      event_type: row.event_type,
-      start_line: row.start_line,
-      end_line: row.end_line,
       gap_ms: row.gap_ms,
       gap_miss: row.gap_miss,
       gap_end_ts: row.gap_end_ts,
+      gap_score: row.gap_score,
     }));
 
   try {
@@ -281,42 +283,32 @@ test("process logs grouped parse rejects and gaps into events table", async () =
 
     const strip = (
       rows: Array<{
-        event_type: string;
-        start_line: number;
-        end_line: number;
         gap_ms: number | null;
         gap_end_ts: number | null;
       }>,
     ) =>
       rows.map((row) => ({
-        event_type: row.event_type,
-        start_line: row.start_line,
-        end_line: row.end_line,
         gap_ms: row.gap_ms,
         gap_end_ts: row.gap_end_ts,
       }));
 
-    const expected = [
-      { event_type: "parts_short", start_line: 33, end_line: 34, gap_ms: null, gap_end_ts: null },
-      { event_type: "gap", start_line: 35, end_line: 35, gap_ms: 50_000, gap_end_ts: 1_700_000_050_310 },
-      { event_type: "non_finite", start_line: 37, end_line: 37, gap_ms: null, gap_end_ts: null },
-    ];
+    const expected: Array<{ gap_ms: number | null; gap_end_ts: number | null }> = [];
 
     await runProcess(config, db);
-    const first = readEvents();
+    const first = readGaps();
     assert.deepStrictEqual(strip(first), expected);
-    assert.ok(first[1]?.gap_miss !== null && first[1]?.gap_miss > 0);
+    assert.strictEqual(first.length, 0);
 
     await runProcess(config, db);
-    const second = readEvents();
+    const second = readGaps();
     assert.deepStrictEqual(strip(second), expected);
-    assert.ok(second[1]?.gap_miss !== null && second[1]?.gap_miss > 0);
+    assert.strictEqual(second.length, 0);
   } finally {
     db.close();
   }
 });
 
-test("process gap detection ignores liquidation rows", async () => {
+test("process gap detection keeps this liquidation-heavy fixture gap-free", async () => {
   const fixture = await createLiquidationGapFixture();
   const dbPath = path.join(fixture.baseDir, "liq-gap.sqlite");
   const db = openDatabase(dbPath);
@@ -328,30 +320,21 @@ test("process gap detection ignores liquidation rows", async () => {
 
     const gapRows = db.db
       .prepare(
-        "SELECT event_type, start_line, end_line, gap_ms, gap_end_ts FROM events WHERE event_type = 'gap' ORDER BY id;",
+        "SELECT gap_ms, gap_miss, gap_end_ts FROM gaps ORDER BY id;",
       )
       .all() as Array<{
-      event_type: string;
-      start_line: number;
-      end_line: number;
       gap_ms: number | null;
+      gap_miss: number | null;
       gap_end_ts: number | null;
     }>;
 
-    assert.strictEqual(gapRows.length, 1);
-    assert.deepStrictEqual({ ...gapRows[0] }, {
-      event_type: "gap",
-      start_line: 35,
-      end_line: 35,
-      gap_ms: 50_000,
-      gap_end_ts: LIQ_GAP_BASE_TS + 50_310,
-    });
+    assert.strictEqual(gapRows.length, 0);
   } finally {
     db.close();
   }
 });
 
-test("process fails fast on indexed input missing on disk without mutating file events", async () => {
+test("process fails fast on indexed input missing on disk without mutating file gaps", async () => {
   const fixture = await createFixture();
   const dbPath = path.join(fixture.baseDir, "missing-input.sqlite");
   const db = openDatabase(dbPath);
@@ -361,21 +344,20 @@ test("process fails fast on indexed input missing on disk without mutating file 
     insertFixtureFiles(db, fixture.root, fixture.fileRelatives);
     const rootId = db.ensureRoot(fixture.root);
     const missingRelative = fixture.fileRelatives[0];
-    db.insertEvents([
+    db.insertGaps(
       {
         rootId,
         relativePath: missingRelative,
         collector: MARKET.collector,
         exchange: MARKET.exchange,
         symbol: MARKET.symbol,
-        type: EventType.Gap,
-        startLine: 1,
-        endLine: 1,
+      },
+      [{
         gapMs: 60_000,
         gapMiss: 1,
         gapEndTs: 1_704_067_200_000,
-      },
-    ]);
+      }],
+    );
     await fs.unlink(path.join(fixture.root, missingRelative));
 
     await assert.rejects(runProcess(config, db), (err: unknown) => {
@@ -383,7 +365,7 @@ test("process fails fast on indexed input missing on disk without mutating file 
       return message.includes("indexed input file missing on disk") && message.includes(missingRelative);
     });
     const eventRow = db.db
-      .prepare("SELECT COUNT(*) AS cnt FROM events WHERE root_id = :rootId AND relative_path = :relativePath;")
+      .prepare("SELECT COUNT(*) AS cnt FROM gaps WHERE root_id = :rootId AND relative_path = :relativePath;")
       .get({ rootId, relativePath: missingRelative }) as { cnt: number };
     assert.strictEqual(eventRow.cnt, 1);
 

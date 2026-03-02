@@ -51,7 +51,7 @@ export function formatGapContext(row: GapFixEventRow): string {
   const date = dayTime?.date ?? "unknown";
   const time = dayTime?.time ?? "unknown";
   const gapElapsed = row.gap_ms === null || !Number.isFinite(row.gap_ms) ? "?" : formatElapsedDhms(row.gap_ms);
-  return `[${row.exchange}/${row.symbol}/${date}] ${gapElapsed} gap @ ${time}`;
+  return `[${row.exchange}/${row.symbol}/${row.id}] ${gapElapsed} gap @ ${date}T${time}`;
 }
 
 /**

@@ -17,14 +17,12 @@ export interface TimelineEvent {
   exchange: string;
   symbol: string;
   relativePath: string;
-  eventType: string;
   gapFixStatus: string | null;
   gapFixRecovered?: number | null;
   ts: number;
-  startLine: number;
-  endLine: number;
   gapMs: number | null;
   gapMiss: number | null;
+  gapScore: number | null;
 }
 
 export interface TimelineHoverEvent {
@@ -44,13 +42,12 @@ export enum TimelineMarketAction {
   FixGaps = "fixgaps",
   Registry = "registry",
   Clear = "clear",
+  CopyGap = "copygap",
 }
 
 export type TimelineEventKind =
   | "gap"
   | "gap_fixed"
   | "skipped_large_gap"
-  | "parse_error"
   | "adapter_error"
   | "missing_adapter"
-  | "unknown";

@@ -6,7 +6,7 @@ Core commands:
 - `index`: inventory raw files into SQLite
 - `process`: generate gap-aware binaries + companions
 - `registry`: rebuild derived registry rows from companions
-- `fixgaps`: recover missing trades from gap events and patch outputs
+- `fixgaps`: recover missing trades from persisted gap rows and patch outputs
 - `clear`: delete one market's outputs/state and reindex only that market
 
 Core design constraints:

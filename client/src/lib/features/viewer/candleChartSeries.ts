@@ -66,14 +66,14 @@ export function buildSeriesData(candles: readonly Candle[]): SeriesData {
 
 export function buildSeriesUpdate(candle: Candle): SeriesUpdate {
   const time = toTime(candle.time);
-  const signedDelta = candle.buyVol - candle.sellVol;
+  const signedDelta = candle.buyCount - candle.sellCount;
   const positive = signedDelta >= 0;
 
   return {
     price: toPriceBar(candle, time),
     totalVolume: toHistogramBar(
       time,
-      toNonZero(candle.buyVol + candle.sellVol),
+      toNonZero(candle.buyCount + candle.sellCount),
       positive ? VOLUME_POSITIVE_DIM : VOLUME_NEGATIVE_DIM,
     ),
     deltaVolume: toHistogramBar(

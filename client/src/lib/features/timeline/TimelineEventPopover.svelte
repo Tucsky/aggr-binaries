@@ -129,19 +129,8 @@
     return split >= 0 ? relativePath.slice(split + 1) : relativePath;
   }
 
-  function formatLineRange(startLine: number, endLine: number): string {
-    const start = Math.max(1, Math.floor(startLine));
-    const end = Math.max(start, Math.floor(endLine));
-    if (start === end) return `L${start}`;
-    return `L${start}-${end}`;
-  }
-
-  function formatEventType(eventType: string): string {
-    return eventType.split("_").join(" ");
-  }
-
   function resolveGapStartTs(data: TimelineHoverEvent | null): number | null {
-    if (!data || data.event.eventType !== "gap") return null;
+    if (!data) return null;
     const gapMs = data.event.gapMs;
     if (gapMs === null || !Number.isFinite(gapMs) || gapMs <= 0) return null;
     return data.event.ts - Math.floor(gapMs);
@@ -174,25 +163,27 @@
     style={`opacity: ${visible ? 1 : 0}; transform: translate3d(${renderedLeft}px, ${renderedTop}px, 0);`}
   >
     <div class="flex items-center justify-between gap-3 text-[10px] uppercase tracking-[0.08em] text-slate-400">
-      <span>{formatEventType(renderData.event.eventType)}</span>
+      <span>Gap</span>
       <span>{renderData.market.collector}:{renderData.market.exchange}</span>
     </div>
     <div class="mt-1 text-xs text-slate-200">
-      {basename(renderData.event.relativePath)}:{formatLineRange(renderData.event.startLine, renderData.event.endLine)}
+      {basename(renderData.event.relativePath)}
     </div>
-    {#if renderData.event.eventType === "gap"}
-      <div class="mt-2 grid grid-cols-[72px_1fr] gap-x-2 gap-y-1 text-[11px] leading-tight">
-        <span class="text-slate-500">Start time</span>
-        <span class="text-slate-200">{gapStartTs === null ? "n/a" : formatTimelineTsLabel(gapStartTs)}</span>
-        <span class="text-slate-500">Elapsed</span>
-        <span class="text-slate-200">{formatElapsedDhms(renderData.event.gapMs)}</span>
-        <span class="text-slate-500">Miss</span>
-        <span class="text-slate-200">{formatEstimatedMiss(renderData.event.gapMiss)}</span>
-        <span class="text-slate-500">Status</span>
-        <span class="text-slate-200">{formatGapFixStatus(renderData.event.gapFixStatus)}</span>
-        <span class="text-slate-500">Recovered</span>
-        <span class="text-slate-200">{formatRecoveredCount(renderData.event.gapFixRecovered)}</span>
-      </div>
-    {/if}
+    <div class="mt-2 grid grid-cols-[72px_1fr] gap-x-2 gap-y-1 text-[11px] leading-tight">
+      <span class="text-slate-500">Start time</span>
+      <span class="text-slate-200">{gapStartTs === null ? "n/a" : formatTimelineTsLabel(gapStartTs)}</span>
+      <span class="text-slate-500">Elapsed</span>
+      <span class="text-slate-200">{formatElapsedDhms(renderData.event.gapMs)} ({renderData.event.gapMs}ms)</span>
+      <span class="text-slate-500">Miss</span>
+      <span class="text-slate-200">{formatEstimatedMiss(renderData.event.gapMiss)} ({renderData.event.gapMiss})</span>
+      <span class="text-slate-500">Score</span>
+      <span class="text-slate-200">{renderData.event.gapScore}</span>
+      <span class="text-slate-500">Ratio</span>
+      <span class="text-slate-200">{((renderData.event.gapMiss || 0) / (renderData.event.gapMs || 1) * 100).toFixed(2)}</span>
+      <span class="text-slate-500">Status</span>
+      <span class="text-slate-200">{formatGapFixStatus(renderData.event.gapFixStatus)}</span>
+      <span class="text-slate-500">Recovered</span>
+      <span class="text-slate-200">{formatRecoveredCount(renderData.event.gapFixRecovered)}</span>
+    </div>
   </div>
 {/if}

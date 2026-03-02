@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import datetime as dt
-import gzip
 import io
-import os
 import random
 import sqlite3
 import tempfile
@@ -30,7 +28,7 @@ DATASET_TS_INDEX = {
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Sample gaps from the events table and validate against Binance Vision data.",
+        description="Sample gaps from the gaps table and validate against Binance Vision data.",
     )
     parser.add_argument("--db", default="index.sqlite", help="Path to the sqlite index db.")
     parser.add_argument("--collector", default=None, help="Collector filter (optional).")
@@ -119,7 +117,7 @@ def format_window_summary(
 
 
 def iter_gap_rows(conn: sqlite3.Connection, args: argparse.Namespace) -> Iterable[sqlite3.Row]:
-    filters = ["e.event_type = 'gap'", "e.gap_ms IS NOT NULL", "e.gap_miss IS NOT NULL"]
+    filters = ["e.gap_ms IS NOT NULL", "e.gap_miss IS NOT NULL"]
     params = {}
     if args.collector:
         filters.append("e.collector = :collector")
@@ -149,9 +147,10 @@ def iter_gap_rows(conn: sqlite3.Connection, args: argparse.Namespace) -> Iterabl
     sql = f"""
       SELECT e.id, e.root_id, r.path AS root_path, e.relative_path,
              e.collector, e.exchange, e.symbol,
-             e.start_line, e.end_line, e.gap_ms, e.gap_miss, e.gap_end_ts
-        FROM events e
+             e.gap_ms, e.gap_miss, e.gap_end_ts, f.start_ts AS file_start_ts
+        FROM gaps e
         JOIN roots r ON r.id = e.root_id
+        LEFT JOIN files f ON f.root_id = e.root_id AND f.relative_path = e.relative_path
        WHERE {where_clause}
        ORDER BY {order_by}
        LIMIT :limit
@@ -162,9 +161,10 @@ def iter_gap_rows(conn: sqlite3.Connection, args: argparse.Namespace) -> Iterabl
         pool_sql = f"""
           SELECT e.id, e.root_id, r.path AS root_path, e.relative_path,
                  e.collector, e.exchange, e.symbol,
-                 e.start_line, e.end_line, e.gap_ms, e.gap_miss, e.gap_end_ts
-            FROM events e
+                 e.gap_ms, e.gap_miss, e.gap_end_ts, f.start_ts AS file_start_ts
+            FROM gaps e
             JOIN roots r ON r.id = e.root_id
+            LEFT JOIN files f ON f.root_id = e.root_id AND f.relative_path = e.relative_path
            WHERE {where_clause}
            ORDER BY e.gap_miss DESC
            LIMIT :pool;
@@ -192,24 +192,6 @@ def iter_gap_rows(conn: sqlite3.Connection, args: argparse.Namespace) -> Iterabl
 def resolve_file_path(root_path: str, relative_path: str) -> Path:
     rel = Path(relative_path)
     return Path(root_path) / rel
-
-
-def read_line_timestamp(file_path: Path, line_number: int) -> Optional[int]:
-  opener = gzip.open if file_path.suffix == ".gz" else open
-  try:
-    with opener(file_path, "rt", encoding="utf-8", errors="ignore") as handle:
-      for idx, line in enumerate(handle, start=1):
-        if idx == line_number:
-          parts = line.strip().split()
-          if not parts:
-            return None
-          try:
-            return int(parts[0])
-          except ValueError:
-            return None
-  except FileNotFoundError:
-    return None
-  return None
 
 
 def ensure_cache_dir(path: Optional[str]) -> Path:
@@ -311,7 +293,7 @@ def main() -> int:
 
     rows = iter_gap_rows(conn, args)
     if not rows:
-        print("No gap events matched the filters.")
+        print("No gaps matched the filters.")
         return 0
 
     inspected = 0
@@ -321,14 +303,11 @@ def main() -> int:
 
     for row in rows:
         gap_end_ts = row["gap_end_ts"]
-        file_path = None
-        ts = gap_end_ts
+        file_start_ts = row["file_start_ts"]
+        ts = gap_end_ts if gap_end_ts is not None else file_start_ts
         if ts is None:
-            file_path = resolve_file_path(row["root_path"], row["relative_path"])
-            ts = read_line_timestamp(file_path, row["start_line"])
-        if ts is None:
-            path_desc = file_path or resolve_file_path(row["root_path"], row["relative_path"])
-            print(f"[id={row['id']}] missing or unreadable line {row['start_line']} in {path_desc}")
+            path_desc = resolve_file_path(row["root_path"], row["relative_path"])
+            print(f"[id={row['id']}] missing gap_end_ts and file start_ts in {path_desc}")
             continue
 
         gap_ms = int(row["gap_ms"])
@@ -368,8 +347,8 @@ def main() -> int:
 
         ratio = fmt_ratio(total, gap_miss)
         print(format_gap_summary(row["id"], gap_miss, total, ratio))
-        if gap_end_ts is None and file_path is not None:
-            print(f"  source=file line={row['start_line']} file={file_path}")
+        if gap_end_ts is None and file_start_ts is not None:
+            print(f"  source=file start_ts={file_start_ts}")
         print(format_window_summary(start_ms, end_ms, gap_ms, first_hit, last_hit))
         inspected += 1
         total_est_miss += gap_miss

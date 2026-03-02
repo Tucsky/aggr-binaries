@@ -28,7 +28,7 @@ Applied during streaming before accumulation:
 1. Bitfinex liquidations: flip side.
 2. OKEX liquidation bug window: divide size by 500.
 3. Bad non-liquidation side window: deterministic side correction.
-4. Corrupted rows: rejected by parser and tracked as events.
+4. Corrupted rows: rejected by parser and summarized in warning logs.
 
 ## Output files
 For each `(collector, exchange, symbol, timeframe)`:
@@ -69,10 +69,10 @@ Without `--force`, when companion exists:
 With `--force`:
 - Ignore resume guards and rebuild from scratch.
 
-## Events and gap detection
-Process writes grouped file-level events:
-- parse rejects: `parts_short`, `non_finite`, `invalid_ts_range`, `notional_too_large`
-- `gap` events with `gap_ms`, `gap_miss`, `gap_end_ts`
+## Gap persistence and detection
+Process writes gap rows into `gaps` (one row per detected gap):
+- `gap_ms`, `gap_miss`, `gap_end_ts`, `gap_score`
+- parse rejects are not persisted; they are summarized in logs (`[parse-skip] ...`)
 
 Gap detection is adaptive per market:
 - liquidation rows excluded from gap tracking
@@ -108,15 +108,15 @@ flowchart TD
   N -->|yes| O[Fail fast stale-index error for market file]
   N -->|no| P["Read lines and parse trade rows<br/>fn: parseTradeLine"]
   P --> Q{Trade parsed?}
-  Q -->|no| R[Record grouped parse reject event range]
+  Q -->|no| R[Increment parse-reject counters]
   Q -->|yes| S["Run adaptive gap detection on non-liquidation rows<br/>fn: recordGap"]
   S --> T{Trade before resume slot?}
   T -->|yes| P
   T -->|no| U["Accumulate candle bucket<br/>fn: accumulate"]
   U --> P
   R --> P
-  P --> V["Finish grouped file event ranges<br/>fn: EventAccumulator.finish"]
-  V --> W["Replace file events in DB delete then insert<br/>fn: db.deleteEventsForFile / db.insertEvents"]
+  P --> V["Persist file gaps in DB (replace by file key)<br/>fn: db.deleteGapsForFile / db.insertGaps"]
+  V --> W[Log parse-reject summary if non-zero]
   W --> X[Update in-memory stats]
   X --> Y{Flush interval elapsed?}
   Y -->|no| L
@@ -139,5 +139,5 @@ flowchart TD
 ## Failure handling
 - SQLite write contention (`SQLITE_BUSY`/`SQLITE_LOCKED`) retries with bounded backoff.
 - If an indexed `files` row points to a missing input path on disk, process fails fast with an explicit stale-index error for that market/file.
-- On that missing-input failure, no further files are processed and existing events for the failing file are left unchanged.
+- On that missing-input failure, no further files are processed and existing gap rows for the failing file are left unchanged.
 - If binary/companion persisted but registry missed update (interruption), run `registry` for affected scope.

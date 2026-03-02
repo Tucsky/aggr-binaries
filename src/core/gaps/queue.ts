@@ -12,7 +12,7 @@ export interface FixGapsQueryOptions {
 export type GapFixEventRow = GapFixQueueRow;
 
 export function iterateGapFixEvents(db: Db, opts: FixGapsQueryOptions): Iterable<GapFixEventRow> {
-  return db.iterateGapEventsForFix({
+  return db.iterateGapsForFix({
     collector: opts.collector,
     exchange: opts.exchange,
     symbol: opts.symbol,

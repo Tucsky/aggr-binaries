@@ -1,6 +1,6 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
-import type { EventRange, GapFixStatus } from "./events.js";
-import type { IndexedFile, RegistryEntry, RegistryFilter, RegistryKey } from "./model.js";
+import type { Gap } from "./gapTracker.js";
+import type { GapCtx, GapFixStatus, IndexedFile, RegistryEntry, RegistryFilter, RegistryKey } from "./model.js";
 import { configureSqliteWriteContention, runSqliteWrite, runSqliteWriteTransaction } from "./sqliteWrite.js";
 
 // This file intentionally stays centralized despite its size: migrations and prepared write paths are tightly coupled.
@@ -12,11 +12,11 @@ export interface Db {
   upsertRegistry(entry: RegistryEntry): void;
   replaceRegistry(entries: RegistryEntry[], filter?: RegistryFilter): { upserted: number; deleted: number };
   getRegistryEntry(key: RegistryKey): RegistryEntry | null;
-  insertEvents(rows: EventRange[]): void;
-  deleteEventsForFile(rootId: number, relativePath: string): void;
-  iterateGapEventsForFix(opts: GapFixQueueFilter): Iterable<GapFixQueueRow>;
+  insertGaps(ctx: GapCtx, gaps: Gap[]): void;
+  deleteGapsForFile(rootId: number, relativePath: string): void;
+  iterateGapsForFix(opts: GapFixQueueFilter): Iterable<GapFixQueueRow>;
   updateGapFixStatus(rows: Array<{ id: number; status: GapFixStatus; error?: string | null; recovered?: number | null }>): void;
-  deleteEventsByIds(ids: number[]): void;
+  deleteGapsByIds(ids: number[]): void;
   close(): void;
 }
 
@@ -37,12 +37,11 @@ export interface GapFixQueueRow {
   collector: string;
   exchange: string;
   symbol: string;
-  start_line: number;
-  end_line: number;
   gap_ms: number | null;
   gap_miss: number | null;
   gap_end_ts: number | null;
   gap_fix_status: string | null;
+  gap_score: number | null;
 }
 
 export interface IndexedMarketRangeRow {
@@ -104,24 +103,24 @@ export function openDatabase(dbPath: string): Db {
     `SELECT * FROM registry
      WHERE collector = :collector AND exchange = :exchange AND symbol = :symbol AND timeframe = :timeframe;`,
   );
-  const insertEventStmt = db.prepare(
-    `INSERT INTO events
-      (root_id, relative_path, collector, exchange, symbol, event_type, start_line, end_line, gap_ms, gap_miss, gap_end_ts)
+  const insertGapStmt = db.prepare(
+    `INSERT INTO gaps
+      (root_id, relative_path, collector, exchange, symbol, gap_ms, gap_miss, gap_score, gap_end_ts, gap_score)
      VALUES
-      (:rootId, :relativePath, :collector, :exchange, :symbol, :eventType, :startLine, :endLine, :gapMs, :gapMiss, :gapEndTs);`,
+      (:rootId, :relativePath, :collector, :exchange, :symbol, :gapMs, :gapMiss, :gapScore, :gapEndTs, :gapScore);`,
   );
-  const deleteEventsForFileStmt = db.prepare(
-    `DELETE FROM events WHERE root_id = :rootId AND relative_path = :relativePath;`,
+  const deleteGapsForFileStmt = db.prepare(
+    `DELETE FROM gaps WHERE root_id = :rootId AND relative_path = :relativePath;`,
   );
   const updateGapFixStatusStmt = db.prepare(
-    `UPDATE events
+    `UPDATE gaps
         SET gap_fix_status = :status,
             gap_fix_error = :error,
             gap_fix_recovered = :recovered,
             gap_fix_updated_at = (unixepoch('subsec') * 1000)
       WHERE id = :id;`,
   );
-  const deleteEventByIdStmt = db.prepare("DELETE FROM events WHERE id = :id;");
+  const deleteGapByIdStmt = db.prepare("DELETE FROM gaps WHERE id = :id;");
   const listIndexedMarketRangesStmt = db.prepare(
     `SELECT collector, exchange, symbol, start_ts, end_ts, updated_at
        FROM indexed_market_ranges;`,
@@ -145,16 +144,16 @@ export function openDatabase(dbPath: string): Db {
     replaceRegistry: (entries: RegistryEntry[], filter?: RegistryFilter) =>
       replaceRegistry(db, upsertRegistryStmt, deleteRegistryStmt, entries, filter),
     getRegistryEntry: (key: RegistryKey) => getRegistry(getRegistryStmt, key),
-    insertEvents: (rows: EventRange[]) => insertEvents(db, insertEventStmt, rows),
-    deleteEventsForFile: (rootId: number, relativePath: string) =>
+    insertGaps: (ctx: GapCtx, rows: Gap[]) => insertGaps(db, insertGapStmt, ctx, rows),
+    deleteGapsForFile: (rootId: number, relativePath: string) =>
       runSqliteWrite(() => {
-        deleteEventsForFileStmt.run({ rootId, relativePath });
+        deleteGapsForFileStmt.run({ rootId, relativePath });
       }),
-    iterateGapEventsForFix: (opts: GapFixQueueFilter): Iterable<GapFixQueueRow> =>
-      iterateGapEventsForFix(db, opts),
+    iterateGapsForFix: (opts: GapFixQueueFilter): Iterable<GapFixQueueRow> =>
+      iterateGapsForFix(db, opts),
     updateGapFixStatus: (rows: Array<{ id: number; status: GapFixStatus; error?: string | null; recovered?: number | null }>) =>
       updateGapFixStatus(db, updateGapFixStatusStmt, rows),
-    deleteEventsByIds: (ids: number[]) => deleteEventsByIds(db, deleteEventByIdStmt, ids),
+    deleteGapsByIds: (ids: number[]) => deleteGapsByIds(db, deleteGapByIdStmt, ids),
     close: () => db.close(),
   };
 
@@ -204,19 +203,17 @@ function createTables(db: DatabaseSync): void {
   `);
 
   db.exec(`
-    CREATE TABLE IF NOT EXISTS events (
+    CREATE TABLE IF NOT EXISTS gaps (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
       relative_path TEXT NOT NULL,
       collector TEXT NOT NULL,
       exchange TEXT NOT NULL,
       symbol TEXT NOT NULL,
-      event_type TEXT NOT NULL,
-      start_line INTEGER NOT NULL,
-      end_line INTEGER NOT NULL,
       gap_ms INTEGER,
       gap_miss INTEGER,
       gap_end_ts INTEGER,
+      gap_score FLOAT,
       gap_fix_status TEXT,
       gap_fix_error TEXT,
       gap_fix_recovered INTEGER,
@@ -244,11 +241,11 @@ function createIndexes(db: DatabaseSync): void {
   db.exec("CREATE INDEX IF NOT EXISTS idx_files_start_ts ON files(start_ts);");
   db.exec("CREATE INDEX IF NOT EXISTS idx_files_collector ON files(collector);");
   db.exec("CREATE INDEX IF NOT EXISTS idx_registry_exchange_symbol ON registry(exchange, symbol);");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_events_file ON events(root_id, relative_path);");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_events_market ON events(collector, exchange, symbol);");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_events_market_gap_end_ts ON events(collector, exchange, symbol, gap_end_ts, id);");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_gaps_file ON gaps(root_id, relative_path);");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_gaps_market ON gaps(collector, exchange, symbol);");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_gaps_market_gap_end_ts ON gaps(collector, exchange, symbol, gap_end_ts, id);");
   db.exec(
-    "CREATE INDEX IF NOT EXISTS idx_events_fix_queue ON events(event_type, gap_fix_status, collector, exchange, symbol, root_id, relative_path, id);",
+    "CREATE INDEX IF NOT EXISTS idx_gaps_fix_queue ON gaps(gap_fix_status, collector, exchange, symbol, root_id, relative_path, id);",
   );
   db.exec("CREATE INDEX IF NOT EXISTS idx_indexed_market_ranges_exchange_symbol ON indexed_market_ranges(exchange, symbol);");
 }
@@ -280,18 +277,16 @@ function assertSchema(db: DatabaseSync): void {
     "created_at",
     "updated_at",
   ]);
-  assertExactColumns(db, "events", [
+  assertExactColumns(db, "gaps", [
     "id",
     "root_id",
     "relative_path",
     "collector",
     "exchange",
     "symbol",
-    "event_type",
-    "start_line",
-    "end_line",
     "gap_ms",
     "gap_miss",
+    "gap_score",
     "gap_end_ts",
     "gap_fix_status",
     "gap_fix_error",
@@ -427,20 +422,18 @@ function accumulateIndexedMarketRange(
   if (startTs > existing.endTs) existing.endTs = startTs;
 }
 
-function insertEvents(db: DatabaseSync, stmt: StatementSync, rows: EventRange[]): void {
+function insertGaps(db: DatabaseSync, stmt: StatementSync, ctx: GapCtx, rows: Gap[]): void {
   if (!rows.length) return;
   runSqliteWriteTransaction(db, () => {
     for (const row of rows) {
       stmt.run({
-        rootId: row.rootId,
-        relativePath: row.relativePath,
-        collector: row.collector,
-        exchange: row.exchange,
-        symbol: row.symbol,
-        eventType: row.type,
-        startLine: row.startLine,
-        endLine: row.endLine,
+        rootId: ctx.rootId,
+        relativePath: ctx.relativePath,
+        collector: ctx.collector,
+        exchange: ctx.exchange,
+        symbol: ctx.symbol,
         gapMs: row.gapMs ?? null,
+        gapScore: row.gapScore ?? null,
         gapMiss: row.gapMiss ?? null,
         gapEndTs: row.gapEndTs ?? null,
       });
@@ -466,7 +459,7 @@ function updateGapFixStatus(
   });
 }
 
-function deleteEventsByIds(db: DatabaseSync, stmt: StatementSync, ids: number[]): void {
+function deleteGapsByIds(db: DatabaseSync, stmt: StatementSync, ids: number[]): void {
   if (!ids.length) return;
   runSqliteWriteTransaction(db, () => {
     for (const id of ids) {
@@ -587,12 +580,11 @@ interface GapFixQueueCursor {
   symbol: string;
   rootId: number;
   relativePath: string;
-  startLine: number;
   id: number;
 }
 
-function iterateGapEventsForFix(db: DatabaseSync, opts: GapFixQueueFilter): Iterable<GapFixQueueRow> {
-  const where: string[] = ["e.event_type = 'gap'"];
+function iterateGapsForFix(db: DatabaseSync, opts: GapFixQueueFilter): Iterable<GapFixQueueRow> {
+  const where: string[] = [];
   const baseParams: Record<string, string | number | null> = {};
 
   const selectedId = Number.isFinite(opts.id) && (opts.id as number) > 0 ? Math.floor(opts.id as number) : undefined;
@@ -631,12 +623,12 @@ function iterateGapEventsForFix(db: DatabaseSync, opts: GapFixQueueFilter): Iter
   const baseSql =
     `SELECT e.id, e.root_id, r.path AS root_path, e.relative_path,
             e.collector, e.exchange, e.symbol,
-            e.start_line, e.end_line, e.gap_ms, e.gap_miss, e.gap_end_ts, e.gap_fix_status
-       FROM events e
+            e.gap_ms, e.gap_miss, e.gap_end_ts, e.gap_fix_status
+       FROM gaps e
        JOIN roots r ON r.id = e.root_id`;
   const whereSql = where.join(" AND ");
   // Keep queue deterministic and market-local so one symbol can be drained before moving to the next.
-  const orderBySql = " ORDER BY e.collector, e.exchange, e.symbol, e.root_id, e.relative_path, e.start_line, e.id";
+  const orderBySql = " ORDER BY e.collector, e.exchange, e.symbol, e.root_id, e.relative_path, e.id";
 
   if (selectedId !== undefined) {
     const params: Record<string, string | number | null> = limit !== undefined ? { ...baseParams, limit } : baseParams;
@@ -668,7 +660,6 @@ function iterateGapEventsForFix(db: DatabaseSync, opts: GapFixQueueFilter): Iter
           symbol: last.symbol,
           rootId: last.root_id,
           relativePath: last.relative_path,
-          startLine: last.start_line,
           id: last.id,
         };
       }
@@ -690,6 +681,7 @@ function selectGapFixQueuePage(
     ...baseParams,
     pageLimit,
   };
+  
   if (cursor) {
     whereParts.push(
       `(e.collector > :cursorCollector
@@ -702,23 +694,23 @@ function selectGapFixQueuePage(
                         OR (e.root_id = :cursorRootId AND (
                              e.relative_path > :cursorRelativePath
                              OR (e.relative_path = :cursorRelativePath AND (
-                                  e.start_line > :cursorStartLine
-                                  OR (e.start_line = :cursorStartLine AND e.id > :cursorId)
+                                  e.id > :cursorId
                                 ))
                            ))
                       ))
                  ))
             )))`,
     );
+
     params.cursorCollector = cursor.collector;
     params.cursorExchange = cursor.exchange;
     params.cursorSymbol = cursor.symbol;
     params.cursorRootId = cursor.rootId;
     params.cursorRelativePath = cursor.relativePath;
-    params.cursorStartLine = cursor.startLine;
     params.cursorId = cursor.id;
   }
 
   const sql = `${baseSql} WHERE ${whereParts.join(" AND ")}${orderBySql} LIMIT :pageLimit;`;
+
   return (db.prepare(sql).all(params) as unknown as GapFixQueueRow[]) ?? [];
 }

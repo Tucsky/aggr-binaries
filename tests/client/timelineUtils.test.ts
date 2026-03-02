@@ -67,50 +67,27 @@ test("computeGlobalRange returns raw bounds across all markets", () => {
   });
 });
 
+function makeGapEvent(id: number, ts: number, gapFixStatus: string | null = null): TimelineEvent {
+  return {
+    id,
+    collector: "RAM",
+    exchange: "BINANCE",
+    symbol: "BTCUSDT",
+    relativePath: "RAM/BINANCE/BTCUSDT/2024-01-01.gz",
+    gapFixStatus,
+    gapFixRecovered: null,
+    ts,
+    gapMs: 1,
+    gapMiss: 1,
+    gapScore: 1,
+  };
+}
+
 test("groupEventsByMarket groups rows and preserves deterministic order by ts/id", () => {
   const events: TimelineEvent[] = [
-    {
-      id: 3,
-      collector: "RAM",
-      exchange: "BINANCE",
-      symbol: "BTCUSDT",
-      relativePath: "RAM/BINANCE/BTCUSDT/2024-01-01.gz",
-      eventType: "gap",
-      gapFixStatus: null,
-      ts: 300,
-      startLine: 1,
-      endLine: 1,
-      gapMs: 1,
-      gapMiss: 1,
-    },
-    {
-      id: 1,
-      collector: "RAM",
-      exchange: "BINANCE",
-      symbol: "BTCUSDT",
-      relativePath: "RAM/BINANCE/BTCUSDT/2024-01-01.gz",
-      eventType: "gap",
-      gapFixStatus: null,
-      ts: 200,
-      startLine: 1,
-      endLine: 1,
-      gapMs: 1,
-      gapMiss: 1,
-    },
-    {
-      id: 2,
-      collector: "RAM",
-      exchange: "BINANCE",
-      symbol: "BTCUSDT",
-      relativePath: "RAM/BINANCE/BTCUSDT/2024-01-01.gz",
-      eventType: "gap",
-      gapFixStatus: null,
-      ts: 200,
-      startLine: 1,
-      endLine: 1,
-      gapMs: 1,
-      gapMiss: 1,
-    },
+    makeGapEvent(3, 300),
+    makeGapEvent(1, 200),
+    makeGapEvent(2, 200),
   ];
 
   const grouped = groupEventsByMarket(events);
@@ -120,115 +97,24 @@ test("groupEventsByMarket groups rows and preserves deterministic order by ts/id
 });
 
 test("eventKind marks fixed gap rows distinctly", () => {
-  const event: TimelineEvent = {
-    id: 1,
-    collector: "RAM",
-    exchange: "BINANCE",
-    symbol: "BTCUSDT",
-    relativePath: "RAM/BINANCE/BTCUSDT/2024-01-01.gz",
-    eventType: "gap",
-    gapFixStatus: "fixed",
-    gapFixRecovered: 12,
-    ts: 100,
-    startLine: 1,
-    endLine: 1,
-    gapMs: 1,
-    gapMiss: 1,
-  };
+  const event = makeGapEvent(1, 100, "fixed");
+  event.gapFixRecovered = 12;
   assert.strictEqual(eventKind(event), "gap_fixed");
 });
 
 test("eventKind marks skipped_large_gap rows distinctly", () => {
-  const event: TimelineEvent = {
-    id: 2,
-    collector: "RAM",
-    exchange: "BINANCE",
-    symbol: "BTCUSDT",
-    relativePath: "RAM/BINANCE/BTCUSDT/2024-01-01.gz",
-    eventType: "gap",
-    gapFixStatus: "skipped_large_gap",
-    gapFixRecovered: 0,
-    ts: 100,
-    startLine: 1,
-    endLine: 1,
-    gapMs: 1,
-    gapMiss: 1,
-  };
+  const event = makeGapEvent(2, 100, "skipped_large_gap");
+  event.gapFixRecovered = 0;
   assert.strictEqual(eventKind(event), "skipped_large_gap");
 });
 
 test("findTimelineEventWindow returns visible inclusive ts window via binary search", () => {
   const events: TimelineEvent[] = [
-    {
-      id: 1,
-      collector: "RAM",
-      exchange: "BINANCE",
-      symbol: "BTCUSDT",
-      relativePath: "RAM/BINANCE/BTCUSDT/2024-01-01.gz",
-      eventType: "gap",
-      gapFixStatus: null,
-      ts: 100,
-      startLine: 1,
-      endLine: 1,
-      gapMs: 1,
-      gapMiss: 1,
-    },
-    {
-      id: 2,
-      collector: "RAM",
-      exchange: "BINANCE",
-      symbol: "BTCUSDT",
-      relativePath: "RAM/BINANCE/BTCUSDT/2024-01-01.gz",
-      eventType: "gap",
-      gapFixStatus: null,
-      ts: 200,
-      startLine: 1,
-      endLine: 1,
-      gapMs: 1,
-      gapMiss: 1,
-    },
-    {
-      id: 3,
-      collector: "RAM",
-      exchange: "BINANCE",
-      symbol: "BTCUSDT",
-      relativePath: "RAM/BINANCE/BTCUSDT/2024-01-01.gz",
-      eventType: "gap",
-      gapFixStatus: null,
-      ts: 300,
-      startLine: 1,
-      endLine: 1,
-      gapMs: 1,
-      gapMiss: 1,
-    },
-    {
-      id: 4,
-      collector: "RAM",
-      exchange: "BINANCE",
-      symbol: "BTCUSDT",
-      relativePath: "RAM/BINANCE/BTCUSDT/2024-01-01.gz",
-      eventType: "gap",
-      gapFixStatus: null,
-      ts: 300,
-      startLine: 1,
-      endLine: 1,
-      gapMs: 1,
-      gapMiss: 1,
-    },
-    {
-      id: 5,
-      collector: "RAM",
-      exchange: "BINANCE",
-      symbol: "BTCUSDT",
-      relativePath: "RAM/BINANCE/BTCUSDT/2024-01-01.gz",
-      eventType: "gap",
-      gapFixStatus: null,
-      ts: 400,
-      startLine: 1,
-      endLine: 1,
-      gapMs: 1,
-      gapMiss: 1,
-    },
+    makeGapEvent(1, 100),
+    makeGapEvent(2, 200),
+    makeGapEvent(3, 300),
+    makeGapEvent(4, 300),
+    makeGapEvent(5, 400),
   ];
 
   const win = findTimelineEventWindow(events, 200, 300);
@@ -239,18 +125,10 @@ test("findTimelineEventWindow returns visible inclusive ts window via binary sea
 test("findTimelineEventWindow handles empty or invalid ranges deterministically", () => {
   const oneEvent: TimelineEvent[] = [
     {
-      id: 1,
+      ...makeGapEvent(1, 250),
       collector: "PI",
       exchange: "BYBIT",
-      symbol: "BTCUSDT",
       relativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
-      eventType: "gap",
-      gapFixStatus: null,
-      ts: 250,
-      startLine: 1,
-      endLine: 1,
-      gapMs: 1,
-      gapMiss: 1,
     },
   ];
 

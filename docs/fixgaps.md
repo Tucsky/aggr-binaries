@@ -1,7 +1,7 @@
 # Fixgaps task
 
 ## Purpose
-Recover missing trades from gap events, rewrite affected raw files deterministically, and patch binaries.
+Recover missing trades from persisted gap rows, rewrite affected raw files deterministically, and patch binaries.
 
 ## Command
 ```bash
@@ -18,13 +18,13 @@ Key flags:
 - `--dry-run`
 
 Queue source:
-- `events` rows where `event_type='gap'`
+- `gaps` rows
 - `--id` takes precedence over retry-status queue selection
-- Default traversal is market-first: `collector/exchange/symbol`, then deterministic file order (`root_id/relative_path/start_line/id`).
-- Queue reads are keyset-paged (`1024` rows/page) so fixgaps can keep writing event statuses without holding a long-lived read cursor.
+- Default traversal is market-first: `collector/exchange/symbol`, then deterministic file order (`root_id/relative_path/id`).
+- Queue reads are keyset-paged (`1024` rows/page) so fixgaps can keep writing gap statuses without holding a long-lived read cursor.
 
 ## Recovery batching
-- Fixgaps skips recovery for events where `gap_ms > 60d`; those events are marked `skipped_large_gap` with `recovered=0` and no adapter call.
+- Fixgaps skips recovery for rows where `gap_ms > 60d`; those rows are marked `skipped_large_gap` with `recovered=0` and no adapter call.
 - Recovered trades are merged in deterministic flush batches of `1,000,000` trades.
 - Each flush batch is written into a raw file path derived from the batch's last trade timestamp using the same file naming pattern as the source event file.
 - If a target file path does not exist, fixgaps creates it and indexes it before merge/patch.
@@ -32,7 +32,7 @@ Queue source:
 
 ## Pipeline
 For each grouped `(root_id, relative_path)`:
-1. Resolve one recovery window per event from persisted event payload timestamps (`gap_end_ts - gap_ms` to `gap_end_ts`), and skip windows with `gap_ms > 60d`.
+1. Resolve one recovery window per gap row from persisted payload timestamps (`gap_end_ts - gap_ms` to `gap_end_ts`), and skip windows with `gap_ms > 60d`.
 2. Call the exchange adapter with `onRecoveredBatch` callback support.
 3. Ingest callback batches and returned adapter tail through the same accumulator.
 4. Flush deterministic chunks (`1,000,000` max per chunk), resolve target file from the chunk last trade timestamp, then deterministically rewrite by timestamp sort-normalization:
@@ -41,18 +41,18 @@ For each grouped `(root_id, relative_path)`:
    - non-trade lines preserved
 5. Patch base timeframe binary over the recovered range.
 6. Roll up affected higher timeframes from patched base.
-7. Update event lifecycle fields.
+7. Update gap lifecycle fields.
 
 ### Mermaid flow
 ```mermaid
 flowchart TD
-  A["CLI fixgaps<br/>fn: runFixGaps"] --> B["Build keyset-paged queue from events gap rows (market-first order)<br/>fn: iterateGapFixEvents"]
+  A["CLI fixgaps<br/>fn: runFixGaps"] --> B["Build keyset-paged queue from gaps rows (market-first order)<br/>fn: iterateGapFixEvents"]
   B --> C["Group rows by root_id + relative_path<br/>fn: runFixGaps grouping loop"]
   C --> D["processFileGapBatch for each file group<br/>fn: processFileGapBatch"]
 
   D --> E["Resolve adapter for exchange<br/>fn: adapterRegistry.getAdapter"]
   E -->|missing| E1[Mark rows missing_adapter]
-  E -->|found| F["Extract windows from event payload gap_end_ts-gap_ms -> gap_end_ts<br/>fn: extractResolvableWindows"]
+  E -->|found| F["Extract windows from row payload gap_end_ts-gap_ms -> gap_end_ts<br/>fn: extractResolvableWindows"]
   F --> G["Mark unresolved windows adapter_error<br/>fn: markUnresolvedWindowEvents"]
   G --> H{Any resolvable windows?}
   H -->|no| HX[Return]
@@ -82,9 +82,9 @@ flowchart TD
   AE --> AF
 ```
 
-## Event status lifecycle
+## Gap status lifecycle
 - `fixed`: adapter/rewrite/patch pipeline succeeded (including 0 recovered)
-- `skipped_large_gap`: event was intentionally skipped by the `>60d` long-gap guard
+- `skipped_large_gap`: row was intentionally skipped by the `>60d` long-gap guard
 - `missing_adapter`: adapter unavailable
 - `adapter_error`: adapter or patch pipeline failure
 
@@ -94,7 +94,7 @@ With `--dry-run`:
 - recovery counts are reported
 - no file rewrites
 - no binary patches
-- no `events` status updates
+- no `gaps` status updates
 
 ## Adapter coverage
 Current adapters include:

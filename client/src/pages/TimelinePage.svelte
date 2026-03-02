@@ -101,7 +101,7 @@
   let actionsContextAnchorEl: HTMLDivElement | null = null;
   let actionsContextPoint: { x: number; y: number } | null = null;
   let actionsMarket: TimelineMarket | null = null;
-  let actionsGapEventId: number | null = null;
+  let actionsGapEvent: TimelineEvent | null = null;
   let scrollEl: HTMLDivElement | null = null;
   let resizeObserver: ResizeObserver | null = null;
   let stopTitleResize: (() => void) | null = null;
@@ -651,14 +651,14 @@
     const sameAnchor = actionsOpen && actionsAnchorEl === anchorEl;
     actionsAnchorEl = anchorEl;
     actionsContextPoint = null;
-    actionsGapEventId = null;
+    actionsGapEvent = null;
     actionsMarket = event.detail.market;
     actionsOpen = !sameAnchor;
   }
   function handleRowContextActions(
     event: CustomEvent<{
       market: TimelineMarket;
-      gapEventId: number | null;
+      gapEvent: TimelineEvent | null;
       clientX: number;
       clientY: number;
       insideSource: boolean;
@@ -671,14 +671,14 @@
     actionsAnchorEl = null;
     actionsContextPoint = { x: event.detail.clientX, y: event.detail.clientY };
     actionsMarket = event.detail.market;
-    actionsGapEventId = event.detail.gapEventId;
+    actionsGapEvent = event.detail.gapEvent;
     actionsOpen = true;
   }
   function closeActionsMenu(): void {
     actionsOpen = false;
     actionsAnchorEl = null;
     actionsContextPoint = null;
-    actionsGapEventId = null;
+    actionsGapEvent = null;
   }
   function openMarketFromMenu(event: CustomEvent<TimelineMarket>): void {
     closeActionsMenu();
@@ -871,7 +871,7 @@
       open={actionsOpen}
       anchorEl={resolvedActionsAnchorEl}
       market={actionsMarket}
-      gapEventId={actionsGapEventId}
+      gapEvent={actionsGapEvent}
       on:close={closeActionsMenu}
       on:openMarket={openMarketFromMenu}
       on:copyMarket={copyMarketFromMenu}

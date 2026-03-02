@@ -7,7 +7,7 @@ import type { Config } from "../../src/core/config.js";
 import { parseTimeframeMs } from "../../src/core/config.js";
 import type { Db } from "../../src/core/db.js";
 import { openDatabase } from "../../src/core/db.js";
-import { GapFixStatus } from "../../src/core/events.js";
+import { GapFixStatus } from "../../src/core/model.js";
 import { createAdapterRegistry } from "../../src/core/gaps/adapters/index.js";
 import { runFixGaps } from "../../src/core/gaps/index.js";
 import { classifyPath } from "../../src/core/normalize.js";
@@ -84,10 +84,10 @@ function insertGapEvent(
 ): void {
   db.db
     .prepare(
-      `INSERT INTO events
-        (root_id, relative_path, collector, exchange, symbol, event_type, start_line, end_line, gap_ms, gap_miss, gap_end_ts, gap_fix_status)
+      `INSERT INTO gaps
+        (root_id, relative_path, collector, exchange, symbol, gap_ms, gap_miss, gap_end_ts, gap_fix_status, gap_score)
        VALUES
-        (:rootId, :relativePath, :collector, :exchange, :symbol, 'gap', :startLine, :endLine, :gapMs, :gapMiss, :gapEndTs, NULL);`,
+        (:rootId, :relativePath, :collector, :exchange, :symbol, :gapMs, :gapMiss, :gapEndTs, NULL, NULL);`,
     )
     .run({
       rootId: payload.rootId,
@@ -95,8 +95,6 @@ function insertGapEvent(
       collector: MARKET.collector,
       exchange: MARKET.exchange,
       symbol: MARKET.symbol,
-      startLine: 2,
-      endLine: 2,
       gapMs: payload.gapMs,
       gapMiss: 1,
       gapEndTs: payload.gapEndTs,
@@ -105,7 +103,7 @@ function insertGapEvent(
 
 function readGapStatuses(db: Db): string[] {
   const rows = db.db
-    .prepare("SELECT gap_fix_status AS status FROM events ORDER BY id;")
+    .prepare("SELECT gap_fix_status AS status FROM gaps ORDER BY id;")
     .all() as Array<{ status: string | null }>;
   return rows.map((row) => row.status ?? "");
 }

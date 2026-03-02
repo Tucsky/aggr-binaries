@@ -1,6 +1,5 @@
 import type { Config } from "../config.js";
 import type { Db } from "../db.js";
-import { GapFixStatus } from "../events.js";
 import type { GapWindow, RecoveredBatchHandler, RecoveredTrade, TradeRecoveryAdapter } from "./adapters/index.js";
 import { ensureFlushTargetFile, resolveFlushTargetFile } from "./flushBatchTarget.js";
 import {
@@ -14,6 +13,7 @@ import { logFixgapsLine, setFixgapsProgress } from "./progress.js";
 import type { GapFixEventRow } from "./queue.js";
 import type { DirtyMarketRange } from "./rollup.js";
 import type { FixGapsStats } from "./index.js";
+import { GapFixStatus } from "../model.js";
 
 const DEBUG_FIXGAPS = process.env.AGGR_FIXGAPS_DEBUG === "1";
 const DAY_MS = 86_400_000;

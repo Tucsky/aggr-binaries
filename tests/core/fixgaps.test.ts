@@ -7,7 +7,7 @@ import type { Config } from "../../src/core/config.js";
 import { parseTimeframeMs } from "../../src/core/config.js";
 import type { Db } from "../../src/core/db.js";
 import { openDatabase } from "../../src/core/db.js";
-import { GapFixStatus } from "../../src/core/events.js";
+import { GapFixStatus } from "../../src/core/model.js";
 import { createAdapterRegistry, type TradeRecoveryAdapter, type RecoveredTrade } from "../../src/core/gaps/adapters/index.js";
 import { runFixGaps } from "../../src/core/gaps/index.js";
 import { classifyPath } from "../../src/core/normalize.js";
@@ -96,10 +96,10 @@ function insertGapEvent(
 ): number {
   const result = db.db
     .prepare(
-      `INSERT INTO events
-        (root_id, relative_path, collector, exchange, symbol, event_type, start_line, end_line, gap_ms, gap_miss, gap_end_ts, gap_fix_status)
+      `INSERT INTO gaps
+        (root_id, relative_path, collector, exchange, symbol, gap_ms, gap_miss, gap_end_ts, gap_fix_status, gap_score)
        VALUES
-        (:rootId, :relativePath, :collector, :exchange, :symbol, 'gap', :startLine, :endLine, :gapMs, :gapMiss, :gapEndTs, :status);`,
+        (:rootId, :relativePath, :collector, :exchange, :symbol, :gapMs, :gapMiss, :gapEndTs, :status, NULL);`,
     )
     .run({
       rootId: payload.rootId,
@@ -107,8 +107,6 @@ function insertGapEvent(
       collector: MARKET.collector,
       exchange: payload.exchange ?? MARKET.exchange,
       symbol: MARKET.symbol,
-      startLine: payload.startLine ?? 2,
-      endLine: payload.endLine ?? 2,
       gapMs: payload.gapMs ?? TS2 - TS0,
       gapMiss: 1,
       gapEndTs: payload.gapEndTs ?? TS2,
@@ -119,7 +117,7 @@ function insertGapEvent(
 
 function readEventRows(db: Db): Array<{ id: number; status: string | null; error: string | null; recovered: number | null }> {
   return db.db
-    .prepare("SELECT id, gap_fix_status AS status, gap_fix_error AS error, gap_fix_recovered AS recovered FROM events ORDER BY id;")
+    .prepare("SELECT id, gap_fix_status AS status, gap_fix_error AS error, gap_fix_recovered AS recovered FROM gaps ORDER BY id;")
     .all() as Array<{ id: number; status: string | null; error: string | null; recovered: number | null }>;
 }
 
@@ -145,7 +143,7 @@ test("fixgaps merges recovered trades, patches all timeframes, and is idempotent
     const { rootId } = insertIndexedFile(db, fixture.root, fixture.relativePath);
     await runProcess(buildConfig(fixture.root, fixture.outDir, fixture.dbPath, "1m"), db);
     await runProcess(buildConfig(fixture.root, fixture.outDir, fixture.dbPath, "5m"), db);
-    db.db.exec("DELETE FROM events;");
+    db.db.exec("DELETE FROM gaps;");
 
     insertGapEvent(db, { rootId, relativePath: fixture.relativePath });
 
@@ -199,7 +197,7 @@ test("fixgaps sorts unsorted files when recovered data is before existing rows",
     await fs.writeFile(fixture.fullPath, [`${TS2} 102 1 1 0`, `${TS1} 101 1 0 0`].join("\n"));
     const { rootId } = insertIndexedFile(db, fixture.root, fixture.relativePath);
     await runProcess(buildConfig(fixture.root, fixture.outDir, fixture.dbPath, "1m"), db);
-    db.db.exec("DELETE FROM events;");
+    db.db.exec("DELETE FROM gaps;");
     insertGapEvent(db, {
       rootId,
       relativePath: fixture.relativePath,
@@ -246,7 +244,7 @@ test("fixgaps on unsorted files sorts and recovers mixed windows", async () => {
     await fs.writeFile(fixture.fullPath, [`${TS2} 102 1 1 0`, `${TS1} 101 1 0 0`, `${TS2 + 60_000} 103 1 1 0`].join("\n"));
     const { rootId } = insertIndexedFile(db, fixture.root, fixture.relativePath);
     await runProcess(buildConfig(fixture.root, fixture.outDir, fixture.dbPath, "1m"), db);
-    db.db.exec("DELETE FROM events;");
+    db.db.exec("DELETE FROM gaps;");
 
     insertGapEvent(db, {
       rootId,
@@ -314,7 +312,7 @@ test("fixgaps marks event fixed when adapter succeeds with zero recovered trades
   try {
     const { rootId } = insertIndexedFile(db, fixture.root, fixture.relativePath);
     await runProcess(buildConfig(fixture.root, fixture.outDir, fixture.dbPath, "1m"), db);
-    db.db.exec("DELETE FROM events;");
+    db.db.exec("DELETE FROM gaps;");
     insertGapEvent(db, { rootId, relativePath: fixture.relativePath });
 
     const beforeFile = await fs.readFile(fixture.fullPath, "utf8");
@@ -355,7 +353,7 @@ test("fixgaps dry-run does not mutate files, binaries, or events", async () => {
   try {
     const { rootId } = insertIndexedFile(db, fixture.root, fixture.relativePath);
     await runProcess(buildConfig(fixture.root, fixture.outDir, fixture.dbPath, "1m"), db);
-    db.db.exec("DELETE FROM events;");
+    db.db.exec("DELETE FROM gaps;");
     insertGapEvent(db, { rootId, relativePath: fixture.relativePath });
 
     const beforeFile = await fs.readFile(fixture.fullPath, "utf8");
@@ -402,7 +400,7 @@ test("fixgaps success logs include date, gap duration, and minute in recovered l
   try {
     const { rootId } = insertIndexedFile(db, fixture.root, fixture.relativePath);
     await runProcess(buildConfig(fixture.root, fixture.outDir, fixture.dbPath, "1m"), db);
-    db.db.exec("DELETE FROM events;");
+    db.db.exec("DELETE FROM gaps;");
     insertGapEvent(db, { rootId, relativePath: fixture.relativePath });
 
     const logs: string[] = [];
@@ -428,7 +426,7 @@ test("fixgaps success logs include date, gap duration, and minute in recovered l
     const recoveredLine = logs.find((line) => line.includes(": recovered 0 / 1"));
     assert.match(
       recoveredLine ?? "",
-      /^\[fixgaps\] \[BITFINEX\/BTCUSD\/2024-01-01\] 2m gap @ 00:00 : recovered 0 \/ 1$/,
+      /^\[fixgaps\] \[BITFINEX\/BTCUSD\/1\] 2m gap @ 2024-01-01T00:00 : recovered 0 \/ 1$/,
     );
   } finally {
     db.close();
@@ -442,7 +440,7 @@ test("fixgaps progress line mode prefixes active gap context", async () => {
   try {
     const { rootId } = insertIndexedFile(db, fixture.root, fixture.relativePath);
     await runProcess(buildConfig(fixture.root, fixture.outDir, fixture.dbPath, "1m"), db);
-    db.db.exec("DELETE FROM events;");
+    db.db.exec("DELETE FROM gaps;");
     insertGapEvent(db, { rootId, relativePath: fixture.relativePath });
 
     const logs: string[] = [];
@@ -473,7 +471,7 @@ test("fixgaps progress line mode prefixes active gap context", async () => {
     const progressLine = logs.find((line) => line.includes(": resolving windows 2024-01-01-00"));
     assert.match(
       progressLine ?? "",
-      /^\[fixgaps\] \[BITFINEX\/BTCUSD\/2024-01-01\] 2m gap @ 00:00 : resolving windows 2024-01-01-00 \.\.\.$/,
+      /^\[fixgaps\] \[BITFINEX\/BTCUSD\/1\] 2m gap @ 2024-01-01T00:00 : resolving windows 2024-01-01-00 \.\.\.$/,
     );
   } finally {
     db.close();
@@ -519,7 +517,7 @@ test("fixgaps id filter targets a single event and bypasses retry-status gating"
   try {
     const { rootId } = insertIndexedFile(db, fixture.root, fixture.relativePath);
     await runProcess(buildConfig(fixture.root, fixture.outDir, fixture.dbPath, "1m"), db);
-    db.db.exec("DELETE FROM events;");
+    db.db.exec("DELETE FROM gaps;");
 
     const targetedId = insertGapEvent(db, {
       rootId,
@@ -580,7 +578,7 @@ test("fixgaps supports retry-status filtering and builds windows from event payl
   try {
     const { rootId } = insertIndexedFile(db, fixture.root, fixture.relativePath);
     await runProcess(buildConfig(fixture.root, fixture.outDir, fixture.dbPath, "1m"), db);
-    db.db.exec("DELETE FROM events;");
+    db.db.exec("DELETE FROM gaps;");
 
     insertGapEvent(db, {
       rootId,
@@ -640,7 +638,7 @@ test("fixgaps uses event payload window on first run regardless of line numbers"
   try {
     const { rootId } = insertIndexedFile(db, fixture.root, fixture.relativePath);
     await runProcess(buildConfig(fixture.root, fixture.outDir, fixture.dbPath, "1m"), db);
-    db.db.exec("DELETE FROM events;");
+    db.db.exec("DELETE FROM gaps;");
 
     insertGapEvent(db, {
       rootId,

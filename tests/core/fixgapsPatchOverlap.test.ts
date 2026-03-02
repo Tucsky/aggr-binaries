@@ -7,7 +7,7 @@ import type { Config } from "../../src/core/config.js";
 import { parseTimeframeMs } from "../../src/core/config.js";
 import type { Db } from "../../src/core/db.js";
 import { openDatabase } from "../../src/core/db.js";
-import { GapFixStatus } from "../../src/core/events.js";
+import { GapFixStatus } from "../../src/core/model.js";
 import { createAdapterRegistry } from "../../src/core/gaps/adapters/index.js";
 import { runFixGaps } from "../../src/core/gaps/index.js";
 import { classifyPath } from "../../src/core/normalize.js";
@@ -119,10 +119,10 @@ function insertGapEvent(
 ): number {
   const result = db.db
     .prepare(
-      `INSERT INTO events
-        (root_id, relative_path, collector, exchange, symbol, event_type, start_line, end_line, gap_ms, gap_miss, gap_end_ts, gap_fix_status)
+      `INSERT INTO gaps
+        (root_id, relative_path, collector, exchange, symbol, gap_ms, gap_miss, gap_end_ts, gap_fix_status, gap_score)
        VALUES
-        (:rootId, :relativePath, :collector, :exchange, :symbol, 'gap', :startLine, :endLine, :gapMs, :gapMiss, :gapEndTs, NULL);`,
+        (:rootId, :relativePath, :collector, :exchange, :symbol, :gapMs, :gapMiss, :gapEndTs, NULL, NULL);`,
     )
     .run({
       rootId: payload.rootId,
@@ -130,8 +130,6 @@ function insertGapEvent(
       collector: MARKET.collector,
       exchange: MARKET.exchange,
       symbol: MARKET.symbol,
-      startLine: payload.startLine ?? 9_999,
-      endLine: payload.endLine ?? 9_999,
       gapMs: payload.gapMs ?? (TRADE_A1 - (TRADE_MISSING - 1)),
       gapMiss: 1,
       gapEndTs: payload.gapEndTs ?? TRADE_A1,
@@ -283,7 +281,7 @@ test("fixgaps patches 4h slot with overlapping market files, not just current fi
 
     await runProcess(buildConfig(fixture.root, fixture.outDir, fixture.dbPath, "1m"), db);
     await runProcess(buildConfig(fixture.root, fixture.outDir, fixture.dbPath, "4h"), db);
-    db.db.exec("DELETE FROM events;");
+    db.db.exec("DELETE FROM gaps;");
 
     insertGapEvent(db, { rootId, relativePath: fixture.relativePathA });
 
@@ -312,7 +310,7 @@ test("fixgaps patches 4h slot with overlapping market files, not just current fi
     assert.strictEqual(after4h.close, 4_000_000);
 
     const eventRow = db.db
-      .prepare("SELECT gap_fix_status, gap_fix_recovered FROM events WHERE root_id = :rootId AND relative_path = :relativePath;")
+      .prepare("SELECT gap_fix_status, gap_fix_recovered FROM gaps WHERE root_id = :rootId AND relative_path = :relativePath;")
       .get({ rootId, relativePath: fixture.relativePathA }) as { gap_fix_status: string | null; gap_fix_recovered: number | null };
     assert.strictEqual(eventRow.gap_fix_status, GapFixStatus.Fixed);
     assert.strictEqual(eventRow.gap_fix_recovered, 1);

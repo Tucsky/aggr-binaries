@@ -1,3 +1,4 @@
+import { TimelineEventKind } from "./timelineTypes.js";
 import { toTimelineX, type TimelineRange } from "./timelineUtils.js";
 
 export interface EventPaintStyle {
@@ -27,7 +28,7 @@ export const VISIBLE_RANGE_HIGHLIGHT_STYLE: TimelineHighlightStyle = {
   stroke: "rgba(125, 177, 255, 0.85)",
 };
 
-export function eventPaintStyle(kind: string): EventPaintStyle {
+export function eventPaintStyle(kind: TimelineEventKind): EventPaintStyle {
   if (kind === "gap_fixed") return { fill: "rgba(46, 204, 113, 0.25)", stroke: "rgba(67, 238, 143, 0.25)" };
   if (kind === "skipped_large_gap") return { fill: "rgba(245, 158, 11, 0.35)", stroke: "rgba(251, 191, 36, 0.8)" };
   if (kind === "gap") return { fill: "rgba(201, 48, 48, 0.9)", stroke: "rgba(246, 72, 72, 0.9)" };

@@ -4,7 +4,7 @@ import { formatElapsedDhms, formatEstimatedMiss } from "../../client/src/lib/fea
 
 test("formatElapsedDhms includes days and hh:mm:ss", () => {
   assert.equal(formatElapsedDhms(null), "0s");
-  assert.equal(formatElapsedDhms(999), "0s");
+  assert.equal(formatElapsedDhms(999), "999ms");
   assert.equal(formatElapsedDhms(1_000), "1s");
   assert.equal(formatElapsedDhms(3_661_000), "1h 1m 1s");
   assert.equal(formatElapsedDhms(86_415_000), "1d 15s");

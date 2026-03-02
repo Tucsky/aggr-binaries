@@ -7,7 +7,7 @@ import type { Config } from "../../src/core/config.js";
 import { parseTimeframeMs } from "../../src/core/config.js";
 import type { Db } from "../../src/core/db.js";
 import { openDatabase } from "../../src/core/db.js";
-import { GapFixStatus } from "../../src/core/events.js";
+import { GapFixStatus } from "../../src/core/model.js";
 import { createAdapterRegistry, type TradeRecoveryAdapter } from "../../src/core/gaps/adapters/index.js";
 import { runFixGaps } from "../../src/core/gaps/index.js";
 import { classifyPath } from "../../src/core/normalize.js";
@@ -88,10 +88,10 @@ function insertGapEvent(
 ): void {
   db.db
     .prepare(
-      `INSERT INTO events
-        (root_id, relative_path, collector, exchange, symbol, event_type, start_line, end_line, gap_ms, gap_miss, gap_end_ts, gap_fix_status)
+      `INSERT INTO gaps
+        (root_id, relative_path, collector, exchange, symbol, gap_ms, gap_miss, gap_end_ts, gap_fix_status, gap_score)
        VALUES
-        (:rootId, :relativePath, :collector, :exchange, :symbol, 'gap', :startLine, :endLine, :gapMs, 1, :gapEndTs, NULL);`,
+        (:rootId, :relativePath, :collector, :exchange, :symbol, :gapMs, 1, :gapEndTs, NULL, NULL);`,
     )
     .run({
       rootId: payload.rootId,
@@ -99,8 +99,6 @@ function insertGapEvent(
       collector: MARKET.collector,
       exchange: MARKET.exchange,
       symbol: MARKET.symbol,
-      startLine: payload.startLine ?? 9_999,
-      endLine: payload.endLine ?? 9_999,
       gapMs: payload.gapMs,
       gapEndTs: payload.gapEndTs ?? TS1,
     });
@@ -108,7 +106,7 @@ function insertGapEvent(
 
 function readSingleEvent(db: Db): { status: string | null; error: string | null; recovered: number | null } {
   return db.db
-    .prepare("SELECT gap_fix_status AS status, gap_fix_error AS error, gap_fix_recovered AS recovered FROM events LIMIT 1;")
+    .prepare("SELECT gap_fix_status AS status, gap_fix_error AS error, gap_fix_recovered AS recovered FROM gaps LIMIT 1;")
     .get() as { status: string | null; error: string | null; recovered: number | null };
 }
 
@@ -201,7 +199,7 @@ test("fixgaps uses the batch last trade timestamp to resolve merge target file p
     await fs.writeFile(fixture.fullPath, `${TS0} 100 1 1 0\n${tailTs} 102 1 0 0\n`);
     const { rootId } = insertIndexedFile(db, fixture.root, fixture.relativePath);
     await runProcess(buildConfig(fixture.root, fixture.outDir, fixture.dbPath), db);
-    db.db.exec("DELETE FROM events;");
+    db.db.exec("DELETE FROM gaps;");
     insertGapEvent(db, {
       rootId,
       relativePath: fixture.relativePath,
@@ -260,7 +258,7 @@ test("fixgaps consumes adapter streamed batches without relying on a monolithic 
   try {
     const { rootId } = insertIndexedFile(db, fixture.root, fixture.relativePath);
     await runProcess(buildConfig(fixture.root, fixture.outDir, fixture.dbPath), db);
-    db.db.exec("DELETE FROM events;");
+    db.db.exec("DELETE FROM gaps;");
     insertGapEvent(db, {
       rootId,
       relativePath: fixture.relativePath,

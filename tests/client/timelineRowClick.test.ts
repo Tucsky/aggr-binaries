@@ -13,13 +13,11 @@ function makeGapEvent(ts: number, gapMs: number | null): TimelineEvent {
     exchange: "KRAKEN",
     symbol: "XBT-USD",
     relativePath: "PI/KRAKEN/XBT-USD/2022-11-10.gz",
-    eventType: "gap",
     gapFixStatus: null,
     ts,
-    startLine: 1,
-    endLine: 1,
     gapMs,
     gapMiss: null,
+    gapScore: null,
   };
 }
 

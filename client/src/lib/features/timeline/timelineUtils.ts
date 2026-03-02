@@ -19,16 +19,7 @@ export function eventKind(event: TimelineEvent): TimelineEventKind {
   if (event.gapFixStatus === "skipped_large_gap") return "skipped_large_gap";
   if (event.gapFixStatus === "adapter_error") return "adapter_error";
   if (event.gapFixStatus === "missing_adapter") return "missing_adapter";
-  if (event.eventType === "gap") return "gap";
-  if (
-    event.eventType === "parts_short" ||
-    event.eventType === "non_finite" ||
-    event.eventType === "invalid_ts_range" ||
-    event.eventType === "notional_too_large"
-  ) {
-    return "parse_error";
-  }
-  return "unknown";
+  return "gap";
 }
 
 export function clampTs(value: number, minTs: number, maxTs: number): number {

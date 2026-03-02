@@ -7,7 +7,6 @@ import { Readable } from "node:stream";
 import { test } from "node:test";
 import type { Config } from "../../src/core/config.js";
 import { openDatabase, type Db } from "../../src/core/db.js";
-import { EventType } from "../../src/core/events.js";
 import { Collector } from "../../src/core/model.js";
 import {
   createTimelineActionsApiHandler,
@@ -171,34 +170,34 @@ test("timeline action clear deletes row state and outputs before reindexing sele
         ext: ".gz",
       },
     ]);
-    db.insertEvents([
+    db.insertGaps(
       {
         rootId,
         relativePath: "PI/2025/BYBIT/BTCUSDT/1735689600000.csv.gz",
         collector: "PI",
         exchange: "BYBIT",
         symbol: "BTCUSDT",
-        type: EventType.Gap,
-        startLine: 12,
-        endLine: 12,
+      },
+      [{
         gapMs: 90_000,
         gapMiss: 1,
         gapEndTs: 1_735_689_690_000,
-      },
+      }],
+    );
+    db.insertGaps(
       {
         rootId,
         relativePath: "PI/2025/BYBIT/ETHUSDT/1735689600000.csv.gz",
         collector: "PI",
         exchange: "BYBIT",
         symbol: "ETHUSDT",
-        type: EventType.Gap,
-        startLine: 20,
-        endLine: 20,
+      },
+      [{
         gapMs: 90_000,
         gapMiss: 1,
         gapEndTs: 1_735_689_690_000,
-      },
-    ]);
+      }],
+    );
     db.upsertRegistry({
       collector: "PI",
       exchange: "BYBIT",
@@ -220,8 +219,8 @@ test("timeline action clear deletes row state and outputs before reindexing sele
     const deps = buildDeps(root, {
       runIndex: async (config, activeDb) => {
         includePathsSeen = config.includePaths;
-        assert.strictEqual(countRows(activeDb, "files", "BTCUSDT"), 0);
-        assert.strictEqual(countRows(activeDb, "events", "BTCUSDT"), 0);
+        assert.strictEqual(countRows(activeDb, "files", "BTCUSDT"), 1);
+        assert.strictEqual(countRows(activeDb, "gaps", "BTCUSDT"), 0);
         assert.strictEqual(countRows(activeDb, "registry", "BTCUSDT"), 0);
         return {
           seen: 3,
@@ -249,7 +248,7 @@ test("timeline action clear deletes row state and outputs before reindexing sele
     assert.deepStrictEqual(result.details, {
       outputsDeleted: 1,
       eventsDeleted: 1,
-      filesDeleted: 1,
+      filesDeleted: 0,
       registryDeleted: 1,
       seen: 3,
       inserted: 1,
@@ -257,11 +256,11 @@ test("timeline action clear deletes row state and outputs before reindexing sele
       conflicts: 0,
       skipped: 0,
     });
-    assert.strictEqual(countRows(db, "files", "BTCUSDT"), 0);
-    assert.strictEqual(countRows(db, "events", "BTCUSDT"), 0);
+    assert.strictEqual(countRows(db, "files", "BTCUSDT"), 1);
+    assert.strictEqual(countRows(db, "gaps", "BTCUSDT"), 0);
     assert.strictEqual(countRows(db, "registry", "BTCUSDT"), 0);
     assert.strictEqual(countRows(db, "files", "ETHUSDT"), 1);
-    assert.strictEqual(countRows(db, "events", "ETHUSDT"), 1);
+    assert.strictEqual(countRows(db, "gaps", "ETHUSDT"), 1);
     assert.strictEqual(countRows(db, "registry", "ETHUSDT"), 1);
     await assert.rejects(fs.stat(path.join(outDir, "PI", "BYBIT", "BTCUSDT")));
     await assert.doesNotReject(fs.stat(path.join(outDir, "PI", "BYBIT", "ETHUSDT", "1m.bin")));
@@ -427,7 +426,7 @@ function asRecord(value: unknown): Record<string, string> {
   return value as Record<string, string>;
 }
 
-function countRows(db: Db, table: "files" | "events" | "registry", symbol: string): number {
+function countRows(db: Db, table: "files" | "gaps" | "registry", symbol: string): number {
   const row = db.db
     .prepare(`SELECT COUNT(*) as count FROM ${table} WHERE collector = 'PI' AND exchange = 'BYBIT' AND symbol = :symbol;`)
     .get({ symbol }) as { count?: number } | undefined;

@@ -12,6 +12,7 @@
   import { runTimelineMarketAction } from "./timelineApi.js";
   import Dropdown from "../../framework/ui/Dropdown.svelte";
   import {
+    TimelineEvent,
     TimelineMarketAction,
     type TimelineMarket,
   } from "./timelineTypes.js";
@@ -19,7 +20,7 @@
   export let open = false;
   export let anchorEl: HTMLElement | null = null;
   export let market: TimelineMarket | null = null;
-  export let gapEventId: number | null = null;
+  export let gapEvent: TimelineEvent | null = null;
 
   const dispatch = createEventDispatcher<{
     close: void;
@@ -35,8 +36,6 @@
     { label: "Refresh", icon: RefreshCcw, action: TimelineMarketAction.Registry },
     { label: "Clear", icon: Trash2, action: TimelineMarketAction.Clear },
   ];
-  let targetedGapEventId: number | null = null;
-  $: targetedGapEventId = normalizePositiveInt(gapEventId);
   let actionInFlight = false;
 
   function closeMenu(): void {
@@ -57,17 +56,29 @@
 
   async function runAction(
     action: TimelineMarketAction,
-    gapEventId?: number | null,
+    gapEvent?: TimelineEvent | null,
   ): Promise<void> {
     if (!market || actionInFlight) return;
     const target = market;
     const marketLabel = `${target.collector}/${target.exchange}/${target.symbol}`;
-    const normalizedGapEventId = normalizePositiveInt(gapEventId);
     actionInFlight = true;
     closeMenu();
 
+    if (action === TimelineMarketAction.CopyGap) {
+      if (!gapEvent) {
+        addToast("Invalid gap event ID", "error");
+        actionInFlight = false;
+        return;
+      }
+      const gapData = JSON.stringify(gapEvent);
+      await navigator.clipboard.writeText(gapData);
+      addToast(`Copied gap data for gap #${gapEvent.id} to clipboard`, "success");
+      actionInFlight = false;
+      return;
+    }
+
     addToast(
-      `Running ${formatActionLabel(action, normalizedGapEventId)} for ${marketLabel}...`,
+      `Running ${formatActionLabel(action, gapEvent?.id ?? null)} for ${marketLabel}...`,
       "info",
       1600,
     );
@@ -78,11 +89,11 @@
         exchange: target.exchange,
         symbol: target.symbol,
         timeframe: target.timeframe,
-        gapEventId: normalizedGapEventId ?? undefined,
+        gapEventId: gapEvent?.id ?? undefined,
       });
       const durationSeconds = (result.durationMs / 1000).toFixed(1);
       addToast(
-        `${formatActionLabel(action, normalizedGapEventId)} completed for ${marketLabel} (${durationSeconds}s)`,
+        `${formatActionLabel(action, gapEvent?.id ?? null)} completed for ${marketLabel} (${durationSeconds}s)`,
         "success",
         2200,
       );
@@ -91,7 +102,7 @@
       const message =
         err instanceof Error
           ? err.message
-          : `Failed to run ${formatActionLabel(action, normalizedGapEventId)}`;
+          : `Failed to run ${formatActionLabel(action, gapEvent?.id ?? null)}`;
       addToast(message, "error", 3200);
     } finally {
       actionInFlight = false;
@@ -125,19 +136,29 @@
 
 <Dropdown {open} {anchorEl} on:close={closeMenu} margin={8}>
   <div class="w-44 p-1">
-    {#if targetedGapEventId !== null}
+    {#if gapEvent}
       <button
         class="flex w-full items-center gap-2 rounded px-3 py-1.5 text-left text-xs disabled:cursor-not-allowed disabled:text-slate-500 enabled:text-slate-200 enabled:hover:bg-slate-800/80"
         type="button"
         disabled={!market || actionInFlight}
-        on:click={() => void runAction(TimelineMarketAction.FixGaps, targetedGapEventId)}
+        on:click={() => void runAction(TimelineMarketAction.FixGaps, gapEvent)}
       >
         <Wrench
           class={`h-3.5 w-3.5 ${!market || actionInFlight ? "text-slate-600" : "text-slate-400"}`}
           aria-hidden="true"
           strokeWidth={2}
         />
-        <span>Fix gap #{targetedGapEventId}</span>
+        <span>Fix gap #{gapEvent.id}</span>
+      </button>
+      <button
+        class="flex w-full items-center gap-2 rounded px-3 py-1.5 text-left text-xs disabled:cursor-not-allowed disabled:text-slate-500 enabled:text-slate-200 enabled:hover:bg-slate-800/80"
+        type="button"
+        disabled={!market || actionInFlight}
+        on:click={() => void runAction(TimelineMarketAction.CopyGap, gapEvent)}
+      >
+        <Copy class="h-3.5 w-3.5 text-slate-400" aria-hidden="true" strokeWidth={2} />
+
+        <span>Copy gap data</span>
       </button>
     {/if}
     <!--<button

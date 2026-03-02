@@ -21,14 +21,12 @@ export interface TimelineEvent {
   exchange: string;
   symbol: string;
   relativePath: string;
-  eventType: string;
   gapFixStatus: string | null;
   gapFixRecovered: number | null;
   ts: number;
-  startLine: number;
-  endLine: number;
   gapMs: number | null;
   gapMiss: number | null;
+  gapScore: number | null;
 }
 
 export interface TimelineEventFilter {
@@ -167,10 +165,10 @@ export function listTimelineEvents(db: Db, filter: TimelineEventFilter): Timelin
     (db.db
       .prepare(
         `${rowFilterSql.withClause}
-         SELECT e.id, e.collector, e.exchange, e.symbol, e.relative_path, e.event_type, e.gap_fix_status, e.gap_fix_recovered,
+         SELECT e.id, e.collector, e.exchange, e.symbol, e.relative_path, e.gap_fix_status, e.gap_fix_recovered,
                 COALESCE(e.gap_end_ts, f.start_ts) AS ts,
-                e.start_line, e.end_line, e.gap_ms, e.gap_miss
-         FROM events e
+                e.gap_ms, e.gap_miss, e.gap_score
+         FROM gaps e
          ${rowFilterSql.joinClause}
          LEFT JOIN files f ON f.root_id = e.root_id AND f.relative_path = e.relative_path
          WHERE ${where.join(" AND ")}
@@ -182,14 +180,12 @@ export function listTimelineEvents(db: Db, filter: TimelineEventFilter): Timelin
       exchange: string;
       symbol: string;
       relative_path: string;
-      event_type: string;
       gap_fix_status: string | null;
       gap_fix_recovered: number | null;
       ts: number;
-      start_line: number;
-      end_line: number;
       gap_ms: number | null;
       gap_miss: number | null;
+      gap_score: number | null;
     }>) ?? [];
 
   return rows.map((row) => ({
@@ -198,14 +194,12 @@ export function listTimelineEvents(db: Db, filter: TimelineEventFilter): Timelin
     exchange: row.exchange.toUpperCase(),
     symbol: row.symbol,
     relativePath: row.relative_path,
-    eventType: row.event_type,
     gapFixStatus: row.gap_fix_status,
     gapFixRecovered: row.gap_fix_recovered,
     ts: row.ts,
-    startLine: row.start_line,
-    endLine: row.end_line,
     gapMs: row.gap_ms,
     gapMiss: row.gap_miss,
+    gapScore: row.gap_score,
   }));
 }
 

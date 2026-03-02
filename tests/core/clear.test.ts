@@ -5,7 +5,6 @@ import path from "node:path";
 import { test } from "node:test";
 import type { Config } from "../../src/core/config.js";
 import { openDatabase } from "../../src/core/db.js";
-import { EventType } from "../../src/core/events.js";
 import { Collector } from "../../src/core/model.js";
 import { runClear } from "../../src/core/clear.js";
 
@@ -60,34 +59,34 @@ test("runClear removes selected market state then reindexes only that market", a
         ext: ".gz",
       },
     ]);
-    db.insertEvents([
+    db.insertGaps(
       {
         rootId,
         relativePath: "PI/2025/BYBIT/BTCUSDT/2025-01-01-00.gz",
         collector: "PI",
         exchange: "BYBIT",
         symbol: "BTCUSDT",
-        type: EventType.Gap,
-        startLine: 10,
-        endLine: 10,
+      },
+      [{
         gapMs: 90_000,
         gapMiss: 1,
         gapEndTs: 1_735_689_690_000,
-      },
+      }],
+    );
+    db.insertGaps(
       {
         rootId,
         relativePath: "PI/2025/BYBIT/ETHUSDT/2025-01-01-00.gz",
         collector: "PI",
         exchange: "BYBIT",
         symbol: "ETHUSDT",
-        type: EventType.Gap,
-        startLine: 10,
-        endLine: 10,
+      },
+      [{
         gapMs: 90_000,
         gapMiss: 1,
         gapEndTs: 1_735_689_690_000,
-      },
-    ]);
+      }],
+    );
     db.upsertRegistry({
       collector: "PI",
       exchange: "BYBIT",
@@ -109,20 +108,20 @@ test("runClear removes selected market state then reindexes only that market", a
     assert.deepStrictEqual(stats, {
       outputsDeleted: 1,
       eventsDeleted: 1,
-      filesDeleted: 1,
+      filesDeleted: 0,
       registryDeleted: 1,
       seen: 1,
-      inserted: 1,
-      existing: 0,
+      inserted: 0,
+      existing: 1,
       conflicts: 0,
       skipped: 0,
     });
 
     assert.strictEqual(countRows(db, "files", "BTCUSDT"), 1);
-    assert.strictEqual(countRows(db, "events", "BTCUSDT"), 0);
+    assert.strictEqual(countRows(db, "gaps", "BTCUSDT"), 0);
     assert.strictEqual(countRows(db, "registry", "BTCUSDT"), 0);
     assert.strictEqual(countRows(db, "files", "ETHUSDT"), 1);
-    assert.strictEqual(countRows(db, "events", "ETHUSDT"), 1);
+    assert.strictEqual(countRows(db, "gaps", "ETHUSDT"), 1);
     assert.strictEqual(countRows(db, "registry", "ETHUSDT"), 1);
     await assert.rejects(fs.stat(path.join(outDir, "PI", "BYBIT", "BTCUSDT")));
     await assert.doesNotReject(fs.stat(path.join(outDir, "PI", "BYBIT", "ETHUSDT", "1m.bin")));
@@ -132,7 +131,7 @@ test("runClear removes selected market state then reindexes only that market", a
   }
 });
 
-function countRows(db: ReturnType<typeof openDatabase>, table: "files" | "events" | "registry", symbol: string): number {
+function countRows(db: ReturnType<typeof openDatabase>, table: "files" | "gaps" | "registry", symbol: string): number {
   const row = db.db
     .prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE collector = 'PI' AND exchange = 'BYBIT' AND symbol = :symbol;`)
     .get({ symbol }) as { count?: number } | undefined;

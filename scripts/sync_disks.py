@@ -5,30 +5,45 @@ import subprocess
 import platform
 from pathlib import Path
 import sys
+from datetime import datetime
+
 
 # surgical transfer of a whole serie from disk A to disk B
 #
-# usage on windows:
-# ```
-# python sync_aggr.py ^
-#   --src-root D:\AGGR ^
-#   --dst-root F:\AGGR ^
-#   --collector RAM ^
-#   --exchange BITMEX ^
-#   --market XBTUSD
-# ```
-#
-# usage on mac:
-# ```
-# python sync_aggr.py \
-#   --src-root /Volumes/AGGR/input \
-#   --dst-root /Users/me/Documents/aggr-data \
-#   --collector RAM \
-#   --exchange BITMEX \
-#   --market XBTUSD
-# ```
+# supports optional --start YYYY-MM-DD --end YYYY-MM-DD
+# filters files based on filename date prefix
 
-def sync_folder(src: Path, dst: Path):
+
+def file_in_range(file: Path, start, end):
+
+    name = file.name.replace(".gz", "")
+
+    try:
+
+        parts = name.split("-")
+
+        year = int(parts[0])
+        month = int(parts[1])
+        day = int(parts[2])
+
+        hour = int(parts[3]) if len(parts) >= 4 else 0
+
+        dt = datetime(year, month, day, hour)
+
+    except Exception:
+
+        return False
+
+    if start and dt < start:
+        return False
+
+    if end and dt >= end:
+        return False
+
+    return True
+
+
+def sync_folder(src: Path, dst: Path, start, end):
 
     print(f"SRC: {src}")
     print(f"DST: {dst}")
@@ -37,51 +52,66 @@ def sync_folder(src: Path, dst: Path):
         print("Source does not exist, skipping.")
         return
 
-    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.mkdir(parents=True, exist_ok=True)
+
+    files = [
+        f for f in sorted(src.iterdir())
+        if f.is_file() and file_in_range(f, start, end)
+    ]
+
+    print(f"Files selected: {len(files)}")
+
+    if not files:
+        print("Nothing to transfer.")
+        return
 
     if platform.system() == "Windows":
 
-        cmd = [
-            "robocopy",
-            str(src),
-            str(dst),
-            "/MIR",
-            "/MT:32",
-            "/J",
-            "/R:2",
-            "/W:2",
-            "/FFT",
-            "/COPY:DAT",
-            "/NP"
-        ]
+        for f in files:
 
-        result = subprocess.run(cmd)
+            cmd = [
+                "robocopy",
+                str(src),
+                str(dst),
+                f.name,
+                "/MT:32",
+                "/J",
+                "/R:2",
+                "/W:2",
+                "/FFT",
+                "/COPY:DAT",
+                "/NP"
+            ]
 
-        if result.returncode >= 8:
-            print(f"Robocopy failed with code {result.returncode}")
-            sys.exit(result.returncode)
+            result = subprocess.run(cmd)
+
+            if result.returncode >= 8:
+                print(f"Robocopy failed with code {result.returncode}")
+                sys.exit(result.returncode)
 
     else:
 
-        cmd = [
-            "rsync",
-            "-a",
-            "--delete",
-            "--info=progress2",
-            str(src) + "/",
-            str(dst)
-        ]
+        for f in files:
 
-        subprocess.run(cmd, check=True)
+            cmd = [
+                "rsync",
+                "-a",
+                "--progress",
+                str(f),
+                str(dst)
+            ]
+
+            subprocess.run(cmd, check=True)
 
     print("Done.")
 
 
-def refresh(root_src: Path, root_dst: Path, collector: str, exchange: str, market: str):
+def refresh(root_src, root_dst, collector, exchange, market, start, end):
 
     collector_src = root_src / collector
 
     if not collector_src.exists():
+
         print("Collector not found in source.")
         sys.exit(1)
 
@@ -96,7 +126,7 @@ def refresh(root_src: Path, root_dst: Path, collector: str, exchange: str, marke
             print("\n----------------------------")
             print(f"Year: {year_dir.name}")
 
-            sync_folder(src, dst)
+            sync_folder(src, dst, start, end)
 
 
 def main():
@@ -110,16 +140,25 @@ def main():
     parser.add_argument("--exchange", required=True)
     parser.add_argument("--market", required=True)
 
+    parser.add_argument("--start", help="YYYY-MM-DD")
+    parser.add_argument("--end", help="YYYY-MM-DD")
+
     args = parser.parse_args()
+
+    start = datetime.fromisoformat(args.start) if args.start else None
+    end = datetime.fromisoformat(args.end) if args.end else None
 
     refresh(
         Path(args.src_root),
         Path(args.dst_root),
         args.collector,
         args.exchange,
-        args.market
+        args.market,
+        start,
+        end
     )
 
 
 if __name__ == "__main__":
+
     main()

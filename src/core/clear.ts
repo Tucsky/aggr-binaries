@@ -39,6 +39,7 @@ export async function runClear(config: Config, db: Db, deps?: RunClearDeps): Pro
       collector: market.collector,
       exchange: market.exchange,
       symbol: market.symbol,
+      force: true,
       includePaths,
     },
     db,
@@ -137,7 +138,7 @@ function deleteMarketRows(
     symbol: market.symbol,
   };
   const deleteEventsStmt = db.db.prepare(
-    `DELETE FROM events
+    `DELETE FROM gaps
      WHERE collector = :collector AND exchange = :exchange AND symbol = :symbol;`,
   );
   const deleteFilesStmt = db.db.prepare(
@@ -151,9 +152,9 @@ function deleteMarketRows(
 
   return runSqliteWriteTransaction(db.db, () => {
     const eventsDeleted = Number(deleteEventsStmt.run(params).changes ?? 0);
-    const filesDeleted = Number(deleteFilesStmt.run(params).changes ?? 0);
+    // const filesDeleted = Number(deleteFilesStmt.run(params).changes ?? 0);
     const registryDeleted = Number(deleteRegistryStmt.run(params).changes ?? 0);
-    return { eventsDeleted, filesDeleted, registryDeleted };
+    return { eventsDeleted, filesDeleted: 0, registryDeleted };
   });
 }
 

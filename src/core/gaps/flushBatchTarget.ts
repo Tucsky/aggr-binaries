@@ -7,7 +7,7 @@ import type { GapFixEventRow } from "./queue.js";
 import type { DirtyMarketRange } from "./rollup.js";
 
 const DAY_MS = 86_400_000;
-const HOUR_MS = 3_600_000;
+const FOUR_HOUR_MS = 3_600_000 * 4;
 
 interface FilePathTemplate {
   dir: string;
@@ -98,7 +98,7 @@ function parseFilePathTemplate(referenceRelativePath: string): FilePathTemplate 
     return {
       dir: path.posix.dirname(referenceRelativePath),
       ext,
-      slotMs: HOUR_MS,
+      slotMs: FOUR_HOUR_MS, // if hour is included, we assume 4h slots
       includeHour: true,
     };
   }

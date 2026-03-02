@@ -15,7 +15,8 @@ Required flags:
 
 ## Behavior
 - delete `{outDir}/{collector}/{exchange}/{symbol}` if present
-- delete matching market rows from `events`, `files`, and `registry`
+- delete matching market rows from `gaps` and `registry`
+- keep `files` rows intact (clear does not currently delete indexed file inventory)
 - resolve include paths for only the target market under `root`
 - run `index` with those scoped include paths
 
@@ -35,7 +36,7 @@ flowchart TD
   D -->|no ENOENT| F[outputsDeleted = 0]
   E --> G["Delete market DB rows in one transaction<br/>fn: deleteMarketRows / runSqliteWriteTransaction"]
   F --> G
-  G --> H[DELETE events files registry for market]
+  G --> H[DELETE gaps registry for market keep files]
   H --> I["Resolve include paths for target market<br/>fn: resolveIndexIncludePaths"]
   I --> J{collector root exists?}
   J -->|yes| K[baseRoot = root/collector]

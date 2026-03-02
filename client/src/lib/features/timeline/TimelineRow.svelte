@@ -61,7 +61,7 @@
 
   interface ContextActionsDetail {
     market: TimelineMarket;
-    gapEventId: number | null;
+    gapEvent: TimelineEvent | null;
     clientX: number;
     clientY: number;
     insideSource: boolean;
@@ -248,7 +248,7 @@
       return;
     }
 
-    const thinWidth = Math.max(0.3, Math.min(1, pixelWidth));
+    const thinWidth = Math.max(0.5, Math.min(1, pixelWidth));
     const centerX = Math.min(
       width - thinWidth / 2,
       Math.max(thinWidth / 2, (left + right) / 2),
@@ -405,10 +405,10 @@
     const y = clampTs(event.clientY - rect.top, 0, normalizedRowHeight);
     const insideSource = hasSourceAtPoint(x, y);
     const marker = findMarkerAtPoint(x, y);
-    const gapEventId = resolveGapEventId(marker);
+    const gapEvent = resolveGapEvent(marker);
     dispatch("contextActions", {
       market,
-      gapEventId: insideSource ? gapEventId : null,
+      gapEvent: insideSource ? gapEvent : null,
       clientX: event.clientX,
       clientY: event.clientY,
       insideSource,
@@ -424,16 +424,8 @@
     };
   }
 
-  function resolveGapEventId(marker: MarkerHit | null): number | null {
-    if (!marker || eventKind(marker.event) !== "gap") return null;
-    return normalizePositiveInt(marker.event.id);
-  }
-
-  function normalizePositiveInt(value: number): number | null {
-    if (!Number.isFinite(value)) return null;
-    const normalized = Math.floor(value);
-    if (normalized <= 0 || normalized !== value) return null;
-    return normalized;
+  function resolveGapEvent(marker: MarkerHit | null): TimelineEvent | null {
+    return marker?.event || null
   }
 </script>
 

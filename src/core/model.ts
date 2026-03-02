@@ -1,3 +1,5 @@
+import { Gap, GapTrackerState } from "./gapTracker.js";
+
 export enum Collector {
   RAM = "RAM",
   PI = "PI",
@@ -85,10 +87,7 @@ export interface CompanionMetadata {
   volumeScale: number;
   records: number;
   lastInputStartTs?: number;
-  gapAvgMs?: number;
-  gapSamples?: number;
-  lastTradeTs?: number;
-  gapSameTsCount?: number;
+  gapTracker?: GapTrackerState;
 }
 
 /**
@@ -142,4 +141,27 @@ export interface RegistryFilter {
   exchange?: string;
   symbol?: string;
   timeframe?: string;
+}
+
+
+export enum GapFixStatus {
+  MissingAdapter = "missing_adapter",
+  AdapterError = "adapter_error",
+  Fixed = "fixed",
+  SkippedLargeGap = "skipped_large_gap",
+}
+
+export interface GapCtx {
+  rootId: number;
+  relativePath: string;
+  collector: string;
+  exchange: string;
+  symbol: string;
+}
+
+export interface GapRecord extends GapCtx, Gap {
+  gapFixStatus?: GapFixStatus;
+  gapFixError?: string;
+  gapFixRecovered?: boolean;
+  gapFixUpdatedAt?: number;
 }

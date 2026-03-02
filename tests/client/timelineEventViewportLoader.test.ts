@@ -9,7 +9,7 @@ import {
   selectTimelineViewportEventRows,
   writeTimelineViewportEventCache,
 } from "../../client/src/lib/features/timeline/timelineEventViewportLoader.js";
-import type { TimelineMarket } from "../../client/src/lib/features/timeline/timelineTypes.js";
+import type { TimelineEvent, TimelineMarket } from "../../client/src/lib/features/timeline/timelineTypes.js";
 
 test("selectTimelineViewportEventRows applies row overscan and max row cap deterministically", () => {
   const markets: TimelineMarket[] = [
@@ -73,6 +73,22 @@ test("resolveTimelineViewportEventRequest skips fetch when loaded window covers 
   assert.deepStrictEqual(uncovered?.requestRange, { startTs: 240, endTs: 400 });
 });
 
+function makeEvent(id: number, symbol: string, ts: number): TimelineEvent {
+  return {
+    id,
+    collector: "PI",
+    exchange: "BYBIT",
+    symbol,
+    relativePath: "x",
+    gapFixStatus: null,
+    gapFixRecovered: null,
+    ts,
+    gapMs: 1,
+    gapMiss: 1,
+    gapScore: 1,
+  };
+}
+
 test("timeline viewport row cache reuses covered rows and computes missing rows", () => {
   const cache = createTimelineViewportEventCacheState();
   const scopeKey = "1m|PI|BYBIT||100|400";
@@ -81,36 +97,8 @@ test("timeline viewport row cache reuses covered rows and computes missing rows"
     requestRange: { startTs: 140, endTs: 260 },
     rowKeys: ["PI:BYBIT:BTCUSDT"],
     events: [
-      {
-        id: 1,
-        collector: "PI",
-        exchange: "BYBIT",
-        symbol: "BTCUSDT",
-        relativePath: "x",
-        eventType: "gap",
-        gapFixStatus: null,
-        gapFixRecovered: null,
-        ts: 160,
-        startLine: 1,
-        endLine: 1,
-        gapMs: 1,
-        gapMiss: 1,
-      },
-      {
-        id: 2,
-        collector: "PI",
-        exchange: "BYBIT",
-        symbol: "BTCUSDT",
-        relativePath: "x",
-        eventType: "gap",
-        gapFixStatus: null,
-        gapFixRecovered: null,
-        ts: 220,
-        startLine: 1,
-        endLine: 1,
-        gapMs: 1,
-        gapMiss: 1,
-      },
+      makeEvent(1, "BTCUSDT", 160),
+      makeEvent(2, "BTCUSDT", 220),
     ],
   });
   const selection = {
@@ -130,21 +118,7 @@ test("timeline viewport row cache reuses covered rows and computes missing rows"
 test("timeline viewport row cache evicts least-recently-used rows", () => {
   const cache = createTimelineViewportEventCacheState();
   const range = { startTs: 100, endTs: 200 };
-  const singleEvent = (id: number, symbol: string) => ({
-    id,
-    collector: "PI",
-    exchange: "BYBIT",
-    symbol,
-    relativePath: "x",
-    eventType: "gap",
-    gapFixStatus: null,
-    gapFixRecovered: null,
-    ts: 150,
-    startLine: 1,
-    endLine: 1,
-    gapMs: 1,
-    gapMiss: 1,
-  });
+  const singleEvent = (id: number, symbol: string) => makeEvent(id, symbol, 150);
   writeTimelineViewportEventCache(cache, 2, 1000, {
     scopeKey: "scope",
     requestRange: range,
@@ -174,21 +148,7 @@ test("timeline viewport row cache evicts least-recently-used rows", () => {
 
 test("timeline viewport row cache merges overlapping row segments", () => {
   const cache = createTimelineViewportEventCacheState();
-  const event = (id: number, ts: number) => ({
-    id,
-    collector: "PI",
-    exchange: "BYBIT",
-    symbol: "BTCUSDT",
-    relativePath: "x",
-    eventType: "gap",
-    gapFixStatus: null,
-    gapFixRecovered: null,
-    ts,
-    startLine: 1,
-    endLine: 1,
-    gapMs: 1,
-    gapMiss: 1,
-  });
+  const event = (id: number, ts: number) => makeEvent(id, "BTCUSDT", ts);
   writeTimelineViewportEventCache(cache, 2, 1000, {
     scopeKey: "scope",
     requestRange: { startTs: 100, endTs: 220 },
@@ -211,21 +171,7 @@ test("timeline viewport row cache merges overlapping row segments", () => {
 
 test("timeline viewport cache evicts segments farthest from active range first", () => {
   const cache = createTimelineViewportEventCacheState();
-  const event = (id: number, symbol: string, ts: number) => ({
-    id,
-    collector: "PI",
-    exchange: "BYBIT",
-    symbol,
-    relativePath: "x",
-    eventType: "gap",
-    gapFixStatus: null,
-    gapFixRecovered: null,
-    ts,
-    startLine: 1,
-    endLine: 1,
-    gapMs: 1,
-    gapMiss: 1,
-  });
+  const event = (id: number, symbol: string, ts: number) => makeEvent(id, symbol, ts);
   writeTimelineViewportEventCache(
     cache,
     4,
