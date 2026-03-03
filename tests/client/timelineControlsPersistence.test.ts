@@ -3,8 +3,10 @@ import { test } from "node:test";
 import {
   mergeSharedControlsIntoPrefs,
   persistTimelineLocalState,
+  persistTimelineLocalViewRange,
   readSharedControlsFromPrefs,
   restoreTimelineLocalState,
+  restoreTimelineLocalViewRange,
 } from "../../client/src/lib/features/timeline/timelineControlsPersistence.js";
 import type { Prefs } from "../../client/src/lib/features/viewer/types.js";
 
@@ -118,4 +120,24 @@ test("restoreTimelineLocalState leaves titleWidth null when absent", () => {
   });
   const restored = restoreTimelineLocalState(storage);
   assert.strictEqual(restored.titleWidth, null);
+});
+
+test("persistTimelineLocalViewRange updates only range fields", () => {
+  const storage = createMemoryStorage({
+    "aggr.timeline.state.v1": JSON.stringify({
+      symbolFilter: "btc",
+      viewStartTs: 10,
+      viewEndTs: 20,
+      titleWidth: 333,
+    }),
+  });
+  persistTimelineLocalViewRange(storage, {
+    viewStartTs: 101,
+    viewEndTs: 202,
+  });
+  const restoredState = restoreTimelineLocalState(storage);
+  const restoredRange = restoreTimelineLocalViewRange(storage);
+  assert.strictEqual(restoredState.symbolFilter, "btc");
+  assert.strictEqual(restoredState.titleWidth, 333);
+  assert.deepStrictEqual(restoredRange, { viewStartTs: 101, viewEndTs: 202 });
 });

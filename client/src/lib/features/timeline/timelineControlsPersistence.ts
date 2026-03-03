@@ -15,6 +15,11 @@ export interface TimelineLocalState {
   titleWidth: number | null;
 }
 
+export interface TimelineLocalViewRange {
+  viewStartTs: number | null;
+  viewEndTs: number | null;
+}
+
 export interface RestoredTimelineState extends TimelineLocalState {
   legacySharedControls: Partial<TimelineSharedControls> | null;
 }
@@ -87,4 +92,22 @@ export function persistTimelineLocalState(storage: Storage, state: TimelineLocal
   } catch {
     // ignore storage failures
   }
+}
+
+export function restoreTimelineLocalViewRange(storage: Storage): TimelineLocalViewRange {
+  const restored = restoreTimelineLocalState(storage);
+  return {
+    viewStartTs: restored.viewStartTs,
+    viewEndTs: restored.viewEndTs,
+  };
+}
+
+export function persistTimelineLocalViewRange(storage: Storage, range: TimelineLocalViewRange): void {
+  const restored = restoreTimelineLocalState(storage);
+  persistTimelineLocalState(storage, {
+    symbolFilter: restored.symbolFilter,
+    titleWidth: restored.titleWidth,
+    viewStartTs: range.viewStartTs,
+    viewEndTs: range.viewEndTs,
+  });
 }

@@ -9,10 +9,15 @@
     fetchTimelineMarkets,
     TIMELINE_SYMBOL_MODE,
   } from "./timelineApi.js";
+  import { restorePersistedViewRange } from "./timelinePageHelpers.js";
   import {
     MIN_TIMELINE_VIEWPORT_WIDTH,
     TIMELINE_ROW_HEIGHT,
   } from "./timelineLayout.js";
+  import {
+    persistTimelineLocalViewRange,
+    restoreTimelineLocalViewRange,
+  } from "./timelineControlsPersistence.js";
   import {
     buildTimelineFullViewRange,
     panTimelineRange,
@@ -61,6 +66,14 @@
   let eventsAbort: AbortController | null = null;
   let activeRequestId = 0;
   let lastLoadKey = "";
+  let persistedViewStartTs: number | null = null;
+  let persistedViewEndTs: number | null = null;
+
+  if (typeof window !== "undefined") {
+    const restored = restoreTimelineLocalViewRange(window.localStorage);
+    persistedViewStartTs = restored.viewStartTs;
+    persistedViewEndTs = restored.viewEndTs;
+  }
 
   $: normalizedCollector = collector.trim().toUpperCase();
   $: normalizedExchange = exchange.trim().toUpperCase();
@@ -91,6 +104,7 @@
   });
 
   onDestroy(() => {
+    persistSharedViewRange();
     resizeObserver?.disconnect();
     eventsAbort?.abort();
   });
@@ -128,10 +142,15 @@
       }
 
       market = nextMarket;
-      viewRange = viewRange || buildTimelineFullViewRange(
-        { startTs: nextMarket.startTs, endTs: nextMarket.endTs },
-        PAN_OVERSCROLL_RATIO,
-      );
+      const nextSelectedRange = { startTs: nextMarket.startTs, endTs: nextMarket.endTs };
+      viewRange =
+        restorePersistedViewRange(
+          nextSelectedRange,
+          persistedViewStartTs,
+          persistedViewEndTs,
+          PAN_OVERSCROLL_RATIO,
+        ) ?? buildTimelineFullViewRange(nextSelectedRange, PAN_OVERSCROLL_RATIO);
+      persistSharedViewRange();
       events = await fetchTimelineEvents(
         {
           collector: nextMarket.collector,
@@ -274,6 +293,7 @@
       undefined,
       PAN_OVERSCROLL_RATIO,
     );
+    persistSharedViewRange();
   }
 
   function handlePan(event: CustomEvent<{ deltaMs: number }>): void {
@@ -285,6 +305,7 @@
       event.detail.deltaMs,
       PAN_OVERSCROLL_RATIO,
     );
+    persistSharedViewRange();
   }
 
   function updateTimelineWidth(): void {
@@ -293,6 +314,14 @@
       MIN_TIMELINE_VIEWPORT_WIDTH,
       Math.floor(hostEl.clientWidth),
     );
+  }
+
+  function persistSharedViewRange(): void {
+    if (typeof window === "undefined" || !viewRange) return;
+    const range = { viewStartTs: viewRange.startTs, viewEndTs: viewRange.endTs };
+    persistedViewStartTs = range.viewStartTs;
+    persistedViewEndTs = range.viewEndTs;
+    persistTimelineLocalViewRange(window.localStorage, range);
   }
 </script>
 
