@@ -163,7 +163,7 @@
     style={`opacity: ${visible ? 1 : 0}; transform: translate3d(${renderedLeft}px, ${renderedTop}px, 0);`}
   >
     <div class="flex items-center justify-between gap-3 text-[10px] uppercase tracking-[0.08em] text-slate-400">
-      <span>Gap</span>
+      <span>Gap#{renderData.event.id}</span>
       <span>{renderData.market.collector}:{renderData.market.exchange}</span>
     </div>
     <div class="mt-1 text-xs text-slate-200">
@@ -173,17 +173,17 @@
       <span class="text-slate-500">Start time</span>
       <span class="text-slate-200">{gapStartTs === null ? "n/a" : formatTimelineTsLabel(gapStartTs)}</span>
       <span class="text-slate-500">Elapsed</span>
-      <span class="text-slate-200">{formatElapsedDhms(renderData.event.gapMs)} ({renderData.event.gapMs}ms)</span>
+      <span class="text-slate-200">{formatElapsedDhms(renderData.event.gapMs)}</span>
       <span class="text-slate-500">Miss</span>
-      <span class="text-slate-200">{formatEstimatedMiss(renderData.event.gapMiss)} ({renderData.event.gapMiss})</span>
+      <span class="text-slate-200">{formatEstimatedMiss(renderData.event.gapMiss)}</span>
       <span class="text-slate-500">Score</span>
-      <span class="text-slate-200">{renderData.event.gapScore}</span>
-      <span class="text-slate-500">Ratio</span>
-      <span class="text-slate-200">{((renderData.event.gapMiss || 0) / (renderData.event.gapMs || 1) * 100).toFixed(2)}</span>
-      <span class="text-slate-500">Status</span>
-      <span class="text-slate-200">{formatGapFixStatus(renderData.event.gapFixStatus)}</span>
-      <span class="text-slate-500">Recovered</span>
-      <span class="text-slate-200">{formatRecoveredCount(renderData.event.gapFixRecovered)}</span>
+      <span class="text-slate-200">{renderData.event.gapScore?.toFixed(2)}</span>
+      {#if renderData.event.gapFixStatus}
+        <span class="text-slate-500">Status</span>
+        <span class="text-slate-200">{formatGapFixStatus(renderData.event.gapFixStatus)}</span>
+        <span class="text-slate-500">Recovered</span>
+        <span class="text-slate-200">{formatRecoveredCount(renderData.event.gapFixRecovered)}</span>
+      {/if}
     </div>
   </div>
 {/if}

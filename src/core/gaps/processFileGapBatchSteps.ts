@@ -260,7 +260,7 @@ export async function mergeAndPatchRecoveredTrades(
     }
 
     setFixgapsProgress(
-      `[fixgaps] patching ${fileLabel} ${config.timeframe} (${mergeResult.inserted} inserted / ${recovered.length} recovered) ...`,
+      `[fixgaps] patching ${fileLabel} ${config.timeframe} (${mergeResult.inserted} inserted) ...`,
     );
     const patchResult = await patchBinariesForRecoveredTrades(
       config,

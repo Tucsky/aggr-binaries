@@ -303,9 +303,6 @@ async function processByMarket(opts: {
     let lastFlushAt = Date.now();
 
     for (const file of files) {
-      /*console.log(
-        `[${acc.collector}/${acc.exchange}/${acc.symbol}/${timeframe}] stream file=${file.relative_path} start_ts=${file.start_ts} skipBefore=${resumeSlot}`,
-      );*/
       const { linesRead, tradesKept, newBuckets, gaps } = await streamFile({
         file,
         acc,

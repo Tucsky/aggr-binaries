@@ -25,7 +25,7 @@ export interface FlushTargetFile {
  * Resolve the merge target file for a recovered flush batch from chunk timestamps + persisted gap boundaries.
  * Rules:
  * 1) default -> gap end file
- * 2) close to gap start (<= 1 day) -> gap start file
+ * 2) starts close to gap start (<= 1 day) -> gap start file
  * 3) far from both sides (>= 1 day from start and end) -> deterministic intermediate file inferred from boundary filenames
  */
 export function resolveFlushTargetFile(
@@ -36,7 +36,9 @@ export function resolveFlushTargetFile(
   const endTarget = toFlushTarget(row.root_path, row.end_relative_path);
   if (!Number.isFinite(firstTradeTs) || !Number.isFinite(lastTradeTs)) return endTarget;
 
-  if (lastTradeTs <= row.start_ts + DAY_MS) {
+  // Use the first trade in the batch so wide chunks that begin at the gap start
+  // do not get routed to later files and break chronological replay ordering.
+  if (firstTradeTs <= row.start_ts + DAY_MS) {
     return toFlushTarget(row.root_path, row.start_relative_path);
   }
 

@@ -28,7 +28,7 @@ Queue source:
 - Recovered trades are merged in deterministic flush batches of `1,000,000` trades.
 - Each flush batch target path is resolved from persisted gap boundary fields and chunk timestamps:
   - default: write to `end_relative_path`
-  - if `lastTs <= start_ts + 1 day`: write to `start_relative_path`
+  - if `firstTs <= start_ts + 1 day`: write to `start_relative_path`
   - if `firstTs >= start_ts + 1 day` and `lastTs <= end_ts - 1 day`: write to an intermediate file inferred from boundary filename format (`YYYY-MM-DD-HH(.gz)` => 4h slots, otherwise daily).
 - If a target file path does not exist, fixgaps creates it and indexes it before merge/patch.
 - Fixgaps always provides an adapter batch callback; adapters can emit recovered batches through it, and any returned tail array is ingested through the same accumulator path.

@@ -56,7 +56,7 @@
   let actionsAnchorEl: HTMLElement | null = null;
   let actionsContextAnchorEl: HTMLDivElement | null = null;
   let actionsContextPoint: { x: number; y: number } | null = null;
-  let actionsGapEventId: number | null = null;
+  let actionsGapEvent: TimelineEvent | null = null;
 
   let eventsAbort: AbortController | null = null;
   let activeRequestId = 0;
@@ -214,7 +214,7 @@
   function handleRowContextActions(
     event: CustomEvent<{
       market: TimelineMarket;
-      gapEventId: number | null;
+      gapEvent: TimelineEvent | null;
       clientX: number;
       clientY: number;
       insideSource: boolean;
@@ -226,7 +226,7 @@
     }
     actionsAnchorEl = null;
     actionsContextPoint = { x: event.detail.clientX, y: event.detail.clientY };
-    actionsGapEventId = event.detail.gapEventId;
+    actionsGapEvent = event.detail.gapEvent;
     market = event.detail.market;
     actionsOpen = true;
   }
@@ -235,7 +235,7 @@
     actionsOpen = false;
     actionsAnchorEl = null;
     actionsContextPoint = null;
-    actionsGapEventId = null;
+    actionsGapEvent = null;
   }
 
   function openMarketFromMenu(event: CustomEvent<TimelineMarket>): void {
@@ -344,7 +344,7 @@
     open={actionsOpen}
     anchorEl={resolvedActionsAnchorEl}
     market={market}
-    gapEventId={actionsGapEventId}
+    gapEvent={actionsGapEvent}
     on:close={closeActionsMenu}
     on:openMarket={openMarketFromMenu}
     on:copyMarket={copyMarketFromMenu}
