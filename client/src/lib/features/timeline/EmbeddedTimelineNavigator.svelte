@@ -20,6 +20,7 @@
   } from "./timelineControlsPersistence.js";
   import {
     buildTimelineFullViewRange,
+    formatTimelineTsLabel,
     panTimelineRange,
     zoomTimelineRange,
   } from "./timelineViewport.js";
@@ -28,13 +29,14 @@
     TimelineHoverEvent,
     TimelineMarket,
   } from "./timelineTypes.js";
-  import type { TimelineRange } from "./timelineUtils.js";
+  import { toTimelineX, type TimelineRange } from "./timelineUtils.js";
 
   interface JumpDetail {
     market: TimelineMarket;
     ts: number;
   }
 
+  // Kept in one component: embedded row interactions, context actions, persisted viewport, and crosshair sync share mutable state.
   const PAN_OVERSCROLL_RATIO = 0.01;
 
   export let collector = "";
@@ -42,9 +44,12 @@
   export let symbol = "";
   export let timeframe = "1m";
   export let chartVisibleRange: TimelineRange | null = null;
+  export let externalCrosshairTs: number | null = null;
 
   const dispatch = createEventDispatcher<{
     jump: JumpDetail;
+    crosshairChange: number | null;
+    actionCompleted: void;
   }>();
 
   let hostEl: HTMLDivElement | null = null;
@@ -56,6 +61,8 @@
   let market: TimelineMarket | null = null;
   let events: TimelineEvent[] = [];
   let viewRange: TimelineRange | null = null;
+  let hoverCrosshairTs: number | null = null;
+  let hoverCrosshairPx: number | null = null;
   let hoveredEvent: TimelineHoverEvent | null = null;
   let actionsOpen = false;
   let actionsAnchorEl: HTMLElement | null = null;
@@ -85,6 +92,10 @@
       : "";
   $: hasMoreLeft = Boolean(market && viewRange && viewRange.startTs > market.startTs);
   $: hasMoreRight = Boolean(market && viewRange && viewRange.endTs < market.endTs);
+  $: activeCrosshairTs = externalCrosshairTs !== null ? externalCrosshairTs : hoverCrosshairTs;
+  $: activeCrosshairPx = externalCrosshairTs !== null ? null : hoverCrosshairPx;
+  $: crosshairX = resolveCrosshairX(activeCrosshairPx, activeCrosshairTs, viewRange, timelineWidth);
+  $: crosshairLeft = crosshairX;
   $: resolvedActionsAnchorEl = actionsContextPoint
     ? actionsContextAnchorEl
     : actionsAnchorEl;
@@ -124,7 +135,13 @@
         exchange: normalizedExchange,
         symbol: normalizedSymbol,
       });
-      if (!isCurrentRequest(requestId, expectedKey)) return;
+      if (!isCurrentRequest(requestId, expectedKey)) {
+        console.warn("Abandoning timeline load response for outdated request", {
+          requestId,
+          expectedKey,
+        });
+        return;
+      }
 
       const nextMarket = findMarketRow(
         response.markets,
@@ -137,6 +154,9 @@
         market = null;
         events = [];
         viewRange = null;
+        hoverCrosshairTs = null;
+        hoverCrosshairPx = null;
+        dispatch("crosshairChange", null);
         error = "No timeline range for selected market.";
         return;
       }
@@ -162,6 +182,7 @@
         },
         eventsAbort.signal,
       );
+      console.log(`Loaded ${events.length} timeline events for market ${nextMarket.collector}:${nextMarket.exchange}:${nextMarket.symbol}`);
       if (!isCurrentRequest(requestId, expectedKey)) return;
     } catch (err) {
       if ((err as { name?: string }).name === "AbortError") return;
@@ -170,6 +191,9 @@
       market = null;
       events = [];
       viewRange = null;
+      hoverCrosshairTs = null;
+      hoverCrosshairPx = null;
+      dispatch("crosshairChange", null);
     } finally {
       if (isCurrentRequest(requestId, expectedKey)) loading = false;
     }
@@ -185,6 +209,9 @@
     market = null;
     events = [];
     viewRange = null;
+    hoverCrosshairTs = null;
+    hoverCrosshairPx = null;
+    dispatch("crosshairChange", null);
     hoveredEvent = null;
     closeActionsMenu();
   }
@@ -227,7 +254,10 @@
       hoveredEvent: TimelineHoverEvent | null;
     }>,
   ): void {
+    hoverCrosshairTs = event.detail.ts;
+    hoverCrosshairPx = event.detail.x;
     hoveredEvent = event.detail.hoveredEvent;
+    dispatch("crosshairChange", hoverCrosshairTs);
   }
 
   function handleRowContextActions(
@@ -277,8 +307,14 @@
   }
 
   async function handleActionCompleted(): Promise<void> {
-    if (!lastLoadKey) return;
+    console.log("Action completed, reloading timeline...");
+    if (!lastLoadKey) {
+      console.warn("No load key available, cannot reload timeline.");
+      return;
+    }
     await loadNavigatorData(lastLoadKey);
+
+    dispatch("actionCompleted");
   }
 
   function handleZoom(event: CustomEvent<{ centerTs: number; deltaY: number }>): void {
@@ -323,6 +359,17 @@
     persistedViewEndTs = range.viewEndTs;
     persistTimelineLocalViewRange(window.localStorage, range);
   }
+
+  function resolveCrosshairX(
+    pointerX: number | null,
+    ts: number | null,
+    range: TimelineRange | null,
+    width: number,
+  ): number | null {
+    if (pointerX !== null) return pointerX;
+    if (ts === null || !range) return null;
+    return toTimelineX(ts, range, width);
+  }
 </script>
 
 <section class="border-b border-slate-800 bg-slate-900/70 py-1">
@@ -358,6 +405,12 @@
     {/if}
     {#if hasMoreRight}
       <div class="pointer-events-none absolute inset-y-0 right-0 z-10 w-5 bg-gradient-to-l from-slate-950/90 to-transparent"></div>
+    {/if}
+    {#if crosshairLeft !== null && activeCrosshairTs !== null && viewRange}
+      <div class="pointer-events-none absolute inset-0 z-20">
+        <div class="absolute -bottom-1 top-0 w-px bg-white/35" style={`left:${crosshairLeft}px;`}></div>
+        <div class="absolute bottom-1 top-[105%] h-[1.625rem] -translate-x-1/2 rounded border border-slate-600 bg-slate-900/95 px-2 py-0.5 text-[10px] text-slate-100" style={`left:${crosshairLeft}px;`}>{formatTimelineTsLabel(activeCrosshairTs)}</div>
+      </div>
     {/if}
   </div>
   <TimelineEventPopover hoveredEvent={hoveredEvent} />

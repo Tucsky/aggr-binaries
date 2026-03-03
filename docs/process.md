@@ -25,10 +25,7 @@ Key flags:
 
 ## Per-trade correction rules
 Applied during streaming before accumulation:
-1. Bitfinex liquidations: flip side.
-2. OKEX liquidation bug window: divide size by 500.
-3. Bad non-liquidation side window: deterministic side correction.
-4. Corrupted rows: rejected by parser and summarized in warning logs.
+- Corrupted rows: rejected by parser and summarized in warning logs.
 
 ## Output files
 For each `(collector, exchange, symbol, timeframe)`:

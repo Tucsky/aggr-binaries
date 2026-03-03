@@ -30,6 +30,7 @@
     formatPriceLegend,
     formatVolumeLegend,
   } from "../../../../../src/shared/chartLegend.js";
+  import { resolveChartCrosshairTarget } from "./candleChartCrosshair.js";
   import type { Candle, Meta } from "./types.js";
   import { meta as metaStore, status as statusStore } from "./viewerStore.js";
   import { onCandles, requestSlice } from "./viewerWs.js";
@@ -42,7 +43,19 @@
 
   const dispatch = createEventDispatcher<{
     visibleRangeChange: VisibleRange | null;
+    crosshairChange: number | null;
   }>();
+
+  interface ChartCrosshairApi {
+    setCrosshairPosition?: (
+      price: number,
+      time: Time,
+      series: ISeriesApi<"Candlestick">,
+    ) => void;
+    clearCrosshairPosition?: () => void;
+  }
+
+  export let externalCrosshairTs: number | null = null;
 
   let chartEl: HTMLDivElement;
   let chart: IChartApi | null = null;
@@ -66,6 +79,8 @@
   let currentMeta: Meta | null = null;
   let alignInitialRangeToAnchor = false;
   let emittedVisibleRange: VisibleRange | null = null;
+  let emittedCrosshairTs: number | null = null;
+  let lastAppliedExternalCrosshairTs: number | null | undefined = undefined;
 
   let unsubCandles: (() => void) | null = null;
   let unsubMeta: (() => void) | null = null;
@@ -77,6 +92,14 @@
     liq: "",
     volume: "",
   };
+
+  $: if (externalCrosshairTs !== lastAppliedExternalCrosshairTs) {
+    lastAppliedExternalCrosshairTs = externalCrosshairTs;
+    syncExternalCrosshair(externalCrosshairTs);
+  }
+  $: if (chart && priceSeries && externalCrosshairTs !== null) {
+    syncExternalCrosshair(externalCrosshairTs);
+  }
 
   onMount(() => {
     setupChart();
@@ -117,6 +140,7 @@
     resizeObserver?.disconnect();
     chart?.unsubscribeCrosshairMove(handleCrosshairMove);
     chart?.timeScale().unsubscribeVisibleTimeRangeChange(handleVisibleRangeChange);
+    emitCrosshairChange(null);
     emitVisibleRangeChange(null);
     chart?.remove();
   });
@@ -226,6 +250,7 @@
     longLiqSeries?.setData([]);
     shortLiqSeries?.setData([]);
     resetLegendValues();
+    emitCrosshairChange(null);
     emitVisibleRangeChange(null);
   }
 
@@ -367,6 +392,7 @@
 
   function handleCrosshairMove(param: MouseEventParams<Time>): void {
     hoverTimeMs = toTimeMs(param.time);
+    emitCrosshairChange(hoverTimeMs);
     refreshLegendFromCurrentPoint();
   }
 
@@ -456,6 +482,34 @@
     if (a === b) return true;
     if (!a || !b) return false;
     return a.startTs === b.startTs && a.endTs === b.endTs;
+  }
+
+  function emitCrosshairChange(next: number | null): void {
+    if (emittedCrosshairTs === next) return;
+    emittedCrosshairTs = next;
+    dispatch("crosshairChange", next);
+  }
+
+  function syncExternalCrosshair(nextTs: number | null): void {
+    const chartApi = chart as (IChartApi & ChartCrosshairApi) | null;
+    if (!chartApi || !priceSeries) return;
+    if (nextTs === null) {
+      chartApi.clearCrosshairPosition?.();
+      return;
+    }
+    const target = resolveChartCrosshairTarget(points, nextTs);
+    if (!target) {
+      chartApi.clearCrosshairPosition?.();
+      return;
+    }
+    hoverTimeMs = target.snappedTs;
+
+    refreshLegendFromCurrentPoint();
+    chartApi.setCrosshairPosition?.(
+      target.price,
+      target.timeSec as Time,
+      priceSeries,
+    );
   }
 
   function toVisibleTimeMs(value: Time): number | null {

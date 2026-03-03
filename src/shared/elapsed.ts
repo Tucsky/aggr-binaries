@@ -11,6 +11,6 @@ export function formatElapsedDhms(ms: number | null): string {
   if (hours > 0) parts.push(`${hours}h`);
   if (minutes > 0) parts.push(`${minutes}m`);
   if (seconds > 0) parts.push(`${seconds}s`);
-  else if (!parts.length) parts.push(`${ms}ms`);
+  else if (!parts.length) parts.push(`${ms.toFixed(0)}ms`);
   return parts.join(" ");
 }

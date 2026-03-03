@@ -172,9 +172,9 @@
     <div class="mt-2 grid grid-cols-[72px_1fr] gap-x-2 gap-y-1 text-[11px] leading-tight">
       <span class="text-slate-500">Start time</span>
       <span class="text-slate-200">{gapStartTs === null ? "n/a" : formatTimelineTsLabel(gapStartTs)}</span>
-      <span class="text-slate-500">Elapsed</span>
+      <span class="text-slate-500">Duration</span>
       <span class="text-slate-200">{formatElapsedDhms(renderData.event.gapMs)}</span>
-      <span class="text-slate-500">Miss</span>
+      <span class="text-slate-500">Miss est.</span>
       <span class="text-slate-200">{formatEstimatedMiss(renderData.event.gapMiss)}</span>
       <span class="text-slate-500">Score</span>
       <span class="text-slate-200">{renderData.event.gapScore?.toFixed(2)}</span>
