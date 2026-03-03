@@ -26,6 +26,8 @@ Key flags:
 ## Per-trade correction rules
 Applied during streaming before accumulation:
 - Corrupted rows: rejected by parser and summarized in warning logs.
+- Non-increasing trade timestamps: ignored by gap tracking state (no tracker rewind, no synthetic gap row).
+- Out-of-order trades within a candle: OHLC uses per-bucket timestamp anchors so late backfill rows update wick/high-low and volume, but not chronological close unless they are the latest timestamp in that bucket.
 
 ## Output files
 For each `(collector, exchange, symbol, timeframe)`:

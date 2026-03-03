@@ -42,8 +42,8 @@ export function formatPriceLegend(candle: ChartLegendCandle | null): string {
 export function formatVolumeLegend(candle: ChartLegendCandle | null): string {
   if (!candle) return "na";
   const total = candle.buyVol + candle.sellVol;
-  const delta = Math.abs(candle.buyVol - candle.sellVol);
-  return `${formatCompact(total)} | ${formatCompact(delta)}`;
+  const delta = candle.buyVol - candle.sellVol;
+  return `${formatCompact(total)} | ${formatCompact(delta)} Δ`;
 }
 
 export function formatLiquidationLegend(candle: ChartLegendCandle | null): string {

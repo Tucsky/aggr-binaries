@@ -22,6 +22,7 @@ import {
   type ParseRejectReason,
 } from "./trades.js";
 import { createProgressReporter } from "./progress.js";
+import { formatElapsedDhms } from "../shared/elapsed.js";
 
 interface Accumulator {
   collector: string;
@@ -395,6 +396,8 @@ async function streamFile(opts: {
   let tradesKept = 0;
   let newBuckets = 0;
   let rejectTotal = 0;
+  let outOfOrderTradeCount = 0;
+  let maxOutOfOrderBackstepMs = 0;
 
   for await (const line of rl) {
     linesRead += 1;
@@ -423,29 +426,41 @@ async function streamFile(opts: {
       continue;
     }
 
+    const keepForAccumulation = skipBeforeTs === undefined || trade.ts >= skipBeforeTs;
     const includeInGapTracking = !trade.liquidation;
     if (includeInGapTracking) {
-      const gap = recordGap(acc.gapTracker, trade.ts);
-      if (
-        gap !== undefined &&
-        acc.lastSeenTs !== undefined &&
-        acc.lastSeenRelativePath !== undefined
-      ) {
-        gaps.push({
-          gapMs: gap.gapMs,
-          gapMiss: gap.gapMiss,
-          gapScore: gap.gapScore,
-          startTs: acc.lastSeenTs,
-          endTs: trade.ts,
-          startRelativePath: acc.lastSeenRelativePath,
-          endRelativePath: file.relative_path,
-        });
+      const previousTrackedTs = acc.gapTracker.lastTradeTs;
+      if (previousTrackedTs !== undefined && trade.ts < previousTrackedTs) {
+        if (keepForAccumulation) {
+          outOfOrderTradeCount += 1;
+          const backstepMs = previousTrackedTs - trade.ts;
+          if (backstepMs > maxOutOfOrderBackstepMs) {
+            maxOutOfOrderBackstepMs = backstepMs;
+          }
+        }
+      } else {
+        const gap = recordGap(acc.gapTracker, trade.ts);
+        if (
+          gap !== undefined &&
+          acc.lastSeenTs !== undefined &&
+          acc.lastSeenRelativePath !== undefined
+        ) {
+          gaps.push({
+            gapMs: gap.gapMs,
+            gapMiss: gap.gapMiss,
+            gapScore: gap.gapScore,
+            startTs: acc.lastSeenTs,
+            endTs: trade.ts,
+            startRelativePath: acc.lastSeenRelativePath,
+            endRelativePath: file.relative_path,
+          });
+        }
+        acc.lastSeenTs = trade.ts;
+        acc.lastSeenRelativePath = file.relative_path;
       }
-      acc.lastSeenTs = trade.ts;
-      acc.lastSeenRelativePath = file.relative_path;
     }
 
-    if (skipBeforeTs !== undefined && trade.ts < skipBeforeTs) continue;
+    if (!keepForAccumulation) continue;
 
     const created = accumulate(acc, trade, timeframeMs);
     if (created) {
@@ -468,7 +483,12 @@ async function streamFile(opts: {
       summary.push(`invalid_ts_range=${rejectCounts[RejectReason.InvalidTsRange]}`);
     if (rejectCounts[RejectReason.NotionalTooLarge])
       summary.push(`notional_too_large=${rejectCounts[RejectReason.NotionalTooLarge]}`);
-    console.warn(`[parse-skip] path=${fullPath} rejects=${rejectTotal} ${summary.join(" ")}`);
+    console.warn(`[parse-skip] path=${file.relative_path} rejects=${rejectTotal} ${summary.join(" ")}`);
+  }
+  if (outOfOrderTradeCount > 0) {
+    console.warn(
+      `[out-of-order] path=${file.relative_path} count=${outOfOrderTradeCount} max_backstep=${formatElapsedDhms(maxOutOfOrderBackstepMs)}`,
+    );
   }
 
   return { linesRead, tradesKept, newBuckets, gaps };

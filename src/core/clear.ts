@@ -59,7 +59,7 @@ export async function runClear(config: Config, db: Db, deps?: RunClearDeps): Pro
 
 export async function clearMarket(db: Db, outDir: string, market: ClearMarket): Promise<ClearStats> {
   const outputsDeleted = await deleteMarketOutputs(outDir, market);
-  const dbStats = deleteMarketRows(db, market);
+  const dbStats = await deleteMarketRows(db, market);
   return {
     outputsDeleted,
     eventsDeleted: dbStats.eventsDeleted,
@@ -128,10 +128,10 @@ async function deleteMarketOutputs(outDir: string, market: ClearMarket): Promise
   }
 }
 
-function deleteMarketRows(
+async function deleteMarketRows(
   db: Db,
   market: ClearMarket,
-): { eventsDeleted: number; filesDeleted: number; registryDeleted: number } {
+): Promise<{ eventsDeleted: number; filesDeleted: number; registryDeleted: number }> {
   const params = {
     collector: market.collector,
     exchange: market.exchange,
@@ -152,9 +152,9 @@ function deleteMarketRows(
 
   return runSqliteWriteTransaction(db.db, () => {
     const eventsDeleted = Number(deleteEventsStmt.run(params).changes ?? 0);
-    // const filesDeleted = Number(deleteFilesStmt.run(params).changes ?? 0);
+    const filesDeleted = Number(deleteFilesStmt.run(params).changes ?? 0);
     const registryDeleted = Number(deleteRegistryStmt.run(params).changes ?? 0);
-    return { eventsDeleted, filesDeleted: 0, registryDeleted };
+    return { eventsDeleted, filesDeleted, registryDeleted };
   });
 }
 

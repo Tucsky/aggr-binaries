@@ -70,8 +70,10 @@ test("recordGap ignores non-increasing timestamps and keeps sample count stable"
   recordGap(tracker, 10_000);
   recordGap(tracker, 10_010);
   const before = tracker.samples;
+  const beforeLastTradeTs = tracker.lastTradeTs;
 
   assert.strictEqual(recordGap(tracker, 10_010), undefined);
   assert.strictEqual(recordGap(tracker, 10_009), undefined);
   assert.strictEqual(tracker.samples, before);
+  assert.strictEqual(tracker.lastTradeTs, beforeLastTradeTs);
 });

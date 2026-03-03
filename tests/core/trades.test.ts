@@ -59,5 +59,39 @@ test("accumulate excludes liquidation rows from OHLC, trade vol, and trade count
     sellCount: 1,
     liqBuy: BigInt(Math.round(100 * 1 * VOL_SCALE)),
     liqSell: BigInt(Math.round(90 * 2 * VOL_SCALE)),
+    openTs: slot + 2_000,
+    closeTs: slot + 4_000,
+  });
+});
+
+test("accumulate keeps OHLC deterministic when trades for a bucket arrive out of order", () => {
+  const timeframeMs = 60_000;
+  const slot = 1_704_067_200_000;
+  const acc = {
+    buckets: new Map<number, Candle>(),
+    minMinute: Number.POSITIVE_INFINITY,
+    maxMinute: Number.NEGATIVE_INFINITY,
+  };
+
+  accumulate(acc, { ts: slot + 40_000, price: 100, size: 1, side: "buy", liquidation: false }, timeframeMs);
+  accumulate(acc, { ts: slot + 50_000, price: 101, size: 1, side: "sell", liquidation: false }, timeframeMs);
+  accumulate(acc, { ts: slot + 10_000, price: 99, size: 1, side: "buy", liquidation: false }, timeframeMs);
+  accumulate(acc, { ts: slot + 25_000, price: 130, size: 0.5, side: "sell", liquidation: false }, timeframeMs);
+
+  const candle = acc.buckets.get(slot);
+  assert.ok(candle);
+  assert.deepStrictEqual(candle, {
+    open: 990_000,
+    high: 1_300_000,
+    low: 990_000,
+    close: 1_010_000,
+    buyVol: BigInt(Math.round((100 + 99) * VOL_SCALE)),
+    sellVol: BigInt(Math.round((101 + 65) * VOL_SCALE)),
+    buyCount: 2,
+    sellCount: 2,
+    liqBuy: 0n,
+    liqSell: 0n,
+    openTs: slot + 10_000,
+    closeTs: slot + 50_000,
   });
 });

@@ -61,7 +61,6 @@ export async function runIndex(config: Config, db: Db): Promise<IndexStats> {
   logProgress(stats, batch.length);
 
   if (batch.length) {
-    console.log(`Inserting final batch of ${batch.length} files...`);
     const res = db.insertFiles(batch);
     stats.inserted += res.inserted;
     stats.existing += res.existing;

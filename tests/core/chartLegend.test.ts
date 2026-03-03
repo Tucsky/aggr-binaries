@@ -23,7 +23,7 @@ const sample: ChartLegendCandle = {
 
 test("legend formatters are deterministic", () => {
   assert.equal(formatPriceLegend(sample), "O:10.0 H:12.0 L:9.0 C:11.0");
-  assert.equal(formatVolumeLegend(sample), "1.5 M | 900 K");
+  assert.equal(formatVolumeLegend(sample), "1.5 M | 900 K Δ");
   assert.equal(formatLiquidationLegend(sample), "na | 20 K");
 });
 

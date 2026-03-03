@@ -102,11 +102,10 @@ function gapScoreFromLog(z: number): number {
 
 export function recordGap(tracker: GapTrackerState, ts: number): Gap | undefined {
   const prevTs = tracker.lastTradeTs;
-  tracker.lastTradeTs = ts;
-
   const startTs = tracker.startTs;
 
   if (prevTs === undefined || startTs === undefined) {
+    tracker.lastTradeTs = ts;
     tracker.startTs = ts;
     return;
   }
@@ -122,6 +121,7 @@ export function recordGap(tracker: GapTrackerState, ts: number): Gap | undefined
     return;
   }
 
+  tracker.lastTradeTs = ts;
   tracker.sameTsCount = 0;
 
   // --- snapshot BEFORE update (for detection) ---

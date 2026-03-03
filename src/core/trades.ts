@@ -34,6 +34,9 @@ export interface Candle {
   sellCount: number;
   liqBuy: bigint;
   liqSell: bigint;
+  // Runtime-only ordering anchors used to keep OHLC deterministic when rows are not strictly ordered.
+  openTs?: number;
+  closeTs?: number;
 }
 
 export const PRICE_SCALE = 1e4; // int32 safe for typical crypto prices
@@ -138,16 +141,30 @@ export function accumulate(
     if (t.side === "buy") bucket.liqBuy += quoteVol;
     else bucket.liqSell += quoteVol;
   } else {
+    const ts = t.ts;
     const priceInt = Math.round(t.price * PRICE_SCALE);
     if (bucket.buyCount === 0 && bucket.sellCount === 0) {
       bucket.open = priceInt;
       bucket.high = priceInt;
       bucket.low = priceInt;
       bucket.close = priceInt;
+      bucket.openTs = ts;
+      bucket.closeTs = ts;
     } else {
       bucket.high = Math.max(bucket.high, priceInt);
       bucket.low = Math.min(bucket.low, priceInt);
-      bucket.close = priceInt;
+      const openTs = bucket.openTs;
+      if (openTs === undefined || ts < openTs) {
+        bucket.open = priceInt;
+        bucket.openTs = ts;
+      }
+      const closeTs = bucket.closeTs;
+      if (closeTs === undefined || ts > closeTs) {
+        bucket.close = priceInt;
+        bucket.closeTs = ts;
+      } else if (ts === closeTs) {
+        bucket.close = priceInt;
+      }
     }
 
     if (t.side === "buy") {
