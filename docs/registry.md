@@ -21,6 +21,14 @@ Key flags:
 - Build registry entries from companion time ranges.
 - Replace matching DB scope atomically.
 
+## Frontend discoverability contract
+Viewer controls (`client/src/lib/features/viewer/viewerWs.ts`) use registry-backed websocket lookups to discover valid targets:
+- `listMarkets`: distinct `(collector, exchange, symbol)` sorted by `collector, exchange, symbol`.
+- `listTimeframes`: sorted timeframe list for one exact `(collector, exchange, symbol)` tuple.
+
+Operational implication:
+- If binaries/companions exist but registry rows are stale or missing, viewer market/timeframe selectors can be incomplete until `registry` is run.
+
 ## Mermaid flow
 ```mermaid
 flowchart TD

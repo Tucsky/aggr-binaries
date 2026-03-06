@@ -57,6 +57,82 @@ Companion JSON includes at least:
 - resume anchor (`lastInputStartTs`)
 - adaptive gap tracker snapshot fields
 
+## Viewer websocket contract (`/ws`)
+The chart viewer transport (`client/src/lib/features/viewer/viewerWs.ts`) reads process outputs through the preview websocket endpoint.
+
+Client -> server messages:
+- `setTarget` (`collector`, `exchange`, `symbol`, optional `timeframe`, optional `startTs`)
+- `setTimeframe` (`timeframe`)
+- `setStart` (`startTs` or `null`)
+- `slice` (`fromIndex`, `toIndex`)
+- `listMarkets`
+- `listTimeframes` (`collector`, `exchange`, `symbol`)
+
+Server -> client messages:
+- `meta` (`startTs`, `endTs`, `timeframe`, `timeframeMs`, `priceScale`, `volumeScale`, `records`, `anchorIndex`)
+- `candles` (`fromIndex`, `toIndex`, `candles[]`)
+- `markets`
+- `timeframes`
+- `error`
+
+Deterministic semantics:
+- `setTarget` reloads companion state for one `(collector, exchange, symbol, timeframe)` market and emits `meta`.
+- `setStart` updates `anchorIndex = clamp(floor((startTs - companion.startTs) / timeframeMs), 0..records-1)`; `null` start anchors to latest.
+- `slice` reads fixed-width candle rows (`56` bytes each) from `{outDir}/{collector}/{exchange}/{symbol}/{timeframe}.bin`; requested indices are clamped to `[0, records-1]`.
+- The client queues outbound messages while the socket is not open, suppresses duplicate in-flight or last-requested slices, and clears slice state whenever `meta` changes.
+
+### Mermaid flow (`viewerWs`)
+```mermaid
+flowchart TD
+  subgraph Client["Client (`viewerWs.ts` + controls/chart)"]
+    A["ViewerControls onMount -> connect()"]
+    B{"Socket already OPEN/CONNECTING?"}
+    C["Open WebSocket(buildViewerWsUrl())"]
+    D["onopen: status=connected, flushQueue(), requestMarkets()"]
+    E["setTarget/setTimeframe/setStart update local state and send message"]
+    F["requestSlice(from,to) guards: meta set, clamped range, not pending, not lastRequested"]
+    G["sendMessage(payload) or queue until OPEN"]
+    H["onmessage dispatcher"]
+    I["meta -> handleMeta (dedupe unchanged, resetSlices(false), set meta store)"]
+    J["candles -> clear pending key, notify subscribers"]
+    K["markets/timeframes -> update stores (target key guarded)"]
+    L["CandleChart on meta: reset and request initial slice around anchorIndex"]
+    M["CandleChart near range edge: request additional slices"]
+  end
+
+  subgraph Server["Server (`previewWs.ts`, `/ws`)"]
+    S0["Upgrade HTTP -> websocket and decode frames"]
+    S1{"Incoming type"}
+    S2["setTarget/setTimeframe -> refreshCompanion"]
+    S3["refreshCompanion: loadCompanion + computeAnchorIndex"]
+    S4["setStart -> recompute anchorIndex only"]
+    S5["slice -> readCandles(bin, 56B records, clamped indices)"]
+    S6["listMarkets -> registryApi.listMarkets"]
+    S7["listTimeframes -> registryApi.listTimeframes"]
+    S8["send meta/candles/markets/timeframes or error"]
+  end
+
+  A --> B
+  B -->|yes| E
+  B -->|no| C --> D
+  D --> G
+  E --> G
+  F --> G
+  H --> I --> L --> F
+  H --> J
+  H --> K
+  M --> F
+
+  G --> S0 --> S1
+  S1 -->|setTarget or setTimeframe| S2 --> S3 --> S8
+  S1 -->|setStart| S4 --> S8
+  S1 -->|slice| S5 --> S8
+  S1 -->|listMarkets| S6 --> S8
+  S1 -->|listTimeframes| S7 --> S8
+  S1 -->|unknown/invalid| S8
+  S8 --> H
+```
+
 ## Resume semantics
 Without `--force`, when companion exists:
 - Skip files with `start_ts < lastInputStartTs`.

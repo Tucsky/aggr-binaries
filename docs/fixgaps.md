@@ -91,6 +91,87 @@ flowchart TD
 - `missing_adapter`: adapter unavailable
 - `adapter_error`: adapter or patch pipeline failure
 
+## Timeline events viewport contract
+Timeline page event rendering (`client/src/pages/TimelinePage.svelte` + `client/src/lib/features/timeline/*timelineEventViewport*`) treats timeline events as `gaps` rows.
+
+Server query contract:
+- `GET /api/timeline/events`: range + optional collector/exchange/symbol filters.
+- `POST /api/timeline/events/query`: range + explicit row tuples for viewport fetches.
+- Row tuple cap is `200` and request body cap is `256 KiB`.
+- Returned order is deterministic: `collector, exchange, symbol, ts, id`.
+
+Viewport loading/caching invariants:
+- Virtual row selection uses row overscan (`2`) and caps one request to `24` rows.
+- Requested time range is the visible viewport clamped to selected bounds, then expanded by `50%` overscan.
+- Scope identity is timeframe + selected range + collector/exchange/symbol filters; scope changes clear loaded coverage.
+- Cache is row-partitioned and segmented (`<=3` segments per row, `<=20,000` events per segment, global caps `128` rows / `60,000` events).
+- Cache eviction is deterministic: farthest from active range first, then least-recently-accessed.
+- Cache merge order is deterministic by `(ts, id)`; duplicate event IDs are collapsed to one entry and prefer the most recently fetched payload.
+
+UI status mapping (`eventKind`) from gap lifecycle:
+- `fixed` -> `gap_fixed`
+- `skipped_large_gap` -> `skipped_large_gap`
+- `adapter_error` -> `adapter_error`
+- `missing_adapter` -> `missing_adapter`
+- any other value (including `null`) -> `gap`
+
+### Mermaid flow (`timelineEventViewport` load cycle)
+```mermaid
+flowchart TD
+  A["Trigger: scroll/pan/zoom/filter/timeframe/resize -> scheduleEventsReload(delay)"] --> B["loadEvents(forceReload?)"]
+  B --> C{"selectedRange + viewRange + filteredMarkets available?"}
+  C -->|no| C1["Abort in-flight + clear loaded coverage"] --> Z
+  C -->|yes| D["scopeKey = buildTimelineEventsScopeKey(timeframe, selectedRange, filters)"]
+  D --> E{"scope changed?"}
+  E -->|yes| E1["resetLoadedEventsState(clearCache=true, clearScope=false)"]
+  E -->|no| F
+  E1 --> F["selection = selectTimelineViewportEventRows(virtual rows, overscan=2, maxRows=24)"]
+  F --> G{"selection empty?"}
+  G -->|yes| G1["Clear loaded coverage and stop"] --> Z
+  G -->|no| H["request = resolveTimelineViewportEventRequest(clamped view + 50% range overscan)"]
+  H --> I{"request is null (already covered)?"}
+  I -->|yes| Z
+  I -->|no| J{"loadingEvents in progress?"}
+  J -->|yes and same query| Z
+  J -->|yes and different query| J1["queuePendingEventsReload(force?)"] --> Z
+  J -->|no| K["cached = readTimelineViewportEventCache(scopeKey, requestRange, selection)"]
+  K --> L{"all selected rows covered by cache and not forceReload?"}
+  L -->|yes| L1["Serve cached events and mark coverage"] --> Z
+  L -->|no| M["rowsToFetch = force ? selection : missingRows(selection, coveredRows)"]
+  M --> N{"rowsToFetch empty?"}
+  N -->|yes| N1["Serve cached events and mark coverage"] --> Z
+  N -->|no| O["Optional immediate paint from cached subset"]
+  O --> P["POST /api/timeline/events/query(requestRange, rowsToFetch)"]
+  P --> Q["writeTimelineViewportEventCache(scopeKey, requestRange, rowKeys, fetchedEvents)"]
+  Q --> R["refreshed = read cache for full selection/requestRange"]
+  R --> S["Set allEvents + loadedRange + loadedRowKeys + lastQueryKey"]
+  S --> T["loadingEvents=false; flushPendingEventsReload()"]
+  T --> Z["groupEventsByMarket -> TimelineRow render"]
+```
+
+### Mermaid flow (`timelineEventViewport` query + cache internals)
+```mermaid
+flowchart TD
+  A["POST /api/timeline/events/query"] --> B["Parse JSON body (<=256 KiB), validate startTs/endTs"]
+  B --> C["Normalize row tuples (collector, exchange, symbol)"]
+  C --> D{"rows count 1..200?"}
+  D -->|no| D1["400 invalid timeline query"]
+  D -->|yes| E["listTimelineEvents SQL with row filter CTE/join"]
+  E --> F["Deterministic order: collector, exchange, symbol, ts, id"]
+  F --> G["events[] response"]
+
+  G --> H["writeTimelineViewportEventCache"]
+  H --> I["Group fetched events by rowKey"]
+  I --> J["Upsert requestRange segment per row"]
+  J --> K{"Range overlaps/touches existing segment?"}
+  K -->|yes and merged <=20k events| L["Merge by (ts,id) and dedupe event id"]
+  K -->|no| M["Keep separate segment"]
+  L --> N
+  M --> N["Enforce <=3 segments/row (evict farthest, then LRU tie-break)"]
+  N --> O["Global prune: max 128 rows and 60,000 events"]
+  O --> P["readTimelineViewportEventCache finds covering segment and ts window via binary search"]
+```
+
 ## Dry-run behavior
 With `--dry-run`:
 - adapters are called

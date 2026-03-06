@@ -105,3 +105,8 @@ flowchart TD
 - `indexed_market_ranges is empty while files has data`: delete DB and rerun `index`.
 - Historical backfills (new files older than current market `end_ts`) require `npm start -- index --force` to reconcile.
 - Brand-new or unmatched market directories are discovered by default incremental scans.
+
+## Frontend contracts map
+Task docs remain the source of truth for frontend data-plane behavior:
+- Viewer websocket (`client/src/lib/features/viewer/viewerWs.ts`): see [process.md](process.md#viewer-websocket-contract-ws) and [registry.md](registry.md#frontend-discoverability-contract).
+- Timeline events viewport (`client/src/lib/features/timeline/*timelineEventViewport*`): see [fixgaps.md](fixgaps.md#timeline-events-viewport-contract) (events are persisted `gaps` rows).

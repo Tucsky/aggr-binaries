@@ -168,7 +168,12 @@ function upsertTimelineViewportSegments(
       merged.push(segment);
       continue;
     }
-    const mergedEvents = mergeTimelineEvents(previous.events, segment.events);
+    const mergedEvents = mergeTimelineEvents(
+      previous.events,
+      previous.accessSeq,
+      segment.events,
+      segment.accessSeq,
+    );
     if (mergedEvents.length > MAX_EVENTS_PER_SEGMENT) {
       merged.push(segment);
       continue;
@@ -213,19 +218,36 @@ function selectSegmentEvictionIndex(
   return index;
 }
 
-function mergeTimelineEvents(a: TimelineEvent[], b: TimelineEvent[]): TimelineEvent[] {
+function mergeTimelineEvents(
+  a: TimelineEvent[],
+  aAccessSeq: number,
+  b: TimelineEvent[],
+  bAccessSeq: number,
+): TimelineEvent[] {
   if (!a.length) return b;
   if (!b.length) return a;
   const merged: TimelineEvent[] = [];
-  const seen = new Set<number>();
+  const idToIndex = new Map<number, number>();
+  const idToAccessSeq = new Map<number, number>();
   let ai = 0;
   let bi = 0;
   while (ai < a.length || bi < b.length) {
     const takeA = bi >= b.length || (ai < a.length && compareTimelineEventsOrder(a[ai], b[bi]) <= 0);
     const next = takeA ? a[ai++] : b[bi++];
-    if (seen.has(next.id)) continue;
-    seen.add(next.id);
-    merged.push(next);
+    const nextAccessSeq = takeA ? aAccessSeq : bAccessSeq;
+    const existingIdx = idToIndex.get(next.id);
+    if (existingIdx === undefined) {
+      idToIndex.set(next.id, merged.length);
+      idToAccessSeq.set(next.id, nextAccessSeq);
+      merged.push(next);
+      continue;
+    }
+    const previousAccessSeq = idToAccessSeq.get(next.id) ?? 0;
+    if (nextAccessSeq < previousAccessSeq) {
+      continue;
+    }
+    merged[existingIdx] = next;
+    idToAccessSeq.set(next.id, nextAccessSeq);
   }
   return merged;
 }

@@ -169,6 +169,54 @@ test("timeline viewport row cache merges overlapping row segments", () => {
   assert.deepStrictEqual(covered.events.map((item) => item.id), [2]);
 });
 
+test("timeline viewport cache prefers most recently fetched event payload for duplicate ids", () => {
+  const cache = createTimelineViewportEventCacheState();
+  const stale = { ...makeEvent(7, "BTCUSDT", 200), gapFixStatus: null };
+  const fixed = { ...makeEvent(7, "BTCUSDT", 200), gapFixStatus: "fixed" };
+  writeTimelineViewportEventCache(cache, 2, 1000, {
+    scopeKey: "scope",
+    requestRange: { startTs: 100, endTs: 260 },
+    rowKeys: ["PI:BYBIT:BTCUSDT"],
+    events: [stale],
+  });
+  writeTimelineViewportEventCache(cache, 2, 1000, {
+    scopeKey: "scope",
+    requestRange: { startTs: 180, endTs: 280 },
+    rowKeys: ["PI:BYBIT:BTCUSDT"],
+    events: [fixed],
+  });
+  const covered = readTimelineViewportEventCache(cache, "scope", { startTs: 190, endTs: 220 }, {
+    rowKeys: ["PI:BYBIT:BTCUSDT"],
+    rows: [{ collector: "PI", exchange: "BYBIT", symbol: "BTCUSDT" }],
+  });
+  assert.deepStrictEqual(covered.events.map((item) => item.id), [7]);
+  assert.strictEqual(covered.events[0]?.gapFixStatus, "fixed");
+});
+
+test("timeline viewport cache keeps newest payload even when newer overlap sorts earlier by range", () => {
+  const cache = createTimelineViewportEventCacheState();
+  const stale = { ...makeEvent(11, "BTCUSDT", 180), gapFixStatus: null };
+  const fixed = { ...makeEvent(11, "BTCUSDT", 180), gapFixStatus: "fixed" };
+  writeTimelineViewportEventCache(cache, 2, 1000, {
+    scopeKey: "scope",
+    requestRange: { startTs: 140, endTs: 260 },
+    rowKeys: ["PI:BYBIT:BTCUSDT"],
+    events: [stale],
+  });
+  writeTimelineViewportEventCache(cache, 2, 1000, {
+    scopeKey: "scope",
+    requestRange: { startTs: 100, endTs: 220 },
+    rowKeys: ["PI:BYBIT:BTCUSDT"],
+    events: [fixed],
+  });
+  const covered = readTimelineViewportEventCache(cache, "scope", { startTs: 170, endTs: 200 }, {
+    rowKeys: ["PI:BYBIT:BTCUSDT"],
+    rows: [{ collector: "PI", exchange: "BYBIT", symbol: "BTCUSDT" }],
+  });
+  assert.deepStrictEqual(covered.events.map((item) => item.id), [11]);
+  assert.strictEqual(covered.events[0]?.gapFixStatus, "fixed");
+});
+
 test("timeline viewport cache evicts segments farthest from active range first", () => {
   const cache = createTimelineViewportEventCacheState();
   const event = (id: number, symbol: string, ts: number) => makeEvent(id, symbol, ts);
