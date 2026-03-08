@@ -26,7 +26,9 @@
     restoreTimelineLocalState,
     type TimelineSharedControls,
   } from "../lib/features/timeline/timelineControlsPersistence.js";
-  import { computeTimelineVirtualWindow } from "../lib/features/timeline/timelineVirtualRows.js";
+  import {
+    computeTimelineVirtualWindow,
+  } from "../lib/features/timeline/timelineVirtualRows.js";
   import {
     createTimelineViewportEventCacheState,
     buildTimelineEventsScopeKey,
@@ -330,10 +332,15 @@
       resetLoadedEventsState(true, false);
     }
 
+    const visibleStartIndex = Math.max(0, Math.floor(Math.max(0, scrollTop) / ROW_HEIGHT));
+    const visibleEndIndex = Math.min(
+      filteredMarkets.length,
+      Math.ceil((Math.max(0, scrollTop) + Math.max(0, viewportHeight)) / ROW_HEIGHT),
+    );
     const selection = selectTimelineViewportEventRows(
       filteredMarkets,
-      startIndex,
-      endIndex,
+      visibleStartIndex,
+      visibleEndIndex,
       EVENT_ROW_FETCH_OVERSCAN,
       MAX_EVENT_ROWS_PER_REQUEST,
     );

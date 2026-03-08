@@ -33,6 +33,39 @@ test("selectTimelineViewportEventRows applies row overscan and max row cap deter
   ]);
 });
 
+test("fetch row selection from visible window keeps all visible rows under row cap", () => {
+  const markets: TimelineMarket[] = [];
+  for (let i = 0; i < 200; i += 1) {
+    markets.push({
+      collector: "PI",
+      exchange: "BYBIT",
+      symbol: `SYM${i}`,
+      timeframe: "1m",
+      startTs: 1,
+      endTs: 2,
+    });
+  }
+  const visibleStartIndex = Math.max(0, Math.floor((33 * 100) / 33));
+  const visibleEndIndex = Math.min(
+    markets.length,
+    Math.ceil(((33 * 100) + (33 * 22)) / 33),
+  );
+  assert.strictEqual(visibleStartIndex, 100);
+  assert.strictEqual(visibleEndIndex, 122);
+  const selected = selectTimelineViewportEventRows(
+    markets,
+    visibleStartIndex,
+    visibleEndIndex,
+    2,
+    24,
+  );
+  assert.strictEqual(selected.rows.length, 24);
+  const selectedSymbols = new Set(selected.rows.map((row) => row.symbol));
+  for (let i = visibleStartIndex; i < visibleEndIndex; i += 1) {
+    assert.strictEqual(selectedSymbols.has(`SYM${i}`), true);
+  }
+});
+
 test("resolveTimelineViewportEventRequest skips fetch when loaded window covers visible rows/range", () => {
   const scopeKey = buildTimelineEventsScopeKey(
     "1m",
