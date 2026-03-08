@@ -26,7 +26,9 @@
     restoreTimelineLocalState,
     type TimelineSharedControls,
   } from "../lib/features/timeline/timelineControlsPersistence.js";
-  import { computeTimelineVirtualWindow } from "../lib/features/timeline/timelineVirtualRows.js";
+  import {
+    computeTimelineVirtualWindow,
+  } from "../lib/features/timeline/timelineVirtualRows.js";
   import {
     createTimelineViewportEventCacheState,
     buildTimelineEventsScopeKey,
@@ -111,6 +113,8 @@
   let timelineViewportWidth = MIN_TIMELINE_VIEWPORT_WIDTH;
   let startIndex = 0;
   let endIndex = 0;
+  let visibleStartIndex = 0;
+  let visibleEndIndex = 0;
   let topPadding = 0;
   let bottomPadding = 0;
   let eventAbort: AbortController | null = null;
@@ -148,6 +152,11 @@
     ROW_HEIGHT,
     OVERSCAN,
   ));
+  $: visibleStartIndex = Math.max(0, Math.floor(Math.max(0, scrollTop) / ROW_HEIGHT));
+  $: visibleEndIndex = Math.min(
+    filteredMarkets.length,
+    Math.ceil((Math.max(0, scrollTop) + Math.max(0, viewportHeight)) / ROW_HEIGHT),
+  );
   $: visibleMarkets = filteredMarkets.slice(startIndex, endIndex);
   $: crosshairX = crosshairPx !== null ? crosshairPx : crosshairTs !== null && viewRange ? toTimelineX(crosshairTs, viewRange, timelineWidth) : null;
   $: crosshairLeft = crosshairX === null ? null : titleWidth + crosshairX;
@@ -332,8 +341,8 @@
 
     const selection = selectTimelineViewportEventRows(
       filteredMarkets,
-      startIndex,
-      endIndex,
+      visibleStartIndex,
+      visibleEndIndex,
       EVENT_ROW_FETCH_OVERSCAN,
       MAX_EVENT_ROWS_PER_REQUEST,
     );
