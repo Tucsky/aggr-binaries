@@ -15,7 +15,6 @@ interface WalkOptions {
 
 export async function* walkFiles(
   rootPath: string,
-  rootId: number,
   options: WalkOptions = {},
 ): AsyncGenerator<FileSystemEntry> {
   const dirStack: string[] = seedDirs(rootPath, options.includePaths);
@@ -48,7 +47,6 @@ export async function* walkFiles(
 
       const rel = path.relative(rootPath, fullPath);
       yield {
-        rootId,
         rootPath,
         relativePath: toPosix(rel),
         fullPath,

@@ -210,7 +210,7 @@ export async function mergeAndPatchRecoveredTradesFlushBatch(
   const chunkTsBounds = recoveredTsBounds(batch);
   if (!chunkTsBounds) return undefined;
   const routingRow = selectBatchRoutingRow(chunkTsBounds, selectedWindows, rowsById, row);
-  const target = resolveFlushTargetFile(routingRow, chunkTsBounds.minTs, chunkTsBounds.maxTs);
+  const target = resolveFlushTargetFile(config.root, routingRow, chunkTsBounds.minTs, chunkTsBounds.maxTs);
   await ensureFlushTargetFile(row, db, target.relativePath, target.absolutePath);
   return mergeAndPatchRecoveredTrades(
     batch,

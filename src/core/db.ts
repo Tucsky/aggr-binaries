@@ -5,14 +5,12 @@ import { configureSqliteWriteContention, runSqliteWrite, runSqliteWriteTransacti
 // This file intentionally stays centralized despite its size: migrations and prepared write paths are tightly coupled.
 export interface Db {
   db: DatabaseSync;
-  ensureRoot(path: string): number;
   insertFiles(rows: IndexedFile[]): { inserted: number; existing: number };
   listIndexedMarketRanges(): IndexedMarketRangeRow[];
   upsertRegistry(entry: RegistryEntry): void;
   replaceRegistry(entries: RegistryEntry[], filter?: RegistryFilter): { upserted: number; deleted: number };
   getRegistryEntry(key: RegistryKey): RegistryEntry | null;
   insertGaps(ctx: GapCtx, gaps: PersistedGap[]): void;
-  deleteGapsForEndFile(rootId: number, endRelativePath: string): void;
   iterateGapsForFix(opts: GapFixQueueFilter): Iterable<GapFixQueueRow>;
   updateGapFixStatus(rows: Array<{ id: number; status: GapFixStatus; error?: string | null; recovered?: number | null }>): void;
   deleteGapsByIds(ids: number[]): void;
@@ -30,8 +28,6 @@ export interface GapFixQueueFilter {
 
 export interface GapFixQueueRow {
   id: number;
-  root_id: number;
-  root_path: string;
   start_relative_path: string;
   end_relative_path: string;
   collector: string;
@@ -66,9 +62,9 @@ export function openDatabase(dbPath: string): Db {
 
   const insertStmt = db.prepare(
     `INSERT OR IGNORE INTO files
-      (root_id, relative_path, collector, exchange, symbol, start_ts, ext)
+      (relative_path, collector, exchange, symbol, start_ts, ext)
      VALUES
-      (:rootId, :relativePath, :collector, :exchange, :symbol, :startTs, :ext);`,
+      (:relativePath, :collector, :exchange, :symbol, :startTs, :ext);`,
   );
   const upsertIndexedMarketRangeStmt = db.prepare(
     `INSERT INTO indexed_market_ranges
@@ -81,8 +77,6 @@ export function openDatabase(dbPath: string): Db {
       updated_at = (unixepoch('subsec') * 1000);`,
   );
 
-  const ensureRootStmt = db.prepare("INSERT OR IGNORE INTO roots(path) VALUES(:path);");
-  const getRootIdStmt = db.prepare("SELECT id FROM roots WHERE path = :path;");
   const upsertRegistryStmt = db.prepare(
     `INSERT INTO registry
       (collector, exchange, symbol, timeframe, start_ts, end_ts)
@@ -106,12 +100,9 @@ export function openDatabase(dbPath: string): Db {
   );
   const insertGapStmt = db.prepare(
     `INSERT INTO gaps
-      (root_id, start_relative_path, end_relative_path, collector, exchange, symbol, gap_ms, gap_miss, start_ts, end_ts, gap_score)
+      (start_relative_path, end_relative_path, collector, exchange, symbol, gap_ms, gap_miss, start_ts, end_ts, gap_score)
      VALUES
-      (:rootId, :startRelativePath, :endRelativePath, :collector, :exchange, :symbol, :gapMs, :gapMiss, :startTs, :endTs, :gapScore);`,
-  );
-  const deleteGapsForEndFileStmt = db.prepare(
-    `DELETE FROM gaps WHERE root_id = :rootId AND end_relative_path = :endRelativePath;`,
+      (:startRelativePath, :endRelativePath, :collector, :exchange, :symbol, :gapMs, :gapMiss, :startTs, :endTs, :gapScore);`,
   );
   const updateGapFixStatusStmt = db.prepare(
     `UPDATE gaps
@@ -129,16 +120,6 @@ export function openDatabase(dbPath: string): Db {
 
   const api: Db = {
     db,
-    ensureRoot: (path: string): number => {
-      return runSqliteWrite(() => {
-        ensureRootStmt.run({ path });
-        const row = getRootIdStmt.get({ path }) as { id: number } | undefined;
-        if (!row) {
-          throw new Error(`Failed to resolve root id for ${path}`);
-        }
-        return row.id;
-      });
-    },
     insertFiles: (rows: IndexedFile[]) => insertMany(db, insertStmt, upsertIndexedMarketRangeStmt, rows),
     listIndexedMarketRanges: () => listIndexedMarketRanges(listIndexedMarketRangesStmt),
     upsertRegistry: (entry: RegistryEntry) => upsertRegistry(upsertRegistryStmt, entry),
@@ -146,10 +127,6 @@ export function openDatabase(dbPath: string): Db {
       replaceRegistry(db, upsertRegistryStmt, deleteRegistryStmt, entries, filter),
     getRegistryEntry: (key: RegistryKey) => getRegistry(getRegistryStmt, key),
     insertGaps: (ctx: GapCtx, rows: PersistedGap[]) => insertGaps(db, insertGapStmt, ctx, rows),
-    deleteGapsForEndFile: (rootId: number, endRelativePath: string) =>
-      runSqliteWrite(() => {
-        deleteGapsForEndFileStmt.run({ rootId, endRelativePath });
-      }),
     iterateGapsForFix: (opts: GapFixQueueFilter): Iterable<GapFixQueueRow> =>
       iterateGapsForFix(db, opts),
     updateGapFixStatus: (rows: Array<{ id: number; status: GapFixStatus; error?: string | null; recovered?: number | null }>) =>
@@ -169,23 +146,14 @@ function migrate(db: DatabaseSync): void {
 
 function createTables(db: DatabaseSync): void {
   db.exec(`
-    CREATE TABLE IF NOT EXISTS roots (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      path TEXT NOT NULL UNIQUE
-    );
-  `);
-
-  db.exec(`
     CREATE TABLE IF NOT EXISTS files (
-      root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
-      relative_path TEXT NOT NULL,
+      relative_path TEXT PRIMARY KEY,
       collector TEXT NOT NULL,
       exchange TEXT NOT NULL,
       symbol TEXT NOT NULL,
       start_ts INTEGER NOT NULL,
       ext TEXT,
-      created_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
-      PRIMARY KEY (root_id, relative_path)
+      created_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000)
     );
   `);
 
@@ -206,7 +174,6 @@ function createTables(db: DatabaseSync): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS gaps (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
       start_relative_path TEXT NOT NULL,
       end_relative_path TEXT NOT NULL,
       collector TEXT NOT NULL,
@@ -244,11 +211,11 @@ function createIndexes(db: DatabaseSync): void {
   db.exec("CREATE INDEX IF NOT EXISTS idx_files_start_ts ON files(start_ts);");
   db.exec("CREATE INDEX IF NOT EXISTS idx_files_collector ON files(collector);");
   db.exec("CREATE INDEX IF NOT EXISTS idx_registry_exchange_symbol ON registry(exchange, symbol);");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_gaps_end_file ON gaps(root_id, end_relative_path);");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_gaps_end_file ON gaps(end_relative_path);");
   db.exec("CREATE INDEX IF NOT EXISTS idx_gaps_market ON gaps(collector, exchange, symbol);");
   db.exec("CREATE INDEX IF NOT EXISTS idx_gaps_market_end_ts ON gaps(collector, exchange, symbol, end_ts, id);");
   db.exec(
-    "CREATE INDEX IF NOT EXISTS idx_gaps_fix_queue ON gaps(gap_fix_status, collector, exchange, symbol, root_id, end_relative_path, id);",
+    "CREATE INDEX IF NOT EXISTS idx_gaps_fix_queue ON gaps(gap_fix_status, collector, exchange, symbol, end_relative_path, id);",
   );
   db.exec("CREATE INDEX IF NOT EXISTS idx_indexed_market_ranges_exchange_symbol ON indexed_market_ranges(exchange, symbol);");
 }
@@ -259,9 +226,7 @@ interface TableInfo {
 }
 
 function assertSchema(db: DatabaseSync): void {
-  assertExactColumns(db, "roots", ["id", "path"]);
   assertExactColumns(db, "files", [
-    "root_id",
     "relative_path",
     "collector",
     "exchange",
@@ -282,7 +247,6 @@ function assertSchema(db: DatabaseSync): void {
   ]);
   assertExactColumns(db, "gaps", [
     "id",
-    "root_id",
     "start_relative_path",
     "end_relative_path",
     "collector",
@@ -372,7 +336,6 @@ function insertMany(
         throw new Error(`Invalid indexed row ${row.relativePath}: missing exchange/symbol/startTs`);
       }
       const res = stmt.run({
-        rootId: row.rootId,
         relativePath: row.relativePath,
         collector: row.collector,
         exchange: row.exchange,
@@ -432,7 +395,6 @@ function insertGaps(db: DatabaseSync, stmt: StatementSync, ctx: GapCtx, rows: Pe
   runSqliteWriteTransaction(db, () => {
     for (const row of rows) {
       stmt.run({
-        rootId: ctx.rootId,
         startRelativePath: row.startRelativePath,
         endRelativePath: row.endRelativePath,
         collector: ctx.collector,
@@ -585,7 +547,6 @@ interface GapFixQueueCursor {
   collector: string;
   exchange: string;
   symbol: string;
-  rootId: number;
   endRelativePath: string;
   id: number;
 }
@@ -628,14 +589,13 @@ function iterateGapsForFix(db: DatabaseSync, opts: GapFixQueueFilter): Iterable<
 
   const limit = Number.isFinite(opts.limit) && (opts.limit as number) > 0 ? Math.floor(opts.limit as number) : undefined;
   const baseSql =
-    `SELECT e.id, e.root_id, r.path AS root_path, e.start_relative_path, e.end_relative_path,
+    `SELECT e.id, e.start_relative_path, e.end_relative_path,
             e.collector, e.exchange, e.symbol,
             e.gap_ms, e.gap_miss, e.start_ts, e.end_ts, e.gap_fix_status, e.gap_score
-       FROM gaps e
-       JOIN roots r ON r.id = e.root_id`;
+       FROM gaps e`;
   const whereSql = where.join(" AND ");
   // Keep queue deterministic and market-local so one symbol can be drained before moving to the next.
-  const orderBySql = " ORDER BY e.collector, e.exchange, e.symbol, e.root_id, e.end_relative_path, e.id";
+  const orderBySql = " ORDER BY e.collector, e.exchange, e.symbol, e.end_relative_path, e.id";
 
   if (selectedId !== undefined) {
     const params: Record<string, string | number | null> = limit !== undefined ? { ...baseParams, limit } : baseParams;
@@ -665,7 +625,6 @@ function iterateGapsForFix(db: DatabaseSync, opts: GapFixQueueFilter): Iterable<
           collector: last.collector,
           exchange: last.exchange,
           symbol: last.symbol,
-          rootId: last.root_id,
           endRelativePath: last.end_relative_path,
           id: last.id,
         };
@@ -697,12 +656,9 @@ function selectGapFixQueuePage(
               OR (e.exchange = :cursorExchange AND (
                    e.symbol > :cursorSymbol
                    OR (e.symbol = :cursorSymbol AND (
-                        e.root_id > :cursorRootId
-                        OR (e.root_id = :cursorRootId AND (
-                             e.end_relative_path > :cursorEndRelativePath
-                             OR (e.end_relative_path = :cursorEndRelativePath AND (
-                                  e.id > :cursorId
-                                ))
+                        e.end_relative_path > :cursorEndRelativePath
+                        OR (e.end_relative_path = :cursorEndRelativePath AND (
+                             e.id > :cursorId
                            ))
                       ))
                  ))
@@ -712,7 +668,6 @@ function selectGapFixQueuePage(
     params.cursorCollector = cursor.collector;
     params.cursorExchange = cursor.exchange;
     params.cursorSymbol = cursor.symbol;
-    params.cursorRootId = cursor.rootId;
     params.cursorEndRelativePath = cursor.endRelativePath;
     params.cursorId = cursor.id;
   }

@@ -18,20 +18,19 @@ interface MarketIndexState {
 }
 
 export async function runIndex(config: Config, db: Db): Promise<IndexStats> {
-  const rootId = db.ensureRoot(config.root);
   const stats: IndexStats = { seen: 0, inserted: 0, existing: 0, conflicts: 0, skipped: 0 };
   const marketIndexState = config.force ? null : buildMarketIndexState(db);
   const shouldDescendDir = buildDirectoryPruner(marketIndexState);
 
   let batch: IndexedFile[] = [];
   let skipLogged = 0;
-  for await (const entry of walkFiles(config.root, rootId, {
+  for await (const entry of walkFiles(config.root, {
     includePaths: config.includePaths,
     shouldDescendDir,
   })) {
     stats.seen += 1;
 
-    const row = classifyPath(entry.rootId, entry.relativePath);
+    const row = classifyPath(entry.relativePath);
     if (!row) {
       stats.skipped += 1;
       if (skipLogged < 50) {

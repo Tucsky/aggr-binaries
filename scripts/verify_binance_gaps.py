@@ -145,11 +145,10 @@ def iter_gap_rows(conn: sqlite3.Connection, args: argparse.Namespace) -> Iterabl
         order_by = "(e.gap_ms * e.gap_miss) DESC"
 
     sql = f"""
-      SELECT e.id, e.root_id, r.path AS root_path, e.end_relative_path,
+      SELECT e.id, e.end_relative_path,
              e.collector, e.exchange, e.symbol,
              e.gap_ms, e.gap_miss, e.start_ts, e.end_ts
         FROM gaps e
-        JOIN roots r ON r.id = e.root_id
        WHERE {where_clause}
        ORDER BY {order_by}
        LIMIT :limit
@@ -158,11 +157,10 @@ def iter_gap_rows(conn: sqlite3.Connection, args: argparse.Namespace) -> Iterabl
 
     if args.order == "random":
         pool_sql = f"""
-          SELECT e.id, e.root_id, r.path AS root_path, e.end_relative_path,
+          SELECT e.id, e.end_relative_path,
                  e.collector, e.exchange, e.symbol,
                  e.gap_ms, e.gap_miss, e.start_ts, e.end_ts
             FROM gaps e
-            JOIN roots r ON r.id = e.root_id
            WHERE {where_clause}
            ORDER BY e.gap_miss DESC
            LIMIT :pool;
@@ -185,11 +183,6 @@ def iter_gap_rows(conn: sqlite3.Connection, args: argparse.Namespace) -> Iterabl
     params["limit"] = -1 if args.limit <= 0 else args.limit
     params["offset"] = args.offset
     return conn.execute(sql, params).fetchall()
-
-
-def resolve_file_path(root_path: str, relative_path: str) -> Path:
-    rel = Path(relative_path)
-    return Path(root_path) / rel
 
 
 def ensure_cache_dir(path: Optional[str]) -> Path:

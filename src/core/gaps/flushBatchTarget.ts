@@ -29,23 +29,24 @@ export interface FlushTargetFile {
  * 3) far from both sides (>= 1 day from start and end) -> deterministic intermediate file inferred from boundary filenames
  */
 export function resolveFlushTargetFile(
+  rootPath: string,
   row: GapFixEventRow,
   firstTradeTs: number,
   lastTradeTs: number,
 ): FlushTargetFile {
-  const endTarget = toFlushTarget(row.root_path, row.end_relative_path);
+  const endTarget = toFlushTarget(rootPath, row.end_relative_path);
   if (!Number.isFinite(firstTradeTs) || !Number.isFinite(lastTradeTs)) return endTarget;
 
   // Use the first trade in the batch so wide chunks that begin at the gap start
   // do not get routed to later files and break chronological replay ordering.
   if (firstTradeTs <= row.start_ts + DAY_MS) {
-    return toFlushTarget(row.root_path, row.start_relative_path);
+    return toFlushTarget(rootPath, row.start_relative_path);
   }
 
   if (firstTradeTs >= row.start_ts + DAY_MS && lastTradeTs <= row.end_ts - DAY_MS) {
     const intermediateRelativePath = resolveIntermediateRelativePath(row, firstTradeTs);
     if (intermediateRelativePath) {
-      return toFlushTarget(row.root_path, intermediateRelativePath);
+      return toFlushTarget(rootPath, intermediateRelativePath);
     }
   }
 
@@ -77,7 +78,7 @@ export async function ensureFlushTargetFile(
   const indexedRelativePath = relativePath.startsWith(`${row.collector}/`)
     ? relativePath
     : `${row.collector}/${relativePath}`;
-  const indexed = classifyPath(row.root_id, indexedRelativePath);
+  const indexed = classifyPath(indexedRelativePath);
   if (indexed) db.insertFiles([indexed]);
 }
 

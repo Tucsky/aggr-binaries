@@ -20,7 +20,7 @@ export interface StreamingRecoveryContext {
 }
 
 /**
- * Mutable streaming accumulator for one (root_id, end_relative_path) file-group.
+ * Mutable streaming accumulator for one market + end_relative_path file-group.
  * Centralized here so processFileGapBatch stays a thin orchestrator.
  */
 export interface StreamingRecoveryAccumulator {

@@ -20,7 +20,7 @@ Key flags:
 Queue source:
 - `gaps` rows
 - `--id` takes precedence over retry-status queue selection
-- Default traversal is market-first: `collector/exchange/symbol`, then deterministic file order (`root_id/end_relative_path/id`).
+- Default traversal is market-first: `collector/exchange/symbol`, then deterministic file order (`end_relative_path/id`).
 - Queue reads are keyset-paged (`1024` rows/page) so fixgaps can keep writing gap statuses without holding a long-lived read cursor.
 
 ## Recovery batching
@@ -34,7 +34,7 @@ Queue source:
 - Fixgaps always provides an adapter batch callback; adapters can emit recovered batches through it, and any returned tail array is ingested through the same accumulator path.
 
 ## Pipeline
-For each grouped `(root_id, end_relative_path)`:
+For each grouped `(collector, exchange, symbol, end_relative_path)`:
 1. Resolve one recovery window per gap row from persisted payload timestamps (`start_ts` to `end_ts`), and skip windows with `gap_ms > 60d`.
 2. Call the exchange adapter with `onRecoveredBatch` callback support.
 3. Ingest callback batches and returned adapter tail through the same accumulator.
@@ -50,7 +50,7 @@ For each grouped `(root_id, end_relative_path)`:
 ```mermaid
 flowchart TD
   A["CLI fixgaps<br/>fn: runFixGaps"] --> B["Build keyset-paged queue from gaps rows (market-first order)<br/>fn: iterateGapFixEvents"]
-  B --> C["Group rows by root_id + end_relative_path<br/>fn: runFixGaps grouping loop"]
+  B --> C["Group rows by market + end_relative_path<br/>fn: runFixGaps grouping loop"]
   C --> D["processFileGapBatch for each file group<br/>fn: processFileGapBatch"]
 
   D --> E["Resolve adapter for exchange<br/>fn: adapterRegistry.getAdapter"]

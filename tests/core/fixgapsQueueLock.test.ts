@@ -63,20 +63,17 @@ async function createInputFile(fixture: Fixture, fileName: string): Promise<stri
   return path.posix.join(MARKET.collector, MARKET.bucket, MARKET.exchange, MARKET.symbol, fileName);
 }
 
-function insertIndexedFile(db: Db, root: string, relativePath: string): number {
-  const rootId = db.ensureRoot(root);
-  const row = classifyPath(rootId, relativePath);
+function insertIndexedFile(db: Db, _root: string, relativePath: string): void {
+  const row = classifyPath(relativePath);
   if (!row) {
     throw new Error(`Failed to classify ${relativePath}`);
   }
   db.insertFiles([row]);
-  return rootId;
 }
 
 function insertGapEvent(
   db: Db,
   payload: {
-    rootId: number;
     relativePath: string;
     gapMs: number;
     gapEndTs: number;
@@ -85,12 +82,11 @@ function insertGapEvent(
   db.db
     .prepare(
       `INSERT INTO gaps
-        (root_id, start_relative_path, end_relative_path, collector, exchange, symbol, gap_ms, gap_miss, start_ts, end_ts, gap_fix_status, gap_score)
+        (start_relative_path, end_relative_path, collector, exchange, symbol, gap_ms, gap_miss, start_ts, end_ts, gap_fix_status, gap_score)
        VALUES
-        (:rootId, :relativePath, :relativePath, :collector, :exchange, :symbol, :gapMs, :gapMiss, :startTs, :endTs, NULL, NULL);`,
+        (:relativePath, :relativePath, :collector, :exchange, :symbol, :gapMs, :gapMiss, :startTs, :endTs, NULL, NULL);`,
     )
     .run({
-      rootId: payload.rootId,
       relativePath: payload.relativePath,
       collector: MARKET.collector,
       exchange: MARKET.exchange,
@@ -116,18 +112,15 @@ test("fixgaps continues when another connection writes during queue processing",
   try {
     const firstRelativePath = await createInputFile(fixture, "2024-01-01-00");
     const secondRelativePath = await createInputFile(fixture, "2024-01-01-01");
-    const rootId = insertIndexedFile(db, fixture.root, firstRelativePath);
-    const secondRootId = insertIndexedFile(db, fixture.root, secondRelativePath);
-    assert.strictEqual(secondRootId, rootId);
+    insertIndexedFile(db, fixture.root, firstRelativePath);
+    insertIndexedFile(db, fixture.root, secondRelativePath);
 
     insertGapEvent(db, {
-      rootId,
       relativePath: firstRelativePath,
       gapMs: TS2 - TS0,
       gapEndTs: TS2,
     });
     insertGapEvent(db, {
-      rootId,
       relativePath: secondRelativePath,
       gapMs: TS4 - TS2,
       gapEndTs: TS4,

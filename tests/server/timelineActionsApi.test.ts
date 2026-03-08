@@ -149,10 +149,8 @@ test("timeline action clear deletes row state and outputs before reindexing sele
 
   const db = openDatabase(dbPath);
   try {
-    const rootId = db.ensureRoot(root);
     db.insertFiles([
       {
-        rootId,
         relativePath: "PI/2025/BYBIT/BTCUSDT/1735689600000.csv.gz",
         collector: Collector.PI,
         exchange: "BYBIT",
@@ -161,7 +159,6 @@ test("timeline action clear deletes row state and outputs before reindexing sele
         ext: ".gz",
       },
       {
-        rootId,
         relativePath: "PI/2025/BYBIT/ETHUSDT/1735689600000.csv.gz",
         collector: Collector.PI,
         exchange: "BYBIT",
@@ -172,7 +169,6 @@ test("timeline action clear deletes row state and outputs before reindexing sele
     ]);
     db.insertGaps(
       {
-        rootId,
         collector: "PI",
         exchange: "BYBIT",
         symbol: "BTCUSDT",
@@ -188,7 +184,6 @@ test("timeline action clear deletes row state and outputs before reindexing sele
     );
     db.insertGaps(
       {
-        rootId,
         collector: "PI",
         exchange: "BYBIT",
         symbol: "ETHUSDT",
@@ -223,7 +218,7 @@ test("timeline action clear deletes row state and outputs before reindexing sele
     const deps = buildDeps(root, {
       runIndex: async (config, activeDb) => {
         includePathsSeen = config.includePaths;
-        assert.strictEqual(countRows(activeDb, "files", "BTCUSDT"), 1);
+        assert.strictEqual(countRows(activeDb, "files", "BTCUSDT"), 0);
         assert.strictEqual(countRows(activeDb, "gaps", "BTCUSDT"), 0);
         assert.strictEqual(countRows(activeDb, "registry", "BTCUSDT"), 0);
         return {
@@ -252,7 +247,7 @@ test("timeline action clear deletes row state and outputs before reindexing sele
     assert.deepStrictEqual(result.details, {
       outputsDeleted: 1,
       eventsDeleted: 1,
-      filesDeleted: 0,
+      filesDeleted: 1,
       registryDeleted: 1,
       seen: 3,
       inserted: 1,
@@ -260,7 +255,7 @@ test("timeline action clear deletes row state and outputs before reindexing sele
       conflicts: 0,
       skipped: 0,
     });
-    assert.strictEqual(countRows(db, "files", "BTCUSDT"), 1);
+    assert.strictEqual(countRows(db, "files", "BTCUSDT"), 0);
     assert.strictEqual(countRows(db, "gaps", "BTCUSDT"), 0);
     assert.strictEqual(countRows(db, "registry", "BTCUSDT"), 0);
     assert.strictEqual(countRows(db, "files", "ETHUSDT"), 1);

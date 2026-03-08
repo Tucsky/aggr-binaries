@@ -4,12 +4,11 @@ import type { GapFixQueueRow } from "../../src/core/db.js";
 import { resolveFlushTargetFile } from "../../src/core/gaps/flushBatchTarget.js";
 
 const DAY_MS = 86_400_000;
+const ROOT_PATH = "/tmp/aggr-root";
 
 function buildGapRow(overrides: Partial<GapFixQueueRow>): GapFixQueueRow {
   return {
     id: 1,
-    root_id: 1,
-    root_path: "/tmp/aggr-root",
     start_relative_path: "PI/2025/KRAKEN/XBT-USD/2025-03-12-12.gz",
     end_relative_path: "PI/2025/KRAKEN/XBT-USD/2025-04-02-20.gz",
     collector: "PI",
@@ -28,6 +27,7 @@ function buildGapRow(overrides: Partial<GapFixQueueRow>): GapFixQueueRow {
 test("resolveFlushTargetFile routes wide early chunk to start file when chunk begins near gap start", () => {
   const row = buildGapRow({});
   const target = resolveFlushTargetFile(
+    ROOT_PATH,
     row,
     row.start_ts + 60_000,
     row.start_ts + (4 * DAY_MS),
@@ -40,6 +40,7 @@ test("resolveFlushTargetFile routes middle chunk to deterministic intermediate 4
   const row = buildGapRow({});
   const firstTradeTs = Date.UTC(2025, 2, 20, 14, 37, 0, 0);
   const target = resolveFlushTargetFile(
+    ROOT_PATH,
     row,
     firstTradeTs,
     firstTradeTs + (2 * 60_000),
@@ -52,6 +53,7 @@ test("resolveFlushTargetFile keeps end file routing for near-end chunks", () => 
   const row = buildGapRow({});
   const firstTradeTs = row.end_ts - DAY_MS + 1;
   const target = resolveFlushTargetFile(
+    ROOT_PATH,
     row,
     firstTradeTs,
     row.end_ts - 1,

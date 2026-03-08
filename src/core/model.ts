@@ -13,28 +13,20 @@ export enum QuoteCurrency {
 }
 
 // Database schema reference:
-// CREATE TABLE roots (
-//   id INTEGER PRIMARY KEY AUTOINCREMENT,
-//   path TEXT NOT NULL UNIQUE
-// );
-//
 // CREATE TABLE files (
-//   root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
-//   relative_path TEXT NOT NULL,
+//   relative_path TEXT PRIMARY KEY,
 //   collector TEXT NOT NULL,   -- RAM | PI
 //   exchange TEXT,
 //   symbol TEXT,
 //   start_ts INTEGER,
 //   ext TEXT,
-//   created_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
-//   PRIMARY KEY (root_id, relative_path)
+//   created_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000)
 // );
 // CREATE INDEX idx_files_exchange_symbol ON files(exchange, symbol);
 // CREATE INDEX idx_files_start_ts ON files(start_ts);
 // CREATE INDEX idx_files_collector ON files(collector);
 
 export interface IndexedFile {
-  rootId: number;
   relativePath: string; // POSIX separators
   collector: Collector;
   exchange: string;
@@ -44,7 +36,6 @@ export interface IndexedFile {
 }
 
 export interface FileSystemEntry {
-  rootId: number;
   rootPath: string;
   relativePath: string; // POSIX separators
   fullPath: string;
@@ -61,7 +52,6 @@ export interface IndexStats {
 
 // Row as stored in SQLite (snake_case, matches schema)
 export interface FileRow {
-  root_id: number;
   relative_path: string;
   collector: Collector;
   exchange: string;
@@ -152,7 +142,6 @@ export enum GapFixStatus {
 }
 
 export interface GapCtx {
-  rootId: number;
   collector: string;
   exchange: string;
   symbol: string;

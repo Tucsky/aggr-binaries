@@ -40,7 +40,6 @@ Path layout:
 
 ## Stored inventory model
 `index` maintains:
-- `roots`: indexed root paths
 - `files`: one row per file (`collector/exchange/symbol/start_ts/...`)
 - `indexed_market_ranges`: cached per-market min/max `start_ts`
 
@@ -59,8 +58,7 @@ Path layout:
 ```mermaid
 flowchart TD
   A["CLI index<br/>fn: runIndex"] --> B["Open DB and validate schema<br/>fn: openDatabase / migrate / assertSchema"]
-  B --> C["ensureRoot configured root<br/>fn: db.ensureRoot"]
-  C --> D{"--force?"}
+  B --> D{"--force?"}
   D -->|no| E["Load market high-watermarks from indexed_market_ranges<br/>fn: db.listIndexedMarketRanges"]
   D -->|yes| F[Use full-scan mode]
   E --> G["walkFiles over root and include paths<br/>fn: walkFiles"]
@@ -97,11 +95,13 @@ flowchart TD
 - Same input tree + config => same indexed set.
 - Duplicate paths are ignored by primary key.
 - Startup validates expected schema shape and required constraints.
-- No in-place DB migrations are performed.
-- Incompatible schema => fail fast with rebuild instruction.
+- Runtime does not auto-migrate incompatible schemas.
+- Root-id schema can be upgraded once with `npm run migrate:remove-root-id`.
+- Any other incompatible schema => fail fast with rebuild instruction.
 
 ## Troubleshooting
 - `Incompatible schema ...`: delete DB and rerun `index`.
+- Legacy `root_id` schema: run `npm run migrate:remove-root-id -- --db <path-to-index.sqlite>`.
 - `indexed_market_ranges is empty while files has data`: delete DB and rerun `index`.
 - Historical backfills (new files older than current market `end_ts`) require `npm start -- index --force` to reconcile.
 - Brand-new or unmatched market directories are discovered by default incremental scans.

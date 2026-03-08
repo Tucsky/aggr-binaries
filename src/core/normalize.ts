@@ -45,7 +45,6 @@ function stripCompression(name: string): string {
 }
 
 export function classifyPath(
-  rootId: number,
   relativePath: string,
 ): IndexedFile | null {
   const normalizedPath = path.sep === "/" ? relativePath : relativePath.split(path.sep).join("/");
@@ -75,7 +74,6 @@ export function classifyPath(
   if (!symbol) return null;
 
   return {
-    rootId,
     relativePath: normalizedPath,
     collector,
     exchange,

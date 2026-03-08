@@ -10,7 +10,6 @@ import { GapFixStatus } from "../../src/core/model.js";
 function insertGapEvent(
   db: Db,
   payload: {
-    rootId: number;
     relativePath: string;
     collector: string;
     exchange: string;
@@ -20,7 +19,6 @@ function insertGapEvent(
 ): void {
   db.insertGaps(
     {
-      rootId: payload.rootId,
       collector: payload.collector,
       exchange: payload.exchange,
       symbol: payload.symbol,
@@ -44,7 +42,6 @@ test("fixgaps queue stays symbol-local across page boundaries while statuses upd
   try {
     const collector = "RAM";
     const exchange = "BITMEX";
-    const rootId = db.ensureRoot(path.join(baseDir, "input"));
     const dogeUsdBucket2021 = "RAM/2021-2022/BITMEX/DOGEUSD/2022-08-13-00.gz";
     const dogeUsdBucket2022 = "RAM/2022/BITMEX/DOGEUSD/2022-08-15-00.gz";
     const dogeUsdtBucket2021 = "RAM/2021-2022/BITMEX/DOGEUSDT/2021-07-14-00.gz";
@@ -52,7 +49,6 @@ test("fixgaps queue stays symbol-local across page boundaries while statuses upd
     // 1024 rows force a second keyset page; the remaining two rows assert cross-bucket symbol ordering.
     for (let i = 1; i <= 1024; i += 1) {
       insertGapEvent(db, {
-        rootId,
         relativePath: dogeUsdBucket2021,
         collector,
         exchange,
@@ -61,7 +57,6 @@ test("fixgaps queue stays symbol-local across page boundaries while statuses upd
       });
     }
     insertGapEvent(db, {
-      rootId,
       relativePath: dogeUsdBucket2022,
       collector,
       exchange,
@@ -69,7 +64,6 @@ test("fixgaps queue stays symbol-local across page boundaries while statuses upd
       gapEndTs: 1_700_100_000_000,
     });
     insertGapEvent(db, {
-      rootId,
       relativePath: dogeUsdtBucket2021,
       collector,
       exchange,

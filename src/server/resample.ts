@@ -76,13 +76,14 @@ export async function ensurePreviewTimeframe(
   const maxEndFor = (tfMs: number): number => alignEnd(rootCompanion.endTs, tfMs);
   const targetMaxEnd = maxEndFor(targetMs);
 
+  const existingRegistryEntry = marketEntries.find((e) => e.timeframe === target);
   let existingCompanion = await readCompanion(
     ctx,
     collector,
     exchange,
     symbol,
     target,
-    marketEntries.find((e) => e.timeframe === target),
+    existingRegistryEntry,
   );
   if (existingCompanion) {
     const hasFiles = (await fileExists(dstBinPath)) && (await fileExists(dstCompanionPath));
@@ -97,9 +98,15 @@ export async function ensurePreviewTimeframe(
   }
   if (existingCompanion && existingCompanion.endTs === targetMaxEnd) {
     const normalized = normalizeCompanion(existingCompanion, target, targetMs);
-    upsertRegistryFromCompanion(ctx.db, collector, normalized);
+    const registryMatches =
+      existingRegistryEntry !== undefined &&
+      existingRegistryEntry.startTs === normalized.startTs &&
+      existingRegistryEntry.endTs === normalized.endTs;
+    if (!registryMatches) {
+      upsertRegistryFromCompanion(ctx.db, collector, normalized);
+    }
     console.log(
-      "[resample] fresh",
+      "[resample] up-to-date",
       `${collector}/${exchange}/${symbol}/${target}`,
       new Date(normalized.startTs).toISOString(),
       "->",
@@ -611,16 +618,12 @@ async function fileExists(p: string): Promise<boolean> {
 
 function deleteRegistryEntry(db: Db, key: RegistryKey): void {
   try {
-    db.db
-      .prepare(
-        `DELETE FROM registry WHERE collector = :collector AND exchange = :exchange AND symbol = :symbol AND timeframe = :timeframe;`,
-      )
-      .run({
-        collector: key.collector,
-        exchange: key.exchange,
-        symbol: key.symbol,
-        timeframe: key.timeframe,
-      });
+    db.replaceRegistry([], {
+      collector: key.collector,
+      exchange: key.exchange,
+      symbol: key.symbol,
+      timeframe: key.timeframe,
+    });
   } catch (err) {
     console.warn("[resample] failed to delete registry entry", key, err);
   }

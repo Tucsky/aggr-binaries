@@ -38,10 +38,8 @@ test("runClear removes selected market state then reindexes only that market", a
   };
 
   try {
-    const rootId = db.ensureRoot(root);
     db.insertFiles([
       {
-        rootId,
         relativePath: "PI/2025/BYBIT/BTCUSDT/2025-01-01-00.gz",
         collector: Collector.PI,
         exchange: "BYBIT",
@@ -50,7 +48,6 @@ test("runClear removes selected market state then reindexes only that market", a
         ext: ".gz",
       },
       {
-        rootId,
         relativePath: "PI/2025/BYBIT/ETHUSDT/2025-01-01-00.gz",
         collector: Collector.PI,
         exchange: "BYBIT",
@@ -61,7 +58,6 @@ test("runClear removes selected market state then reindexes only that market", a
     ]);
     db.insertGaps(
       {
-        rootId,
         collector: "PI",
         exchange: "BYBIT",
         symbol: "BTCUSDT",
@@ -77,7 +73,6 @@ test("runClear removes selected market state then reindexes only that market", a
     );
     db.insertGaps(
       {
-        rootId,
         collector: "PI",
         exchange: "BYBIT",
         symbol: "ETHUSDT",
@@ -112,11 +107,11 @@ test("runClear removes selected market state then reindexes only that market", a
     assert.deepStrictEqual(stats, {
       outputsDeleted: 1,
       eventsDeleted: 1,
-      filesDeleted: 0,
+      filesDeleted: 1,
       registryDeleted: 1,
       seen: 1,
-      inserted: 0,
-      existing: 1,
+      inserted: 1,
+      existing: 0,
       conflicts: 0,
       skipped: 0,
     });

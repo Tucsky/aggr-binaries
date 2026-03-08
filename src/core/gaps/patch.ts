@@ -67,6 +67,7 @@ export async function patchBinariesForRecoveredTrades(
 
   const sourceFiles = loadPatchSourceFiles(
     db,
+    config.root,
     market,
     globalMinTs,
     globalMaxTsExclusive,
@@ -178,6 +179,7 @@ async function loadPatchTargets(
 
 function loadPatchSourceFiles(
   db: Db,
+  rootPath: string,
   market: { collector: string; exchange: string; symbol: string },
   fromTsInclusive: number,
   toTsExclusive: number,
@@ -189,9 +191,8 @@ function loadPatchSourceFiles(
   const rowsInWindow =
     (db.db
       .prepare(
-        `SELECT r.path AS root_path, f.relative_path, f.start_ts
+        `SELECT f.relative_path, f.start_ts
          FROM files f
-         JOIN roots r ON r.id = f.root_id
          WHERE f.collector = :collector AND f.exchange = :exchange AND f.symbol = :symbol
            AND f.start_ts >= :scanFromTs AND f.start_ts <= :scanToTsInclusive
          ORDER BY f.start_ts, f.relative_path;`,
@@ -202,14 +203,13 @@ function loadPatchSourceFiles(
         symbol: market.symbol,
         scanFromTs,
         scanToTsInclusive,
-      }) as Array<{ root_path: string; relative_path: string; start_ts: number }>) ?? [];
+      }) as Array<{ relative_path: string; start_ts: number }>) ?? [];
 
   const predecessorRows =
     (db.db
       .prepare(
-        `SELECT r.path AS root_path, f.relative_path, f.start_ts
+        `SELECT f.relative_path, f.start_ts
          FROM files f
-         JOIN roots r ON r.id = f.root_id
          WHERE f.collector = :collector AND f.exchange = :exchange AND f.symbol = :symbol
            AND f.start_ts < :scanFromTs
          ORDER BY f.start_ts DESC, f.relative_path DESC
@@ -220,11 +220,11 @@ function loadPatchSourceFiles(
         exchange: market.exchange,
         symbol: market.symbol,
         scanFromTs,
-      }) as Array<{ root_path: string; relative_path: string; start_ts: number }>) ?? [];
+      }) as Array<{ relative_path: string; start_ts: number }>) ?? [];
 
   const dedup = new Map<string, PatchSourceFile>();
   for (const row of [...rowsInWindow, ...predecessorRows]) {
-    const absolutePath = path.join(row.root_path, row.relative_path);
+    const absolutePath = path.join(rootPath, row.relative_path);
     dedup.set(absolutePath, {
       absolutePath,
       relativePath: row.relative_path,

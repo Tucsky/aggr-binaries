@@ -148,6 +148,37 @@ async function createLiquidationGapFixture(): Promise<FixturePaths> {
   return { baseDir, root, outDir, fileRelatives: [relPlain] };
 }
 
+async function createPagedFilesFixture(fileCount: number): Promise<FixturePaths> {
+  const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "aggr-process-paged-"));
+  const root = path.join(baseDir, "input");
+  const outDir = path.join(baseDir, "out");
+  const marketDir = path.join(root, MARKET.collector, MARKET.bucket, MARKET.exchange, MARKET.symbol);
+
+  await fs.mkdir(marketDir, { recursive: true });
+
+  const fileRelatives: string[] = new Array(fileCount);
+  const baseHourTs = 1_704_067_200_000;
+
+  for (let i = 0; i < fileCount; i += 1) {
+    const hourTs = baseHourTs + i * 3_600_000;
+    const fileName = formatUtcHourFileName(hourTs);
+    const filePath = path.join(marketDir, fileName);
+    await fs.writeFile(filePath, `${hourTs + 1_000} 50000 1 1 0\n`);
+    fileRelatives[i] = path.posix.join(MARKET.collector, MARKET.bucket, MARKET.exchange, MARKET.symbol, fileName);
+  }
+
+  return { baseDir, root, outDir, fileRelatives };
+}
+
+function formatUtcHourFileName(ts: number): string {
+  const d = new Date(ts);
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}-${pad2(d.getUTCHours())}`;
+}
+
+function pad2(value: number): string {
+  return value.toString().padStart(2, "0");
+}
+
 function buildConfig(root: string, outDir: string, dbPath: string): Config {
   return {
     root,
@@ -163,15 +194,14 @@ function buildConfig(root: string, outDir: string, dbPath: string): Config {
   };
 }
 
-function insertFixtureFiles(db: Db, root: string, fileRelatives: string[], opts?: { start?: number; count?: number }) {
-  const rootId = db.ensureRoot(root);
+function insertFixtureFiles(db: Db, _root: string, fileRelatives: string[], opts?: { start?: number; count?: number }) {
   const start = opts?.start ?? 0;
   const end = Math.min(fileRelatives.length, start + (opts?.count ?? fileRelatives.length - start));
   const rows = [];
 
   for (let i = start; i < end; i += 1) {
     const rel = fileRelatives[i];
-    const row = classifyPath(rootId, rel);
+    const row = classifyPath(rel);
     if (!row) throw new Error(`Failed to classify fixture path ${rel}`);
     rows.push(row);
   }
@@ -347,11 +377,9 @@ test("process fails fast on indexed input missing on disk without mutating file 
 
   try {
     insertFixtureFiles(db, fixture.root, fixture.fileRelatives);
-    const rootId = db.ensureRoot(fixture.root);
     const missingRelative = fixture.fileRelatives[0];
     db.insertGaps(
       {
-        rootId,
         collector: MARKET.collector,
         exchange: MARKET.exchange,
         symbol: MARKET.symbol,
@@ -372,12 +400,60 @@ test("process fails fast on indexed input missing on disk without mutating file 
       return message.includes("indexed input file missing on disk") && message.includes(missingRelative);
     });
     const eventRow = db.db
-      .prepare("SELECT COUNT(*) AS cnt FROM gaps WHERE root_id = :rootId AND end_relative_path = :relativePath;")
-      .get({ rootId, relativePath: missingRelative }) as { cnt: number };
+      .prepare(
+        "SELECT COUNT(*) AS cnt FROM gaps WHERE collector = :collector AND exchange = :exchange AND symbol = :symbol AND end_relative_path = :relativePath;",
+      )
+      .get({
+        collector: MARKET.collector,
+        exchange: MARKET.exchange,
+        symbol: MARKET.symbol,
+        relativePath: missingRelative,
+      }) as { cnt: number };
     assert.strictEqual(eventRow.cnt, 1);
 
     const outputBin = path.join(fixture.outDir, MARKET.collector, MARKET.exchange, MARKET.symbol, `${TIMEFRAME}.bin`);
     await assert.rejects(fs.stat(outputBin), (err: unknown) => (err as { code?: string } | null)?.code === "ENOENT");
+  } finally {
+    db.close();
+  }
+});
+
+test("process iterates files across sqlite keyset pages without skipping final ranges", async () => {
+  const fixture = await createPagedFilesFixture(1030);
+  const dbPath = path.join(fixture.baseDir, "paged.sqlite");
+  const db = openDatabase(dbPath);
+  const config = buildConfig(fixture.root, fixture.outDir, dbPath);
+
+  try {
+    insertFixtureFiles(db, fixture.root, fixture.fileRelatives);
+    await runProcess(config, db);
+
+    const maxStart = db.db
+      .prepare(
+        `SELECT MAX(start_ts) AS max_start
+         FROM files
+         WHERE collector = :collector AND exchange = :exchange AND symbol = :symbol;`,
+      )
+      .get({
+        collector: MARKET.collector,
+        exchange: MARKET.exchange,
+        symbol: MARKET.symbol,
+      }) as { max_start?: number };
+    assert.ok(Number.isFinite(maxStart.max_start), "fixture should include indexed files");
+
+    const companionPath = path.join(fixture.outDir, MARKET.collector, MARKET.exchange, MARKET.symbol, `${TIMEFRAME}.json`);
+    const companionRaw = await fs.readFile(companionPath, "utf8");
+    const companion = JSON.parse(companionRaw) as CompanionMetadata;
+    assert.strictEqual(companion.lastInputStartTs, maxStart.max_start);
+
+    const registryRow = db.getRegistryEntry({
+      collector: MARKET.collector,
+      exchange: MARKET.exchange,
+      symbol: MARKET.symbol,
+      timeframe: TIMEFRAME,
+    });
+    assert.ok(registryRow !== null);
+    assert.strictEqual(registryRow?.endTs, companion.endTs);
   } finally {
     db.close();
   }

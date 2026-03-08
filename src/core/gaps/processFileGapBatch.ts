@@ -24,7 +24,7 @@ const DEBUG_FIXGAPS = process.env.AGGR_FIXGAPS_DEBUG === "1";
 
 /**
  * Process all gap events that belong to a single raw input file.
- * "Batch" here means grouped by (root_id, end_relative_path).
+ * "Batch" here means grouped by market + end_relative_path.
  */
 export async function processFileGapBatch(
   fileGapEvents: GapFixEventRow[],

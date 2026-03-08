@@ -67,18 +67,15 @@ function buildConfig(root: string, outDir: string, dbPath: string): Config {
   };
 }
 
-function insertIndexedFile(db: Db, root: string, relativePath: string): { rootId: number } {
-  const rootId = db.ensureRoot(root);
-  const row = classifyPath(rootId, relativePath);
+function insertIndexedFile(db: Db, _root: string, relativePath: string): void {
+  const row = classifyPath(relativePath);
   if (!row) throw new Error(`Failed to classify ${relativePath}`);
   db.insertFiles([row]);
-  return { rootId };
 }
 
 function insertGapEvent(
   db: Db,
   payload: {
-    rootId: number;
     relativePath: string;
     gapMs: number;
     gapEndTs?: number;
@@ -90,12 +87,11 @@ function insertGapEvent(
   db.db
     .prepare(
       `INSERT INTO gaps
-        (root_id, start_relative_path, end_relative_path, collector, exchange, symbol, gap_ms, gap_miss, start_ts, end_ts, gap_fix_status, gap_score)
+        (start_relative_path, end_relative_path, collector, exchange, symbol, gap_ms, gap_miss, start_ts, end_ts, gap_fix_status, gap_score)
        VALUES
-        (:rootId, :relativePath, :relativePath, :collector, :exchange, :symbol, :gapMs, 1, :startTs, :endTs, NULL, NULL);`,
+        (:relativePath, :relativePath, :collector, :exchange, :symbol, :gapMs, 1, :startTs, :endTs, NULL, NULL);`,
     )
     .run({
-      rootId: payload.rootId,
       relativePath: payload.relativePath,
       collector: MARKET.collector,
       exchange: MARKET.exchange,
@@ -131,9 +127,8 @@ test("fixgaps skips recovery for gaps over 60 days", async () => {
   const fixture = await createFixture();
   const db = openDatabase(fixture.dbPath);
   try {
-    const { rootId } = insertIndexedFile(db, fixture.root, fixture.relativePath);
+    insertIndexedFile(db, fixture.root, fixture.relativePath);
     insertGapEvent(db, {
-      rootId,
       relativePath: fixture.relativePath,
       gapMs: (60 * DAY_MS) + 1,
       gapEndTs: TS1,
@@ -163,9 +158,8 @@ test("fixgaps processes api-only gaps over 7 days instead of skipping them", asy
   const fixture = await createFixture();
   const db = openDatabase(fixture.dbPath);
   try {
-    const { rootId } = insertIndexedFile(db, fixture.root, fixture.relativePath);
+    insertIndexedFile(db, fixture.root, fixture.relativePath);
     insertGapEvent(db, {
-      rootId,
       relativePath: fixture.relativePath,
       gapMs: (7 * DAY_MS) + 1,
       gapEndTs: TS1,
@@ -199,11 +193,10 @@ test("fixgaps defaults recovered batch merges to gap end file path", async () =>
   const tailTs = TS0 + DAY_MS + 120_000;
   try {
     await fs.writeFile(fixture.fullPath, `${TS0} 100 1 1 0\n${tailTs} 102 1 0 0\n`);
-    const { rootId } = insertIndexedFile(db, fixture.root, fixture.relativePath);
+    insertIndexedFile(db, fixture.root, fixture.relativePath);
     await runProcess(buildConfig(fixture.root, fixture.outDir, fixture.dbPath), db);
     db.db.exec("DELETE FROM gaps;");
     insertGapEvent(db, {
-      rootId,
       relativePath: fixture.relativePath,
       gapMs: 2 * DAY_MS,
       gapEndTs: tailTs,
@@ -253,11 +246,10 @@ test("fixgaps consumes adapter streamed batches without relying on a monolithic 
   const recoveredA = TS0 + 30_000;
   const recoveredB = TS0 + 90_000;
   try {
-    const { rootId } = insertIndexedFile(db, fixture.root, fixture.relativePath);
+    insertIndexedFile(db, fixture.root, fixture.relativePath);
     await runProcess(buildConfig(fixture.root, fixture.outDir, fixture.dbPath), db);
     db.db.exec("DELETE FROM gaps;");
     insertGapEvent(db, {
-      rootId,
       relativePath: fixture.relativePath,
       gapMs: TS1 - TS0,
       gapEndTs: TS1,

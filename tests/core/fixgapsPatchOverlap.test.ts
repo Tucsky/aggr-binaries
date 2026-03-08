@@ -96,20 +96,17 @@ function buildConfig(root: string, outDir: string, dbPath: string, timeframe: st
   };
 }
 
-function insertIndexedFile(db: Db, root: string, relativePath: string): number {
-  const rootId = db.ensureRoot(root);
-  const row = classifyPath(rootId, relativePath);
+function insertIndexedFile(db: Db, _root: string, relativePath: string): void {
+  const row = classifyPath(relativePath);
   if (!row) {
     throw new Error(`Failed to classify ${relativePath}`);
   }
   db.insertFiles([row]);
-  return rootId;
 }
 
 function insertGapEvent(
   db: Db,
   payload: {
-    rootId: number;
     relativePath: string;
     startLine?: number;
     endLine?: number;
@@ -122,12 +119,11 @@ function insertGapEvent(
   const result = db.db
     .prepare(
       `INSERT INTO gaps
-        (root_id, start_relative_path, end_relative_path, collector, exchange, symbol, gap_ms, gap_miss, start_ts, end_ts, gap_fix_status, gap_score)
+        (start_relative_path, end_relative_path, collector, exchange, symbol, gap_ms, gap_miss, start_ts, end_ts, gap_fix_status, gap_score)
        VALUES
-        (:rootId, :relativePath, :relativePath, :collector, :exchange, :symbol, :gapMs, :gapMiss, :startTs, :endTs, NULL, NULL);`,
+        (:relativePath, :relativePath, :collector, :exchange, :symbol, :gapMs, :gapMiss, :startTs, :endTs, NULL, NULL);`,
     )
     .run({
-      rootId: payload.rootId,
       relativePath: payload.relativePath,
       collector: MARKET.collector,
       exchange: MARKET.exchange,
@@ -279,14 +275,14 @@ test("fixgaps patches 4h slot with overlapping market files, not just current fi
   const db = openDatabase(fixture.dbPath);
 
   try {
-    const rootId = insertIndexedFile(db, fixture.root, fixture.relativePathA);
+    insertIndexedFile(db, fixture.root, fixture.relativePathA);
     insertIndexedFile(db, fixture.root, fixture.relativePathB);
 
     await runProcess(buildConfig(fixture.root, fixture.outDir, fixture.dbPath, "1m"), db);
     await runProcess(buildConfig(fixture.root, fixture.outDir, fixture.dbPath, "4h"), db);
     db.db.exec("DELETE FROM gaps;");
 
-    insertGapEvent(db, { rootId, relativePath: fixture.relativePathA });
+    insertGapEvent(db, { relativePath: fixture.relativePathA });
 
     const before = await readCandleAtSlot(fixture.outDir, "4h", SLOT_4H);
     assert.strictEqual(before.close, 4_000_000);
@@ -313,8 +309,15 @@ test("fixgaps patches 4h slot with overlapping market files, not just current fi
     assert.strictEqual(after4h.close, 4_000_000);
 
     const eventRow = db.db
-      .prepare("SELECT gap_fix_status, gap_fix_recovered FROM gaps WHERE root_id = :rootId AND end_relative_path = :relativePath;")
-      .get({ rootId, relativePath: fixture.relativePathA }) as { gap_fix_status: string | null; gap_fix_recovered: number | null };
+      .prepare(
+        "SELECT gap_fix_status, gap_fix_recovered FROM gaps WHERE collector = :collector AND exchange = :exchange AND symbol = :symbol AND end_relative_path = :relativePath;",
+      )
+      .get({
+        collector: MARKET.collector,
+        exchange: MARKET.exchange,
+        symbol: MARKET.symbol,
+        relativePath: fixture.relativePathA,
+      }) as { gap_fix_status: string | null; gap_fix_recovered: number | null };
     assert.strictEqual(eventRow.gap_fix_status, GapFixStatus.Fixed);
     assert.strictEqual(eventRow.gap_fix_recovered, 1);
   } finally {

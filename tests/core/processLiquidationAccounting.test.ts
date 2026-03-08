@@ -35,9 +35,8 @@ function buildConfig(root: string, outDir: string, dbPath: string): Config {
   };
 }
 
-function insertFixtureFile(db: Db, root: string, relativePath: string): void {
-  const rootId = db.ensureRoot(root);
-  const row = classifyPath(rootId, relativePath);
+function insertFixtureFile(db: Db, _root: string, relativePath: string): void {
+  const row = classifyPath(relativePath);
   if (!row) throw new Error(`Failed to classify fixture path ${relativePath}`);
   db.insertFiles([row]);
 }

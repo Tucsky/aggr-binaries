@@ -116,10 +116,8 @@ test("timeline markets can be filtered by timeframe", async () => {
 test("timeline markets include indexed rows and prefer registry ranges when available", async () => {
   const db = await withDb();
   try {
-    const rootId = db.ensureRoot("/tmp/source");
     db.insertFiles([
       {
-        rootId,
         relativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
         collector: Collector.PI,
         exchange: "BYBIT",
@@ -127,7 +125,6 @@ test("timeline markets include indexed rows and prefer registry ranges when avai
         startTs: 100,
       },
       {
-        rootId,
         relativePath: "PI/BYBIT/BTCUSDT/2024-01-02.gz",
         collector: Collector.PI,
         exchange: "BYBIT",
@@ -135,7 +132,6 @@ test("timeline markets include indexed rows and prefer registry ranges when avai
         startTs: 200,
       },
       {
-        rootId,
         relativePath: "RAM/BINANCE/ETHUSDT/2024-01-01.gz",
         collector: Collector.RAM,
         exchange: "BINANCE",
@@ -226,10 +222,8 @@ test("timeline markets reject legacy databases when indexed ranges are missing o
   const dbPath = path.join(root, "index.sqlite");
   const db = openDatabase(dbPath);
   try {
-    const rootId = db.ensureRoot("/tmp/source");
     db.insertFiles([
       {
-        rootId,
         relativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
         collector: Collector.PI,
         exchange: "BYBIT",
@@ -237,7 +231,6 @@ test("timeline markets reject legacy databases when indexed ranges are missing o
         startTs: 100,
       },
       {
-        rootId,
         relativePath: "PI/BYBIT/BTCUSDT/2024-01-02.gz",
         collector: Collector.PI,
         exchange: "BYBIT",
@@ -245,7 +238,6 @@ test("timeline markets reject legacy databases when indexed ranges are missing o
         startTs: 140,
       },
       {
-        rootId,
         relativePath: "RAM/BINANCE/ETHUSDT/2024-01-01.gz",
         collector: Collector.RAM,
         exchange: "BINANCE",
@@ -273,10 +265,8 @@ test("timeline markets reject legacy databases when indexed ranges are missing o
 test("timeline events use persisted end_ts and end_relative_path from gaps rows", async () => {
   const db = await withDb();
   try {
-    const rootId = db.ensureRoot("/tmp/source");
     db.insertFiles([
       {
-        rootId,
         relativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
         collector: Collector.PI,
         exchange: "BYBIT",
@@ -287,12 +277,11 @@ test("timeline events use persisted end_ts and end_relative_path from gaps rows"
     db.db
       .prepare(
         `INSERT INTO gaps
-          (root_id, start_relative_path, end_relative_path, collector, exchange, symbol, gap_ms, gap_miss, start_ts, end_ts, gap_score)
+          (start_relative_path, end_relative_path, collector, exchange, symbol, gap_ms, gap_miss, start_ts, end_ts, gap_score)
          VALUES
-          (:rootId, :relativePath, :relativePath, :collector, :exchange, :symbol, 0, 0, 100, 200, NULL);`,
+          (:relativePath, :relativePath, :collector, :exchange, :symbol, 0, 0, 100, 200, NULL);`,
       )
       .run({
-        rootId,
         relativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
         collector: "PI",
         exchange: "BYBIT",
@@ -300,7 +289,6 @@ test("timeline events use persisted end_ts and end_relative_path from gaps rows"
       });
     db.insertGaps(
       {
-        rootId,
         collector: "PI",
         exchange: "BYBIT",
         symbol: "BTCUSDT",
@@ -344,10 +332,8 @@ test("timeline events use persisted end_ts and end_relative_path from gaps rows"
 test("timeline markets support identity filters with normalized collector/exchange", async () => {
   const db = await withDb();
   try {
-    const rootId = db.ensureRoot("/tmp/source");
     db.insertFiles([
       {
-        rootId,
         relativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
         collector: Collector.PI,
         exchange: "BYBIT",
@@ -355,7 +341,6 @@ test("timeline markets support identity filters with normalized collector/exchan
         startTs: 100,
       },
       {
-        rootId,
         relativePath: "RAM/BINANCE/ETHUSDT/2024-01-01.gz",
         collector: Collector.RAM,
         exchange: "BINANCE",
@@ -417,10 +402,8 @@ test("timeline markets support identity filters with normalized collector/exchan
 test("timeline events symbol exact mode excludes partial symbol matches", async () => {
   const db = await withDb();
   try {
-    const rootId = db.ensureRoot("/tmp/source");
     db.insertFiles([
       {
-        rootId,
         relativePath: "PI/BYBIT/BTC/2024-01-01.gz",
         collector: Collector.PI,
         exchange: "BYBIT",
@@ -428,7 +411,6 @@ test("timeline events symbol exact mode excludes partial symbol matches", async 
         startTs: 100,
       },
       {
-        rootId,
         relativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
         collector: Collector.PI,
         exchange: "BYBIT",
@@ -438,7 +420,6 @@ test("timeline events symbol exact mode excludes partial symbol matches", async 
     ]);
     db.insertGaps(
       {
-        rootId,
         collector: "PI",
         exchange: "BYBIT",
         symbol: "BTC",
@@ -454,7 +435,6 @@ test("timeline events symbol exact mode excludes partial symbol matches", async 
     );
     db.insertGaps(
       {
-        rootId,
         collector: "PI",
         exchange: "BYBIT",
         symbol: "BTCUSDT",
@@ -499,10 +479,8 @@ test("timeline events symbol exact mode excludes partial symbol matches", async 
 test("timeline events are deterministically ordered by market, timestamp, and id", async () => {
   const db = await withDb();
   try {
-    const rootId = db.ensureRoot("/tmp/source");
     db.insertFiles([
       {
-        rootId,
         relativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
         collector: Collector.PI,
         exchange: "BYBIT",
@@ -510,7 +488,6 @@ test("timeline events are deterministically ordered by market, timestamp, and id
         startTs: 200,
       },
       {
-        rootId,
         relativePath: "RAM/BINANCE/ETHUSDT/2024-01-01.gz",
         collector: Collector.RAM,
         exchange: "BINANCE",
@@ -520,7 +497,6 @@ test("timeline events are deterministically ordered by market, timestamp, and id
     ]);
     db.insertGaps(
       {
-        rootId,
         collector: "RAM",
         exchange: "BINANCE",
         symbol: "ETHUSDT",
@@ -536,7 +512,6 @@ test("timeline events are deterministically ordered by market, timestamp, and id
     );
     db.insertGaps(
       {
-        rootId,
         collector: "PI",
         exchange: "BYBIT",
         symbol: "BTCUSDT",
@@ -552,7 +527,6 @@ test("timeline events are deterministically ordered by market, timestamp, and id
     );
     db.insertGaps(
       {
-        rootId,
         collector: "PI",
         exchange: "BYBIT",
         symbol: "BTCUSDT",
@@ -585,10 +559,8 @@ test("timeline events are deterministically ordered by market, timestamp, and id
 test("timeline events can be limited to an explicit market subset", async () => {
   const db = await withDb();
   try {
-    const rootId = db.ensureRoot("/tmp/source");
     db.insertFiles([
       {
-        rootId,
         relativePath: "PI/BYBIT/BTCUSDT/2024-01-01.gz",
         collector: Collector.PI,
         exchange: "BYBIT",
@@ -596,7 +568,6 @@ test("timeline events can be limited to an explicit market subset", async () => 
         startTs: 100,
       },
       {
-        rootId,
         relativePath: "RAM/BITMEX/ETHUSD/2024-01-01.gz",
         collector: Collector.RAM,
         exchange: "BITMEX",
@@ -606,7 +577,6 @@ test("timeline events can be limited to an explicit market subset", async () => 
     ]);
     db.insertGaps(
       {
-        rootId,
         collector: "PI",
         exchange: "BYBIT",
         symbol: "BTCUSDT",
@@ -622,7 +592,6 @@ test("timeline events can be limited to an explicit market subset", async () => 
     );
     db.insertGaps(
       {
-        rootId,
         collector: "RAM",
         exchange: "BITMEX",
         symbol: "ETHUSD",

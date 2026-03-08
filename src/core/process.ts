@@ -61,6 +61,11 @@ interface MarketRef {
   symbol: string;
 }
 
+interface FileCursor {
+  startTs: number;
+  relativePath: string;
+}
+
 interface MarketFlushState {
   outBase: string;
   binaryPath: string;
@@ -81,6 +86,7 @@ const processProgress = createProgressReporter({
   envVar: "AGGR_PROCESS_PROGRESS",
   prefix: "[process]",
 });
+const PROCESS_FILES_PAGE_SIZE = 1024;
 
 export async function runProcess(config: Config, db: Db): Promise<void> {
   try {
@@ -99,7 +105,7 @@ export async function runProcess(config: Config, db: Db): Promise<void> {
     }
 
     const timeframe = config.timeframe;
-    const markets = iterateMarkets(db, collectors, allowExchange, allowSymbol);
+    const markets = listMarkets(db, collectors, allowExchange, allowSymbol);
 
     processProgress.log(
       `[process] collectors=${collectors.join(",")} markets=${totalMarkets} files=${totalCandidates} timeframe=${timeframe} filters=${allowExchange || "ALL"}/${allowSymbol || "ALL"} (market-first)`,
@@ -148,7 +154,7 @@ function countCandidateFiles(db: Db, collectors: string[], allowExchange?: strin
   return row?.count ? Number(row.count) : 0;
 }
 
-function iterateMarkets(db: Db, collectors: string[], allowExchange?: string, allowSymbol?: string): Iterable<MarketRef> {
+function listMarkets(db: Db, collectors: string[], allowExchange?: string, allowSymbol?: string): MarketRef[] {
   const stmt = db.db.prepare(
     `SELECT DISTINCT collector, exchange, symbol FROM files
      WHERE collector IN (${collectors.map((_, i) => `:c${i}`).join(",")})
@@ -161,7 +167,7 @@ function iterateMarkets(db: Db, collectors: string[], allowExchange?: string, al
     allowSymbol: allowSymbol ?? null,
   };
   collectors.forEach((c, i) => (params[`c${i}`] = c));
-  return stmt.iterate(params) as Iterable<MarketRef>;
+  return (stmt.all(params) as unknown as MarketRef[]) ?? [];
 }
 
 function countMarkets(db: Db, collectors: string[], allowExchange?: string, allowSymbol?: string): number {
@@ -189,18 +195,56 @@ function iterateFilesForMarket(
   market: MarketRef,
   minStartTs?: number,
 ): Iterable<FileRow> {
+  // Page by keyset to avoid a long-lived sqlite iterator while per-file writes are happening.
+  return {
+    *[Symbol.iterator](): Iterator<FileRow> {
+      let cursor: FileCursor | undefined;
+      for (;;) {
+        const rows = selectFilesForMarketPage(db, market, minStartTs, PROCESS_FILES_PAGE_SIZE, cursor);
+        if (!rows.length) return;
+        for (let i = 0; i < rows.length; i += 1) {
+          yield rows[i];
+        }
+        const last = rows[rows.length - 1];
+        cursor = {
+          startTs: last.start_ts,
+          relativePath: last.relative_path,
+        };
+      }
+    },
+  };
+}
+
+function selectFilesForMarketPage(
+  db: Db,
+  market: MarketRef,
+  minStartTs: number | undefined,
+  pageLimit: number,
+  cursor?: FileCursor,
+): FileRow[] {
   const stmt = db.db.prepare(
     `SELECT * FROM files
-     WHERE collector = :collector AND exchange = :exchange AND symbol = :symbol
+     WHERE collector = :collector
+       AND exchange = :exchange
+       AND symbol = :symbol
        AND (:minStartTs IS NULL OR start_ts >= :minStartTs)
-     ORDER BY start_ts, relative_path;`,
+       AND (
+         :cursorStartTs IS NULL
+         OR start_ts > :cursorStartTs
+         OR (start_ts = :cursorStartTs AND relative_path > :cursorRelativePath)
+       )
+     ORDER BY start_ts, relative_path
+     LIMIT :pageLimit;`,
   );
-  return stmt.iterate({
+  return (stmt.all({
     collector: market.collector,
     exchange: market.exchange,
     symbol: market.symbol,
     minStartTs: minStartTs ?? null,
-  }) as Iterable<FileRow>;
+    cursorStartTs: cursor?.startTs ?? null,
+    cursorRelativePath: cursor?.relativePath ?? null,
+    pageLimit,
+  }) as unknown as FileRow[]) ?? [];
 }
 
 async function startAccumulatorForMarket(
@@ -301,6 +345,7 @@ async function processByMarket(opts: {
       needsResumeRewrite: Boolean(resumeSlot && acc.companion),
       hasFlushed: false,
     };
+    const pendingGaps: PersistedGap[] = [];
     let lastFlushAt = Date.now();
 
     for (const file of files) {
@@ -311,14 +356,8 @@ async function processByMarket(opts: {
         timeframeMs,
         skipBeforeTs: resumeSlot,
       });
-      db.deleteGapsForEndFile(file.root_id, file.relative_path);
       if (gaps.length) {
-        db.insertGaps({
-          rootId: file.root_id,
-          collector: acc.collector,
-          exchange: acc.exchange,
-          symbol: acc.symbol,
-        }, gaps);
+        pendingGaps.push(...gaps);
         gapsCount += gaps.length;
       }
 
@@ -337,16 +376,18 @@ async function processByMarket(opts: {
         /* console.log(
           `[${acc.collector}/${acc.exchange}/${acc.symbol}/${timeframe}] triggering interval flush elapsedMs=${now - lastFlushAt}`,
         ); */
-        const flushed = await flushMarketOutput(acc, config, db, flushState, { final: false });
-        if (flushed) {
+        const flushedOutput = await flushMarketOutput(acc, config, db, flushState, { final: false });
+        const flushedGaps = flushPendingGaps(db, acc, pendingGaps);
+        if (flushedOutput || flushedGaps) {
           lastFlushAt = now;
           logHeartbeat();
         }
       }
     }
 
-    const finalFlushed = await flushMarketOutput(acc, config, db, flushState, { final: true });
-    if (finalFlushed) {
+    const finalFlushedOutput = await flushMarketOutput(acc, config, db, flushState, { final: true });
+    const finalFlushedGaps = flushPendingGaps(db, acc, pendingGaps);
+    if (finalFlushedOutput || finalFlushedGaps) {
       logHeartbeat();
     }
     processedMarkets += 1;
@@ -354,6 +395,20 @@ async function processByMarket(opts: {
   }
 
   return { totalLines, totalTradesKept, processedFiles, processedMarkets, maxBuckets, gapsCount };
+}
+
+function flushPendingGaps(db: Db, acc: Accumulator, pendingGaps: PersistedGap[]): boolean {
+  if (!pendingGaps.length) return false;
+  db.insertGaps(
+    {
+      collector: acc.collector,
+      exchange: acc.exchange,
+      symbol: acc.symbol,
+    },
+    pendingGaps,
+  );
+  pendingGaps.length = 0;
+  return true;
 }
 
 async function streamFile(opts: {
