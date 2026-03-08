@@ -60,14 +60,12 @@
   } from "../lib/features/timeline/timelineSurfaceInteraction.js";
   const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
   const ROW_HEIGHT = TIMELINE_ROW_HEIGHT;
-  const OVERSCAN = 8;
+  const OVERSCAN = 0;
   // Intentionally kept in one page: timeline viewport math, row virtualization, and pointer interactions are tightly coupled.
   const PAN_OVERSCROLL_RATIO = 0.01;
   const SYMBOL_INPUT_DEBOUNCE_MS = 180;
   const VIEWPORT_EVENT_RELOAD_DEBOUNCE_MS = 48;
-  const EVENT_ROW_FETCH_OVERSCAN = 2;
   const EVENT_RANGE_OVERSCAN_RATIO = 0.5;
-  const MAX_EVENT_ROWS_PER_REQUEST = 24;
   const EVENT_CACHE_ROW_LIMIT = 128;
   const EVENT_CACHE_EVENTS_LIMIT = 60_000;
   let loadingMarkets = false;
@@ -332,17 +330,13 @@
       resetLoadedEventsState(true, false);
     }
 
-    const visibleStartIndex = Math.max(0, Math.floor(Math.max(0, scrollTop) / ROW_HEIGHT));
-    const visibleEndIndex = Math.min(
-      filteredMarkets.length,
-      Math.ceil((Math.max(0, scrollTop) + Math.max(0, viewportHeight)) / ROW_HEIGHT),
-    );
+    const visibleRowCount = Math.max(1, endIndex - startIndex);
     const selection = selectTimelineViewportEventRows(
       filteredMarkets,
-      visibleStartIndex,
-      visibleEndIndex,
-      EVENT_ROW_FETCH_OVERSCAN,
-      MAX_EVENT_ROWS_PER_REQUEST,
+      startIndex,
+      endIndex,
+      0,
+      visibleRowCount,
     );
     if (!selection.rows.length) {
       eventAbort?.abort();

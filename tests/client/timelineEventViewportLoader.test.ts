@@ -33,6 +33,33 @@ test("selectTimelineViewportEventRows applies row overscan and max row cap deter
   ]);
 });
 
+test("selectTimelineViewportEventRows can map exact visible window without extra overscan or cap", () => {
+  const markets: TimelineMarket[] = [];
+  for (let i = 0; i < 20; i += 1) {
+    markets.push({
+      collector: "PI",
+      exchange: "BYBIT",
+      symbol: `SYM${i}`,
+      timeframe: "1m",
+      startTs: 1,
+      endTs: 2,
+    });
+  }
+  const visibleStartIndex = 7;
+  const visibleEndIndex = 12;
+  const selected = selectTimelineViewportEventRows(
+    markets,
+    visibleStartIndex,
+    visibleEndIndex,
+    0,
+    visibleEndIndex - visibleStartIndex,
+  );
+  assert.deepStrictEqual(
+    selected.rows.map((row) => row.symbol),
+    ["SYM7", "SYM8", "SYM9", "SYM10", "SYM11"],
+  );
+});
+
 test("fetch row selection from visible window keeps all visible rows under row cap", () => {
   const markets: TimelineMarket[] = [];
   for (let i = 0; i < 200; i += 1) {

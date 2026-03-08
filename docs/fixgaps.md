@@ -101,8 +101,8 @@ Server query contract:
 - Returned order is deterministic: `collector, exchange, symbol, ts, id`.
 
 Viewport loading/caching invariants:
-- Event row selection starts from currently visible rows (non-overscanned viewport rows), then applies row overscan (`2`) and caps one request to `24` rows.
-- Virtual row overscan is render-only and must not shift the event-fetch row window.
+- Event row selection uses the current virtual viewport window directly (`startIndex..endIndex`) with no extra row overscan and no fixed client-side row cap.
+- Row window math is shared between rendering and event fetch to avoid drift.
 - Requested time range is the visible viewport clamped to selected bounds, then expanded by `50%` overscan.
 - Scope identity is timeframe + selected range + collector/exchange/symbol filters; scope changes clear loaded coverage.
 - Cache is row-partitioned and segmented (`<=3` segments per row, `<=20,000` events per segment, global caps `128` rows / `60,000` events).
@@ -126,7 +126,7 @@ flowchart TD
   D --> E{"scope changed?"}
   E -->|yes| E1["resetLoadedEventsState(clearCache=true, clearScope=false)"]
   E -->|no| F
-  E1 --> F["selection = selectTimelineViewportEventRows(visible rows, overscan=2, maxRows=24)"]
+  E1 --> F["selection = selectTimelineViewportEventRows(startIndex..endIndex, overscan=0, maxRows=visibleRowCount)"]
   F --> G{"selection empty?"}
   G -->|yes| G1["Clear loaded coverage and stop"] --> Z
   G -->|no| H["request = resolveTimelineViewportEventRequest(clamped view + 50% range overscan)"]
