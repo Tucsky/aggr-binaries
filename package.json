@@ -19,8 +19,7 @@
     "dev:client": "vite dev --config client/vite.config.ts",
     "check:client": "svelte-check --tsconfig client/tsconfig.json",
     "build:bench": "tsc -p tsconfig.bench.json",
-    "bench:parse": "npm run build:bench && node dist-bench/bench/parse.js",
-    "migrate:remove-root-id": "node scripts/migrate_remove_root_id.mjs"
+    "bench:parse": "npm run build:bench && node dist-bench/bench/parse.js"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^3.1.2",

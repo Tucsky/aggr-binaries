@@ -100,7 +100,6 @@ Main UI routes:
 
 ## Operational notes
 - DB schema policy is fresh-schema-only; incompatible schemas fail fast with rebuild guidance.
-- Legacy `root_id` databases can be migrated once with `npm run migrate:remove-root-id -- --db <path-to-index.sqlite>`.
 - SQLite write contention (`SQLITE_BUSY`/`SQLITE_LOCKED`) is retried with bounded backoff.
 - If registry diverges from existing outputs after interruption, run `registry` for the affected scope.
 

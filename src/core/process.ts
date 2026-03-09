@@ -46,6 +46,7 @@ interface ProcessStats {
   processedMarkets: number;
   maxBuckets: number;
   gapsCount: number;
+  skippedRecoverableFiles: number;
 }
 
 interface StreamResult {
@@ -87,6 +88,14 @@ const processProgress = createProgressReporter({
   prefix: "[process]",
 });
 const PROCESS_FILES_PAGE_SIZE = 1024;
+const RECOVERABLE_GZIP_ERROR_CODES = new Set(["Z_DATA_ERROR", "Z_BUF_ERROR"]);
+
+class RecoverableInputFileError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RecoverableInputFileError";
+  }
+}
 
 export async function runProcess(config: Config, db: Db): Promise<void> {
   try {
@@ -125,7 +134,7 @@ export async function runProcess(config: Config, db: Db): Promise<void> {
     processProgress.log(
       `[process] complete markets=${stats.processedMarkets} files=${stats.processedFiles}/${totalCandidates} lines=${stats.totalLines} kept=${stats.totalTradesKept} maxBuckets=${stats.maxBuckets} gaps=${stats.gapsCount} elapsed=${totalElapsed.toFixed(
         2,
-      )}s`,
+      )}s skipped=${stats.skippedRecoverableFiles}`,
     );
   } finally {
     processProgress.clear();
@@ -302,7 +311,8 @@ async function processByMarket(opts: {
   let processedFiles = 0;
   let processedMarkets = 0;
   let maxBuckets = 0;
-  let gapsCount = 0
+  let gapsCount = 0;
+  let skippedRecoverableFiles = 0;
   const logHeartbeat = () => {
     const elapsed = ((Date.now() - startAll) / 1000).toFixed(1);
     processProgress.update(
@@ -349,13 +359,25 @@ async function processByMarket(opts: {
     let lastFlushAt = Date.now();
 
     for (const file of files) {
-      const { linesRead, tradesKept, newBuckets, gaps } = await streamFile({
-        file,
-        acc,
-        root: config.root,
-        timeframeMs,
-        skipBeforeTs: resumeSlot,
-      });
+      let streamResult: StreamResult;
+      try {
+        streamResult = await streamFile({
+          file,
+          acc,
+          root: config.root,
+          timeframeMs,
+          skipBeforeTs: resumeSlot,
+        });
+      } catch (err) {
+        if (err instanceof RecoverableInputFileError) {
+          processProgress.log(err.message);
+          processedFiles += 1;
+          skippedRecoverableFiles += 1;
+          continue;
+        }
+        throw err;
+      }
+      const { linesRead, tradesKept, newBuckets, gaps } = streamResult;
       if (gaps.length) {
         pendingGaps.push(...gaps);
         gapsCount += gaps.length;
@@ -394,7 +416,15 @@ async function processByMarket(opts: {
     acc = null;
   }
 
-  return { totalLines, totalTradesKept, processedFiles, processedMarkets, maxBuckets, gapsCount };
+  return {
+    totalLines,
+    totalTradesKept,
+    processedFiles,
+    processedMarkets,
+    maxBuckets,
+    gapsCount,
+    skippedRecoverableFiles,
+  };
 }
 
 function flushPendingGaps(db: Db, acc: Accumulator, pendingGaps: PersistedGap[]): boolean {
@@ -422,19 +452,20 @@ async function streamFile(opts: {
 
   const fullPath = path.join(root, file.relative_path);
   const fileStartTs = file.start_ts;
+  const errorContext = {
+    collector: acc.collector,
+    exchange: acc.exchange,
+    symbol: acc.symbol,
+    root,
+    relativePath: file.relative_path,
+    fullPath,
+  };
 
   let stream: NodeJS.ReadableStream;
   try {
     stream = await makeStream(fullPath);
   } catch (err) {
-    throw mapInputStreamError(err, {
-      collector: acc.collector,
-      exchange: acc.exchange,
-      symbol: acc.symbol,
-      root,
-      relativePath: file.relative_path,
-      fullPath,
-    });
+    throw mapInputStreamError(err, errorContext);
   }
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
   const gaps: PersistedGap[] = [];
@@ -454,77 +485,82 @@ async function streamFile(opts: {
   let outOfOrderTradeCount = 0;
   let maxOutOfOrderBackstepMs = 0;
 
-  for await (const line of rl) {
-    linesRead += 1;
-    reject.reason = undefined;
+  try {
+    for await (const line of rl) {
+      linesRead += 1;
+      reject.reason = undefined;
 
-    const trade = parseTradeLine(line, reject);
-    if (!trade) {
-      const reason = reject.reason;
-      if (reason !== undefined) {
-        switch (reason) {
-          case RejectReason.PartsShort:
-            rejectCounts[RejectReason.PartsShort] += 1;
-            break;
-          case RejectReason.NonFinite:
-            rejectCounts[RejectReason.NonFinite] += 1;
-            break;
-          case RejectReason.InvalidTsRange:
-            rejectCounts[RejectReason.InvalidTsRange] += 1;
-            break;
-          case RejectReason.NotionalTooLarge:
-            rejectCounts[RejectReason.NotionalTooLarge] += 1;
-            break;
-        }
-        rejectTotal += 1;
-      }
-      continue;
-    }
-
-    const keepForAccumulation = skipBeforeTs === undefined || trade.ts >= skipBeforeTs;
-    const includeInGapTracking = !trade.liquidation;
-    if (includeInGapTracking) {
-      const previousTrackedTs = acc.gapTracker.lastTradeTs;
-      if (previousTrackedTs !== undefined && trade.ts < previousTrackedTs) {
-        if (keepForAccumulation) {
-          outOfOrderTradeCount += 1;
-          const backstepMs = previousTrackedTs - trade.ts;
-          if (backstepMs > maxOutOfOrderBackstepMs) {
-            maxOutOfOrderBackstepMs = backstepMs;
+      const trade = parseTradeLine(line, reject);
+      if (!trade) {
+        const reason = reject.reason;
+        if (reason !== undefined) {
+          switch (reason) {
+            case RejectReason.PartsShort:
+              rejectCounts[RejectReason.PartsShort] += 1;
+              break;
+            case RejectReason.NonFinite:
+              rejectCounts[RejectReason.NonFinite] += 1;
+              break;
+            case RejectReason.InvalidTsRange:
+              rejectCounts[RejectReason.InvalidTsRange] += 1;
+              break;
+            case RejectReason.NotionalTooLarge:
+              rejectCounts[RejectReason.NotionalTooLarge] += 1;
+              break;
           }
+          rejectTotal += 1;
         }
-      } else {
-        const gap = recordGap(acc.gapTracker, trade.ts);
-        if (
-          gap !== undefined &&
-          acc.lastSeenTs !== undefined &&
-          acc.lastSeenRelativePath !== undefined
-        ) {
-          gaps.push({
-            gapMs: gap.gapMs,
-            gapMiss: gap.gapMiss,
-            gapScore: gap.gapScore,
-            startTs: acc.lastSeenTs,
-            endTs: trade.ts,
-            startRelativePath: acc.lastSeenRelativePath,
-            endRelativePath: file.relative_path,
-          });
-        }
-        acc.lastSeenTs = trade.ts;
-        acc.lastSeenRelativePath = file.relative_path;
+        continue;
       }
-    }
 
-    if (!keepForAccumulation) continue;
+      const keepForAccumulation = skipBeforeTs === undefined || trade.ts >= skipBeforeTs;
+      const includeInGapTracking = !trade.liquidation;
+      if (includeInGapTracking) {
+        const previousTrackedTs = acc.gapTracker.lastTradeTs;
+        if (previousTrackedTs !== undefined && trade.ts < previousTrackedTs) {
+          if (keepForAccumulation) {
+            outOfOrderTradeCount += 1;
+            const backstepMs = previousTrackedTs - trade.ts;
+            if (backstepMs > maxOutOfOrderBackstepMs) {
+              maxOutOfOrderBackstepMs = backstepMs;
+            }
+          }
+        } else {
+          const gap = recordGap(acc.gapTracker, trade.ts);
+          if (
+            gap !== undefined &&
+            acc.lastSeenTs !== undefined &&
+            acc.lastSeenRelativePath !== undefined
+          ) {
+            gaps.push({
+              gapMs: gap.gapMs,
+              gapMiss: gap.gapMiss,
+              gapScore: gap.gapScore,
+              startTs: acc.lastSeenTs,
+              endTs: trade.ts,
+              startRelativePath: acc.lastSeenRelativePath,
+              endRelativePath: file.relative_path,
+            });
+          }
+          acc.lastSeenTs = trade.ts;
+          acc.lastSeenRelativePath = file.relative_path;
+        }
+      }
 
-    const created = accumulate(acc, trade, timeframeMs);
-    if (created) {
-      acc.bucketCount += 1;
-      newBuckets += 1;
+      if (!keepForAccumulation) continue;
+
+      const created = accumulate(acc, trade, timeframeMs);
+      if (created) {
+        acc.bucketCount += 1;
+        newBuckets += 1;
+      }
+      tradesKept += 1;
     }
-    tradesKept += 1;
+  } catch (err) {
+    throw mapInputStreamError(err, errorContext);
+  } finally {
+    rl.close();
   }
-  rl.close();
 
   if (tradesKept > 0 && fileStartTs > acc.maxInputStartTs) {
     acc.maxInputStartTs = fileStartTs;
@@ -561,22 +597,53 @@ function mapInputStreamError(
   },
 ): Error {
   const code = (err as { code?: string } | null)?.code;
+  const market = `${ctx.collector}/${ctx.exchange}/${ctx.symbol}`;
   if (code === "ENOENT") {
-    const market = `${ctx.collector}/${ctx.exchange}/${ctx.symbol}`;
     return new Error(
       `[process] indexed input file missing on disk market=${market} relative_path=${ctx.relativePath} full_path=${ctx.fullPath} root=${ctx.root}; index is stale versus input files (re-run index for this market or restore the missing file).`,
     );
   }
+  if (isRecoverableCompressedInputError(err, ctx.relativePath)) {
+    const message = getErrorMessage(err);
+    return new RecoverableInputFileError(
+      `[process] skipping corrupt compressed input market=${market} relative_path=${ctx.relativePath} full_path=${ctx.fullPath} code=${code ?? "UNKNOWN"} message=${message}`,
+    );
+  }
   return err instanceof Error ? err : new Error(String(err));
+}
+
+function isRecoverableCompressedInputError(err: unknown, relativePath: string): boolean {
+  if (!relativePath.endsWith(".gz")) {
+    return false;
+  }
+  const code = (err as { code?: string } | null)?.code;
+  if (code !== undefined && RECOVERABLE_GZIP_ERROR_CODES.has(code)) {
+    return true;
+  }
+  const message = getErrorMessage(err).toLowerCase();
+  return (
+    message.includes("invalid compressed data") ||
+    message.includes("invalid stored block lengths") ||
+    message.includes("unexpected end of file")
+  );
+}
+
+function getErrorMessage(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message;
+  }
+  return String(err);
 }
 
 async function makeStream(filePath: string) {
   const file = await fs.open(filePath, "r");
   const stream = file.createReadStream();
   const out = filePath.endsWith(".gz") ? stream.pipe(zlib.createGunzip()) : stream;
-  void finished(out).finally(() => {
-    return file.close().catch(() => {});
-  });
+  void finished(out)
+    .catch(() => {})
+    .finally(() => {
+      return file.close().catch(() => {});
+    });
   return out;
 }
 

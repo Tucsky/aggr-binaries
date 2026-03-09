@@ -72,6 +72,42 @@ async function createFixture(): Promise<FixturePaths> {
   return { baseDir, root, outDir, fileRelatives: [relGz, relPlain] };
 }
 
+async function createCorruptGzipFixture(): Promise<FixturePaths> {
+  const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "aggr-process-corrupt-gz-"));
+  const root = path.join(baseDir, "input");
+  const outDir = path.join(baseDir, "out");
+  const marketDir = path.join(root, MARKET.collector, MARKET.bucket, MARKET.exchange, MARKET.symbol);
+
+  await fs.mkdir(marketDir, { recursive: true });
+
+  const corruptPath = path.join(marketDir, "2024-01-01-00.gz");
+  await fs.writeFile(corruptPath, Buffer.from("this is not valid gzip"));
+
+  const plainTrades = [
+    "1704070800000 50030 0.5 1 0",
+    "1704070860000 50040 0.25 0 0",
+  ].join("\n");
+  const plainPath = path.join(marketDir, "2024-01-01-01");
+  await fs.writeFile(plainPath, plainTrades);
+
+  const relCorrupt = path.posix.join(
+    MARKET.collector,
+    MARKET.bucket,
+    MARKET.exchange,
+    MARKET.symbol,
+    "2024-01-01-00.gz",
+  );
+  const relPlain = path.posix.join(
+    MARKET.collector,
+    MARKET.bucket,
+    MARKET.exchange,
+    MARKET.symbol,
+    "2024-01-01-01",
+  );
+
+  return { baseDir, root, outDir, fileRelatives: [relCorrupt, relPlain] };
+}
+
 async function createEventFixture(): Promise<FixturePaths> {
   const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "aggr-process-events-"));
   const root = path.join(baseDir, "input");
@@ -413,6 +449,25 @@ test("process fails fast on indexed input missing on disk without mutating file 
 
     const outputBin = path.join(fixture.outDir, MARKET.collector, MARKET.exchange, MARKET.symbol, `${TIMEFRAME}.bin`);
     await assert.rejects(fs.stat(outputBin), (err: unknown) => (err as { code?: string } | null)?.code === "ENOENT");
+  } finally {
+    db.close();
+  }
+});
+
+test("process skips corrupt gzip inputs and continues with remaining files", async () => {
+  const fixture = await createCorruptGzipFixture();
+  const dbPath = path.join(fixture.baseDir, "corrupt-gzip.sqlite");
+  const db = openDatabase(dbPath);
+  const config = buildConfig(fixture.root, fixture.outDir, dbPath);
+
+  try {
+    insertFixtureFiles(db, fixture.root, fixture.fileRelatives);
+    await runProcess(config, db);
+
+    const { companion } = await readOutputs(fixture.outDir);
+    assert.strictEqual(companion.startTs, 1_704_070_800_000);
+    assert.strictEqual(companion.endTs, 1_704_070_920_000);
+    assert.strictEqual(companion.lastInputStartTs, 1_704_070_800_000);
   } finally {
     db.close();
   }
