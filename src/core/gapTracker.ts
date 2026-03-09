@@ -59,14 +59,14 @@ const BUFFER_MS = 600_000;                    // ignore detection early (same as
 const MIN_SAMPLES_FOR_DETECT = 2_000;
 
 // Robust thresholding in log space
-const K_FAST = 3.0;
+const K_FAST = 3.25;
 const K_SLOW = 6.0;
 const HOT_REGIME_BIAS = 1.25;
 
 const MIN_DEV_LOG = 0.03;
 const EXTRA_FLOOR_SLOW_LOG = 0.08;            // keep only on slow side
 
-const RATIO_MIN = 8;                          // gap must be >= 8x expected (tune 6..12)
+const RATIO_MIN = 14;                          // gap must be >= 8x expected (tune 6..12)
 const LOG_RATIO_MIN = Math.log(RATIO_MIN);
 const MEDIUM_DISABLE_FAST_MS = 1_000;         // if avg gap > 1s => disable fast path
 const ILLIQUID_DISABLE_ALL_MS = 30_000;       // if avg gap > 30s => near-disable detection
@@ -77,7 +77,7 @@ const MEDIUM_RATIO = 30;                      // >= 30x expected slow gap
 const ILLIQUID_MIN_GAP_MS = 6 * 60 * 60_000;  // >= 6 hours
 const ILLIQUID_RATIO = 200;                   // >= 200x expected slow gap
 
-const FAST_DEV_FLOOR_REL = 0.35;              // prevent fastDev collapse relative to slowDev
+const FAST_DEV_FLOOR_REL = 0.5;              // prevent fastDev collapse relative to slowDev
 const Z_CLAMP = 50;                           // cap z to avoid insane scores                  // cap z to avoid insane scores
 
 // For miss estimation: use expected gap from fast mean (more representative in hot markets)
